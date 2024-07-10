@@ -2,7 +2,6 @@ import argparse
 import multiprocessing
 import subprocess
 import logging
-import sys
 from datetime import timedelta, datetime
 from typing import Iterable, Tuple, Optional
 
@@ -34,13 +33,10 @@ SUB_LIST_SER = None
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
 
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 logger = logging.getLogger('livevtt')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s', handlers=[logging.StreamHandler()])
-
-
-if sys.platform == 'darwin':
-    os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
 
 def segments_to_srt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
