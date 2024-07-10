@@ -1,6 +1,8 @@
 import argparse
 import multiprocessing
 import subprocess
+import logging
+import sys
 from datetime import timedelta, datetime
 from typing import Iterable, Tuple, Optional
 
@@ -33,10 +35,18 @@ TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
 
 
+logger = logging.getLogger('livevtt')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s', handlers=[logging.StreamHandler()])
+
+
+if sys.platform == 'darwin':
+    os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+
 def segments_to_srt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
     segment_chunks = [
-        f'{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S,%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S,%f')[:-3]}\n{segment.text}'
+        f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S,%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S,%f')[:-3]}\n{segment.text}"
         for i, segment in enumerate(segments)]
     return '\n\n'.join(segment_chunks)
 
@@ -44,7 +54,7 @@ def segments_to_srt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
 def segments_to_webvtt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
     segment_chunks = [
-        f'{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S.%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S.%f')[:-3]}\n{segment.text}'
+        f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S.%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S.%f')[:-3]}\n{segment.text}"
         for i, segment in enumerate(segments)]
     return 'WEBVTT\n\n' + '\n\n'.join(segment_chunks)
 
@@ -52,8 +62,7 @@ def segments_to_webvtt(segments: Iterable[Segment], ts_offset: timedelta) -> str
 def download_chunk_and_transcribe(session: requests.Session, model: WhisperModel, absolute_url: str, segment_uri: str,
                                   temp_chunk_dir: str, hard_subs: bool, translate: bool, beam_size: int,
                                   vad_filter: bool, language: Optional[str]) -> str:
-    with tempfile.NamedTemporaryFile(dir=temp_chunk_dir, delete=False, delete_on_close=False,
-                                     suffix='.ts') as chunk_fp:
+    with tempfile.NamedTemporaryFile(dir=temp_chunk_dir, delete=False, suffix='.ts') as chunk_fp:
         with session.get(absolute_url, stream=True) as r:
             shutil.copyfileobj(r.raw, chunk_fp)
 
@@ -68,7 +77,7 @@ def download_chunk_and_transcribe(session: requests.Session, model: WhisperModel
                                        task='translate' if translate else 'transcribe')
 
         if hard_subs:
-            with tempfile.NamedTemporaryFile(dir=temp_chunk_dir, delete_on_close=False, suffix='.srt') as srt_file:
+            with tempfile.NamedTemporaryFile(dir=temp_chunk_dir, delete=False, suffix='.srt') as srt_file:
                 srt_content = segments_to_srt(segments, start_ts)
                 if not srt_content:
                     return chunk_fp.name
@@ -130,6 +139,7 @@ class HTTPHandler(BaseHTTPRequestHandler):
 
 
 def http_listener(server_address: Tuple[str, int]):
+    logger.info(f'Web server now listening on {server_address}...')
     server = ThreadingHTTPServer(server_address, HTTPHandler)
     server.serve_forever()
 
@@ -146,9 +156,11 @@ def download_and_transcribe_wrapper(segment: Segment, session: requests.Session,
     chunk_url = os.path.join(base_uri, segment.uri)
     chunk_uri = normalise_chunk_uri(segment.uri)
     if chunk_uri not in translated_chunk_paths:
+        logger.info(f'Processing segment {chunk_uri}...')
         translated_chunk_paths[chunk_uri] = download_chunk_and_transcribe(session, model, chunk_url, chunk_uri,
                                                                           chunk_dir, hard_subs, translate,
                                                                           beam_size, vad_filter, language)
+        logger.info(f'Done processing segment {chunk_uri}')
 
 
 if __name__ == '__main__':
@@ -208,9 +220,12 @@ if __name__ == '__main__':
     with tempfile.TemporaryDirectory() as chunk_dir:
         prev_cwd = os.getcwd()
         os.chdir(chunk_dir)
+        
         try:
             while True:
                 chunk_list = m3u8.load(base_playlist.playlists[0].absolute_uri)
+
+                sleep_duration = chunk_list.target_duration or 10
 
                 if chunk_list.target_duration:
                     if int(MAX_TARGET_BUFFER_SECS / chunk_list.target_duration) < len(chunk_list.segments):
@@ -253,6 +268,6 @@ if __name__ == '__main__':
                         if os.path.splitext(translated_uri)[0] + '.ts' not in current_segments:
                             del chunk_to_vtt[translated_uri]
 
-                time.sleep(10)
+                time.sleep(sleep_duration)
         finally:
             os.chdir(prev_cwd)
