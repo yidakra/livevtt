@@ -9,7 +9,6 @@ import shutil
 import os
 import sys
 import shutil
-import platform
 import torch
 import copy
 import threading
@@ -37,7 +36,7 @@ SUB_LIST_SER = None
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
 
-if platform.python_version_tuple()[:2] < ('3', '10'):
+if sys.version_info.major < 3 or sys.version_info.minor < 10:
     print(f'This script needs to be ran under Python 3.10 at minimum.')
     sys.exit(1)
 
