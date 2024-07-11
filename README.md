@@ -38,7 +38,7 @@ This URL may vary based on the bind address and port provided via the command-li
 
 ## Installation
 
-Note that the minimum target Python version for this script is **Python 3.10** at present.
+Note that the minimum target Python version for this script is **Python 3.10** at present. You will also need to ensure that you have the **ffmpeg** package installed on your system.
 
 1. Clone the repository:
 

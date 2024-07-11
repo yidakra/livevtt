@@ -2,9 +2,6 @@ import argparse
 import multiprocessing
 import subprocess
 import logging
-from datetime import timedelta, datetime
-from typing import Iterable, Tuple, Optional
-
 import m3u8
 import requests
 import tempfile
@@ -12,13 +9,18 @@ import shutil
 import os
 import sys
 import shutil
-from faster_whisper import WhisperModel
+import platform
 import torch
-from faster_whisper.transcribe import Segment
 import copy
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import threading
 import time
+import torch
+
+from datetime import timedelta, datetime
+from typing import Iterable, Tuple, Optional
+from faster_whisper import WhisperModel
+from faster_whisper.transcribe import Segment
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from multiprocessing.pool import ThreadPool
 from functools import partial
 from faster_whisper.utils import available_models
@@ -34,6 +36,10 @@ SUB_LIST_SER = None
 
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
+
+if platform.python_version_tuple()[:2] < ('3', '10'):
+    print(f'This script needs to be ran under Python 3.10 at minimum.')
+    sys.exit(1)
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 
