@@ -60,12 +60,6 @@ Note that the minimum target Python version for this script is **Python 3.10** a
    pip install -r requirements.txt
    ```
 
-   - For CUDA support on Windows:
-
-   ```bash
-   pip install -r requirements-cuda-win.txt
-   ```
-
 ## Examples
 
 1. Transcribe a live audio/video stream with default settings:

@@ -9,11 +9,9 @@ import shutil
 import os
 import sys
 import shutil
-import torch
 import copy
 import threading
 import time
-import torch
 
 from datetime import timedelta, datetime
 from typing import Iterable, Tuple, Optional
@@ -40,10 +38,8 @@ if sys.version_info.major < 3 or sys.version_info.minor < 10:
     print(f'This script needs to be ran under Python 3.10 at minimum.')
     sys.exit(1)
 
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
-
 logger = logging.getLogger('livevtt')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(message)s', handlers=[logging.StreamHandler()])
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(name)s: %(message)s', handlers=[logging.StreamHandler()])
 
 
 def segments_to_srt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
@@ -188,13 +184,12 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--model', type=str, help='Whisper model to use (defaults to large)',
                         default='large', choices=available_models())
     parser.add_argument('-b', '--beam-size', type=int, help='Beam size to use (defaults to 5)', default=5)
-    parser.add_argument('-c', '--use-cuda', type=bool, help='Use CUDA where available. Defaults to true',
-                        default=True)
+    parser.add_argument('-c', '--use-cuda', type=lambda x: str(x).lower() in ['true', '1', 'yes'], 
+                        help='Use CUDA where available. Defaults to true', default=True)
     parser.add_argument('-t', '--transcribe', action='store_true',
                         help='If set, transcribes rather than translates the given stream.')
-    parser.add_argument('-vf', '--vad-filter', type=bool, help='Whether to utilise the Silero VAD model '
-                                                               'to try and filter out silences. Defaults to false.',
-                        default=False)
+    parser.add_argument('-vf', '--vad-filter', type=lambda x: str(x).lower() in ['true', '1', 'yes'],
+                        help='Whether to utilise the Silero VAD model to try and filter out silences. Defaults to false.', default=False)
     parser.add_argument('-la', '--language', type=str, help='The original language of the stream, '
                                                             'if known/not multi-lingual. Can be left unset.')
     parser.add_argument('-ua', '--user-agent', type=str, help='User agent to use to retrieve playlists / '
@@ -204,8 +199,10 @@ if __name__ == '__main__':
 
     threading.Thread(target=http_listener, daemon=True, args=((args.bind_address, args.bind_port),)).start()
 
-    device = 'cuda' if (torch.cuda.is_available() and args.use_cuda) else 'cpu'
-    compute_type = 'float16' if device == 'cuda' else 'int8'
+    device = 'cuda' if args.use_cuda else 'cpu'
+    compute_type = 'auto' 
+
+    logger.info(f'Using {device} as the device type for the model')
 
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
 
