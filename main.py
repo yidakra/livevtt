@@ -10,6 +10,8 @@ import requests
 import tempfile
 import shutil
 import os
+import sys
+import shutil
 from faster_whisper import WhisperModel
 import torch
 from faster_whisper.transcribe import Segment
@@ -159,7 +161,17 @@ def download_and_transcribe_wrapper(segment: Segment, session: requests.Session,
         logger.info(f'Done processing segment {chunk_uri}')
 
 
+def check_bindeps_present():
+    required_binaries = ('ffmpeg', 'ffprobe')
+    for required_binary in required_binaries:
+        if not shutil.which(required_binary):
+            logger.error(f"{required_binary} binary not found. Check your platform PATH and ensure that you've installed the required packages.")
+            sys.exit(1)
+
+
 if __name__ == '__main__':
+    check_bindeps_present()
+
     parser = argparse.ArgumentParser(prog='livevtt')
     parser.add_argument('-u', '--url', required=True)
     parser.add_argument('-s', '--hard-subs', action='store_true',
