@@ -1,25 +1,21 @@
 import argparse
-import multiprocessing
-import subprocess
+import asyncio
 import logging
+
+import aiofiles.tempfile
+import aiohttp
+import faster_whisper
 import m3u8
-import requests
-import tempfile
-import shutil
 import os
 import sys
 import shutil
 import copy
 import threading
-import time
 
 from datetime import timedelta, datetime
-from typing import Iterable, Tuple, Optional
+from typing import Iterable, Tuple
 from faster_whisper import WhisperModel
-from faster_whisper.transcribe import Segment
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from multiprocessing.pool import ThreadPool
-from functools import partial
 from faster_whisper.utils import available_models
 from m3u8 import PlaylistList, SegmentList
 
@@ -34,15 +30,16 @@ SUB_LIST_SER = None
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
 
-if sys.version_info.major < 3 or sys.version_info.minor < 10:
+if sys.version_info < (3, 10):
     print(f'This script needs to be ran under Python 3.10 at minimum.')
     sys.exit(1)
 
 logger = logging.getLogger('livevtt')
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(name)s: %(message)s', handlers=[logging.StreamHandler()])
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)-8s %(name)s: %(message)s',
+                    handlers=[logging.StreamHandler()])
 
 
-def segments_to_srt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
+def segments_to_srt(segments: Iterable[faster_whisper.transcribe.Segment], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
     segment_chunks = [
         f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S,%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S,%f')[:-3]}\n{segment.text}"
@@ -50,54 +47,12 @@ def segments_to_srt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
     return '\n\n'.join(segment_chunks)
 
 
-def segments_to_webvtt(segments: Iterable[Segment], ts_offset: timedelta) -> str:
+def segments_to_webvtt(segments: Iterable[faster_whisper.transcribe.Segment], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
     segment_chunks = [
         f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S.%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S.%f')[:-3]}\n{segment.text}"
         for i, segment in enumerate(segments)]
     return 'WEBVTT\n\n' + '\n\n'.join(segment_chunks)
-
-
-def download_chunk_and_transcribe(session: requests.Session, model: WhisperModel, absolute_url: str, segment_uri: str,
-                                  temp_chunk_dir: str, hard_subs: bool, translate: bool, beam_size: int,
-                                  vad_filter: bool, language: Optional[str]) -> str:
-    with tempfile.NamedTemporaryFile(dir=temp_chunk_dir, delete=False, suffix='.ts') as chunk_fp:
-        with session.get(absolute_url, stream=True) as r:
-            shutil.copyfileobj(r.raw, chunk_fp)
-
-        chunk_fp.close()
-
-        start_ts = timedelta(seconds=float(subprocess.check_output(['ffprobe', '-i', chunk_fp.name, '-show_entries',
-                                                                    'stream=start_time', '-loglevel', 'quiet',
-                                                                    '-select_streams', 'a:0', '-of',
-                                                                    'csv=p=0']).splitlines()[0]))
-
-        segments, _ = model.transcribe(chunk_fp.name, beam_size=beam_size, vad_filter=vad_filter, language=language,
-                                       task='translate' if translate else 'transcribe')
-
-        if hard_subs:
-            with tempfile.NamedTemporaryFile(dir=temp_chunk_dir, delete=False, suffix='.srt') as srt_file:
-                srt_content = segments_to_srt(segments, start_ts)
-                if not srt_content:
-                    return chunk_fp.name
-
-                srt_file.write(bytes(srt_content, 'utf-8'))
-
-                srt_file.close()
-                chunk_fp_name_split = os.path.splitext(chunk_fp.name)
-                translated_chunk_name = chunk_fp_name_split[0] + '_trans' + chunk_fp_name_split[1]
-
-                subprocess.check_output(['ffmpeg', '-hwaccel', 'auto', '-i', chunk_fp.name, '-copyts',
-                                         '-muxpreload', '0', '-muxdelay', '0', '-preset', 'ultrafast', '-c:a', 'copy',
-                                         '-loglevel', 'quiet', '-vf', f'subtitles={os.path.basename(srt_file.name)}',
-                                         translated_chunk_name])
-
-                os.unlink(chunk_fp.name)
-                return translated_chunk_name
-        else:
-            vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
-            chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
-            return chunk_fp.name
 
 
 class HTTPHandler(BaseHTTPRequestHandler):
@@ -149,28 +104,83 @@ def normalise_chunk_uri(chunk_uri: str) -> str:
     return '/' + chunk_uri
 
 
-def download_and_transcribe_wrapper(segment: Segment, session: requests.Session, model: WhisperModel, base_uri: str,
-                                    chunk_dir: str, hard_subs: bool, translate: bool, beam_size: int,
-                                    vad_filter: bool, language: Optional[str]):
-    chunk_url = os.path.join(base_uri, segment.uri)
-    chunk_uri = normalise_chunk_uri(segment.uri)
-    if chunk_uri not in translated_chunk_paths:
-        logger.info(f'Processing segment {chunk_uri}...')
-        translated_chunk_paths[chunk_uri] = download_chunk_and_transcribe(session, model, chunk_url, chunk_uri,
-                                                                          chunk_dir, hard_subs, translate,
-                                                                          beam_size, vad_filter, language)
-        logger.info(f'Done processing segment {chunk_uri}')
-
-
 def check_bindeps_present():
     required_binaries = ('ffmpeg', 'ffprobe')
     for required_binary in required_binaries:
         if not shutil.which(required_binary):
-            logger.error(f"{required_binary} binary not found. Check your platform PATH and ensure that you've installed the required packages.")
+            logger.error(
+                f"{required_binary} binary not found. Check your platform PATH and ensure that you've installed the required packages.")
             sys.exit(1)
 
 
-if __name__ == '__main__':
+async def download_chunk(session: aiohttp.ClientSession, base_uri: str, segment: m3u8.Segment, chunk_dir: str):
+    chunk_url = os.path.join(base_uri, segment.uri)
+    chunk_uri = normalise_chunk_uri(segment.uri)
+    if chunk_uri not in translated_chunk_paths:
+        logger.info(f'Downloading segment {chunk_uri}...')
+        try:
+            async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix='.ts') as chunk_fp:
+                async with session.get(chunk_url, raise_for_status=True) as response:
+                    async for chunk in response.content.iter_chunked(16384):
+                        await chunk_fp.write(chunk)
+
+                    await chunk_fp.close()
+        except aiohttp.ClientError as e:
+            logger.error(f'Failed to download chunk {chunk_uri}, stream may skip...', exc_info=e)
+            raise e
+        else:
+            logger.info(f'Downloaded segment {chunk_uri}')
+
+    return chunk_fp.name
+
+
+async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_dir: str, segment_uri: str,
+                           chunk_name: str) -> Tuple[str, str]:
+    ts_probe_proc = await asyncio.create_subprocess_exec('ffprobe', '-i', chunk_name, '-show_entries',
+                                                         'stream=start_time', '-loglevel', 'quiet',
+                                                         '-select_streams', 'a:0', '-of',
+                                                         'csv=p=0', stdout=asyncio.subprocess.PIPE)
+    ts_probe_stdout, _ = await ts_probe_proc.communicate()
+    start_ts = timedelta(seconds=float(ts_probe_stdout.splitlines()[0]))
+
+    loop = asyncio.get_running_loop()
+    segments, _ = await loop.run_in_executor(None,
+                                             lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
+                                                                      vad_filter=args.vad_filter,
+                                                                      language=args.language,
+                                                                      task='transcribe' if args.transcribe else 'translate'))
+
+    if args.hard_subs:
+        async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix='.srt') as srt_file:
+            srt_content = segments_to_srt(segments, start_ts)
+            if not srt_content:
+                return segment_uri, chunk_name
+
+            await srt_file.write(bytes(srt_content, 'utf-8'))
+
+            await srt_file.close()
+            chunk_fp_name_split = os.path.splitext(chunk_name)
+            translated_chunk_name = chunk_fp_name_split[0] + '_trans' + chunk_fp_name_split[1]
+
+            ffmpeg_sub_proc = await asyncio.create_subprocess_exec('ffmpeg', '-hwaccel', 'auto', '-i', chunk_name,
+                                                                   '-copyts',
+                                                                   '-muxpreload', '0', '-muxdelay', '0', '-preset',
+                                                                   'ultrafast', '-c:a',
+                                                                   'copy',
+                                                                   '-loglevel', 'quiet', '-vf',
+                                                                   f'subtitles={os.path.basename(srt_file.name)}',
+                                                                   translated_chunk_name)
+            await ffmpeg_sub_proc.communicate()
+
+            os.unlink(chunk_name)
+            return segment_uri, translated_chunk_name
+    else:
+        vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
+        chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
+        return segment_uri, chunk_name
+
+
+async def main():
     check_bindeps_present()
 
     parser = argparse.ArgumentParser(prog='livevtt')
@@ -184,12 +194,13 @@ if __name__ == '__main__':
     parser.add_argument('-m', '--model', type=str, help='Whisper model to use (defaults to large)',
                         default='large', choices=available_models())
     parser.add_argument('-b', '--beam-size', type=int, help='Beam size to use (defaults to 5)', default=5)
-    parser.add_argument('-c', '--use-cuda', type=lambda x: str(x).lower() in ['true', '1', 'yes'], 
+    parser.add_argument('-c', '--use-cuda', type=lambda x: str(x).lower() in ['true', '1', 'yes'],
                         help='Use CUDA where available. Defaults to true', default=True)
     parser.add_argument('-t', '--transcribe', action='store_true',
                         help='If set, transcribes rather than translates the given stream.')
     parser.add_argument('-vf', '--vad-filter', type=lambda x: str(x).lower() in ['true', '1', 'yes'],
-                        help='Whether to utilise the Silero VAD model to try and filter out silences. Defaults to false.', default=False)
+                        help='Whether to utilise the Silero VAD model to try and filter out silences. Defaults to false.',
+                        default=False)
     parser.add_argument('-la', '--language', type=str, help='The original language of the stream, '
                                                             'if known/not multi-lingual. Can be left unset.')
     parser.add_argument('-ua', '--user-agent', type=str, help='User agent to use to retrieve playlists / '
@@ -200,14 +211,11 @@ if __name__ == '__main__':
     threading.Thread(target=http_listener, daemon=True, args=((args.bind_address, args.bind_port),)).start()
 
     device = 'cuda' if args.use_cuda else 'cpu'
-    compute_type = 'auto' 
+    compute_type = 'auto'
 
     logger.info(f'Using {device} as the device type for the model')
 
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
-
-    session = requests.Session()
-    session.headers.update({'User-Agent': args.user_agent})
 
     base_playlist = m3u8.load(args.url)
     highest_bitrate_stream = sorted(base_playlist.playlists, key=lambda x: x.stream_info.bandwidth, reverse=True)[0]
@@ -225,12 +233,15 @@ if __name__ == '__main__':
         modified_base_playlist.add_media(subtitle_list)
         modified_base_playlist.playlists[0].media += [subtitle_list]
 
+    global BASE_PLAYLIST_SER
     BASE_PLAYLIST_SER = bytes(modified_base_playlist.dumps(), 'ascii')
 
-    with tempfile.TemporaryDirectory() as chunk_dir:
+    session = aiohttp.ClientSession(headers={'User-Agent': args.user_agent})
+
+    async with aiofiles.tempfile.TemporaryDirectory() as chunk_dir:
         prev_cwd = os.getcwd()
         os.chdir(chunk_dir)
-        
+
         try:
             while True:
                 chunk_list = m3u8.load(base_playlist.playlists[0].absolute_uri)
@@ -246,19 +257,41 @@ if __name__ == '__main__':
                         if chunk_list.program_date_time:
                             chunk_list.program_date_time = chunk_list.segments[0].current_program_date_time
 
-                with ThreadPool(processes=int(multiprocessing.cpu_count() / 2)) as transcribe_pool:
-                    transcribe_pool.map(partial(download_and_transcribe_wrapper, session=session, model=model,
-                                                base_uri=chunk_list.base_uri, chunk_dir=chunk_dir,
-                                                hard_subs=args.hard_subs, translate=not args.transcribe,
-                                                beam_size=args.beam_size, vad_filter=args.vad_filter,
-                                                language=args.language), chunk_list.segments)
+                current_segments = [normalise_chunk_uri(segment.uri) for segment in chunk_list.segments]
 
-                current_segments = []
+                for translated_chunk_name, translated_chunk_path in dict(translated_chunk_paths).items():
+                    if translated_chunk_name not in current_segments:
+                        os.unlink(translated_chunk_path)
+                        del translated_chunk_paths[translated_chunk_name]
+
+                if not args.hard_subs:
+                    for translated_uri, translated_chunk_path in dict(chunk_to_vtt).items():
+                        if os.path.splitext(translated_uri)[0] + '.ts' not in current_segments:
+                            del chunk_to_vtt[translated_uri]
+
+                chunks_to_translate = {}
+
+                for i, chunk_name in enumerate(
+                        await asyncio.gather(*[download_chunk(session, chunk_list.base_uri, segment, chunk_dir)
+                                               for segment in chunk_list.segments], return_exceptions=True)):
+                    if isinstance(chunk_name, Exception):
+                        continue
+
+                    normalised_segment_uri = current_segments[i]
+                    if normalised_segment_uri not in translated_chunk_paths:
+                        chunks_to_translate[normalised_segment_uri] = chunk_name
+
+                for segment_uri, chunk_name in await asyncio.gather(*[transcribe_chunk(args, model, chunk_dir,
+                                                                                       segment_uri, chunk_name)
+                                                                      for segment_uri, chunk_name in
+                                                                      chunks_to_translate.items()]):
+                    chunks_to_translate[segment_uri] = chunk_name
+
                 for segment in chunk_list.segments:
                     segment_name = normalise_chunk_uri(segment.uri)
                     segment.uri = os.path.join(http_base_url, segment_name)
-                    current_segments.append(segment_name)
 
+                global CHUNK_LIST_SER
                 CHUNK_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
 
                 if not args.hard_subs:
@@ -266,18 +299,15 @@ if __name__ == '__main__':
                         subtitle_name = os.path.splitext(segment.uri)[0] + '.vtt'
                         segment.uri = subtitle_name
 
+                    global SUB_LIST_SER
                     SUB_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
 
-                for translated_uri, translated_chunk_path in dict(translated_chunk_paths).items():
-                    if translated_uri not in current_segments:
-                        os.unlink(translated_chunk_path)
-                        del translated_chunk_paths[translated_uri]
+                translated_chunk_paths.update(chunks_to_translate)
 
-                if not args.hard_subs:
-                    for translated_uri, translated_chunk_path in dict(chunk_to_vtt).items():
-                        if os.path.splitext(translated_uri)[0] + '.ts' not in current_segments:
-                            del chunk_to_vtt[translated_uri]
-
-                time.sleep(sleep_duration)
+                await asyncio.sleep(sleep_duration)
         finally:
             os.chdir(prev_cwd)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

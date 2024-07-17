@@ -1,4 +1,5 @@
 faster-whisper
 m3u8
-requests
+aiohttp[speedups]
 numpy~=1.0
+aiofiles
