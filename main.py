@@ -184,7 +184,8 @@ async def main():
     check_bindeps_present()
 
     parser = argparse.ArgumentParser(prog='livevtt')
-    parser.add_argument('-u', '--url', required=True)
+    parser.add_argument('-u', '--url', default='https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8',
+                        help='URL of the HLS stream (defaults to TVRain stream)')
     parser.add_argument('-s', '--hard-subs', action='store_true',
                         help='Set if you want the subtitles to be baked into the stream itself')
     parser.add_argument('-l', '--bind-address', type=str, help='The IP address to bind to '
@@ -227,8 +228,24 @@ async def main():
     modified_base_playlist.playlists[0].uri = os.path.join(http_base_url, 'chunklist.m3u8')
 
     if not args.hard_subs:
+        # Use the language argument for the subtitle track label, default to English if not specified
+        subtitle_lang = args.language or 'en'
+        subtitle_name = {
+            'en': 'English',
+            'ru': 'Russian',
+            'fr': 'French',
+            'de': 'German',
+            'es': 'Spanish',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'nl': 'Dutch',
+            'ja': 'Japanese',
+            'zh': 'Chinese',
+            'ko': 'Korean',
+        }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
+        
         subtitle_list = m3u8.Media(uri=os.path.join(http_base_url, 'subs.m3u8'), type='SUBTITLES', group_id='Subtitle',
-                                   language='en', name='English',
+                                   language=subtitle_lang, name=subtitle_name,
                                    forced='NO', autoselect='NO')
         modified_base_playlist.add_media(subtitle_list)
         modified_base_playlist.playlists[0].media += [subtitle_list]
