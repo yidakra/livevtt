@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import signal
 
 import aiofiles.tempfile
 import aiohttp
@@ -92,10 +93,14 @@ class HTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(response_content)
 
 
-def http_listener(server_address: Tuple[str, int]):
+def http_listener(server_address: Tuple[str, int], stop_event: threading.Event):
     logger.info(f'Web server now listening on {server_address}...')
     server = ThreadingHTTPServer(server_address, HTTPHandler)
-    server.serve_forever()
+    server.timeout = 1  # Set timeout to allow checking stop_event
+    while not stop_event.is_set():
+        server.handle_request()
+    server.server_close()
+    logger.info("HTTP server stopped")
 
 
 def normalise_chunk_uri(chunk_uri: str) -> str:
@@ -180,9 +185,27 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
         return segment_uri, chunk_name
 
 
+async def cleanup(session: aiohttp.ClientSession, chunk_dir: str, prev_cwd: str, stop_event: threading.Event):
+    logger.info("Cleaning up resources...")
+    await session.close()
+    os.chdir(prev_cwd)
+    try:
+        # Clean up any remaining temporary files
+        for chunk_path in list(translated_chunk_paths.values()):
+            try:
+                if os.path.exists(chunk_path):
+                    os.unlink(chunk_path)
+            except OSError as e:
+                logger.warning(f"Failed to remove temporary file {chunk_path}: {e}")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+    finally:
+        stop_event.set()
+
+
 async def main():
     check_bindeps_present()
-
+    
     parser = argparse.ArgumentParser(prog='livevtt')
     parser.add_argument('-u', '--url', default='https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8',
                         help='URL of the HLS stream (defaults to TVRain stream)')
@@ -209,8 +232,10 @@ async def main():
 
     args = parser.parse_args()
 
-    threading.Thread(target=http_listener, daemon=True, args=((args.bind_address, args.bind_port),)).start()
-
+    stop_event = threading.Event()
+    session = aiohttp.ClientSession(headers={'User-Agent': args.user_agent})
+    loop = asyncio.get_running_loop()
+    
     device = 'cuda' if args.use_cuda else 'cpu'
     compute_type = 'auto'
 
@@ -228,22 +253,26 @@ async def main():
     modified_base_playlist.playlists[0].uri = os.path.join(http_base_url, 'chunklist.m3u8')
 
     if not args.hard_subs:
-        # Use the language argument for the subtitle track label, default to English if not specified
-        subtitle_lang = args.language or 'en'
-        subtitle_name = {
-            'en': 'English',
-            'ru': 'Russian',
-            'fr': 'French',
-            'de': 'German',
-            'es': 'Spanish',
-            'it': 'Italian',
-            'pt': 'Portuguese',
-            'nl': 'Dutch',
-            'ja': 'Japanese',
-            'zh': 'Chinese',
-            'ko': 'Korean',
-        }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
-        
+        # If translating, the target is English. If transcribing, use the specified source language.
+        if not args.transcribe:
+            subtitle_lang = 'en'
+            subtitle_name = 'English'
+        else:
+            subtitle_lang = args.language or 'en' # Default to English if no language specified for transcription
+            subtitle_name = {
+                'en': 'English',
+                'ru': 'Russian',
+                'fr': 'French',
+                'de': 'German',
+                'es': 'Spanish',
+                'it': 'Italian',
+                'pt': 'Portuguese',
+                'nl': 'Dutch',
+                'ja': 'Japanese',
+                'zh': 'Chinese',
+                'ko': 'Korean',
+            }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
+
         subtitle_list = m3u8.Media(uri=os.path.join(http_base_url, 'subs.m3u8'), type='SUBTITLES', group_id='Subtitle',
                                    language=subtitle_lang, name=subtitle_name,
                                    forced='NO', autoselect='NO')
@@ -253,14 +282,19 @@ async def main():
     global BASE_PLAYLIST_SER
     BASE_PLAYLIST_SER = bytes(modified_base_playlist.dumps(), 'ascii')
 
-    session = aiohttp.ClientSession(headers={'User-Agent': args.user_agent})
+    # Set up signal handlers
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(cleanup(session, chunk_dir, prev_cwd, stop_event)))
+
+    http_thread = threading.Thread(target=http_listener, daemon=True, args=((args.bind_address, args.bind_port), stop_event))
+    http_thread.start()
 
     async with aiofiles.tempfile.TemporaryDirectory() as chunk_dir:
         prev_cwd = os.getcwd()
         os.chdir(chunk_dir)
 
         try:
-            while True:
+            while not stop_event.is_set():
                 chunk_list = m3u8.load(base_playlist.playlists[0].absolute_uri)
 
                 sleep_duration = chunk_list.target_duration or 10
@@ -322,9 +356,18 @@ async def main():
                 translated_chunk_paths.update(chunks_to_translate)
 
                 await asyncio.sleep(sleep_duration)
+        except asyncio.CancelledError:
+            logger.info("Received termination signal")
         finally:
-            os.chdir(prev_cwd)
+            await cleanup(session, chunk_dir, prev_cwd, stop_event)
+            http_thread.join(timeout=5)  # Wait for HTTP server to stop
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutting down gracefully...")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        sys.exit(1)
