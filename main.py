@@ -262,15 +262,7 @@ async def main():
             subtitle_name = {
                 'en': 'English',
                 'ru': 'Russian',
-                'fr': 'French',
-                'de': 'German',
-                'es': 'Spanish',
-                'it': 'Italian',
-                'pt': 'Portuguese',
                 'nl': 'Dutch',
-                'ja': 'Japanese',
-                'zh': 'Chinese',
-                'ko': 'Korean',
             }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
 
         subtitle_list = m3u8.Media(uri=os.path.join(http_base_url, 'subs.m3u8'), type='SUBTITLES', group_id='Subtitle',
