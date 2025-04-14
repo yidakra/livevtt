@@ -3,3 +3,4 @@ m3u8
 aiohttp[speedups]
 numpy~=1.0
 aiofiles
+hf_xet

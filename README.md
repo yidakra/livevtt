@@ -60,6 +60,46 @@ Note that the minimum target Python version for this script is **Python 3.10** a
    pip install -r requirements.txt
    ```
 
+## Docker Installation
+
+### Prerequisites
+- Docker installed on your system
+- For GPU support: NVIDIA GPU with installed drivers and NVIDIA Container Toolkit
+
+### Building the Docker Image
+
+```bash
+docker build -t livevtt .
+```
+
+### Running with Docker
+
+1. CPU mode:
+```bash
+docker run -p 8000:8000 livevtt -u <STREAM_URL>
+```
+
+2. GPU mode (requires NVIDIA Container Toolkit):
+```bash
+docker run --gpus all -p 8000:8000 livevtt -u <STREAM_URL> -c true
+```
+
+Note: When running in Docker, make sure to use `-l 0.0.0.0` to bind to all interfaces if you want to access the service from outside the container.
+
+### Running with Docker Compose
+
+Use Docker Compose for a more declarative way to run the application:
+
+```bash
+# Set your stream URL
+export STREAM_URL=https://your-stream-url.com/stream.m3u8
+
+# Build and run
+docker compose up --build
+```
+
+This will build the image and run the container with the configuration specified in `docker-compose.yml`.
+
 ## Examples
 
 1. Transcribe a live audio/video stream with default settings:

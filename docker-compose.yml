@@ -1,0 +1,10 @@
+services:
+  livevtt:
+    build: .
+    ports:
+      - "8000:8000"
+    command: ["-la", "ru", "-c", "false", "-t", "-l", "0.0.0.0", "-u", "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8"]
+    deploy:
+      resources:
+        limits:
+          memory: 8G 
