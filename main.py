@@ -22,11 +22,15 @@ from m3u8 import PlaylistList, SegmentList
 
 translated_chunk_paths = {}
 chunk_to_vtt = {}
+chunk_to_vtt_trans = {}  # New dictionary for translated subtitles
+chunk_to_vtt_orig = {}   # New dictionary for transcribed subtitles
 
 CHUNK_LIST_BASE_URI = None
 BASE_PLAYLIST_SER = None
 CHUNK_LIST_SER = None
 SUB_LIST_SER = None
+SUB_LIST_TRANS_SER = None  # New global for translated subtitles playlist
+SUB_LIST_ORIG_SER = None   # New global for transcribed subtitles playlist
 
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
@@ -65,6 +69,10 @@ class HTTPHandler(BaseHTTPRequestHandler):
             response_content = CHUNK_LIST_SER
         elif self.path == '/subs.m3u8':
             response_content = SUB_LIST_SER
+        elif self.path == '/subs.trans.m3u8':
+            response_content = SUB_LIST_TRANS_SER
+        elif self.path == '/subs.orig.m3u8':
+            response_content = SUB_LIST_ORIG_SER
         elif self.path in translated_chunk_paths:
             self.send_response(200)
             self.send_header('Content-Type', 'video/mp2t')
@@ -75,8 +83,9 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 shutil.copyfileobj(f, self.wfile)
 
             return
-        elif self.path in chunk_to_vtt:
-            response_content = bytes(chunk_to_vtt[self.path], 'utf-8')
+        elif self.path in chunk_to_vtt or self.path in chunk_to_vtt_trans or self.path in chunk_to_vtt_orig:
+            vtt_content = chunk_to_vtt.get(self.path) or chunk_to_vtt_trans.get(self.path) or chunk_to_vtt_orig.get(self.path)
+            response_content = bytes(vtt_content, 'utf-8')
 
         self.send_response(200 if response_content else 404)
 
@@ -149,20 +158,47 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
     start_ts = timedelta(seconds=float(ts_probe_stdout.splitlines()[0]))
 
     loop = asyncio.get_running_loop()
-    segments, _ = await loop.run_in_executor(None,
-                                             lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
-                                                                      vad_filter=args.vad_filter,
-                                                                      language=args.language,
-                                                                      task='transcribe' if args.transcribe else 'translate'))
+    
+    # Run transcription and translation in parallel if both_tracks is enabled
+    if args.both_tracks:
+        # Transcribe in source language
+        segments_orig, _ = await loop.run_in_executor(None,
+                                                     lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
+                                                                           vad_filter=args.vad_filter,
+                                                                           language=args.language,
+                                                                           task='transcribe'))
+        # Translate to English
+        segments_trans, _ = await loop.run_in_executor(None,
+                                                      lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
+                                                                            vad_filter=args.vad_filter,
+                                                                            language=args.language,
+                                                                            task='translate'))
+        
+        if not args.hard_subs:
+            vtt_uri = os.path.splitext(segment_uri)[0]
+            chunk_to_vtt_orig[vtt_uri + '.orig.vtt'] = segments_to_webvtt(segments_orig, start_ts)
+            chunk_to_vtt_trans[vtt_uri + '.trans.vtt'] = segments_to_webvtt(segments_trans, start_ts)
+            return segment_uri, chunk_name
+    else:
+        # Original behavior
+        segments, _ = await loop.run_in_executor(None,
+                                                lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
+                                                                     vad_filter=args.vad_filter,
+                                                                     language=args.language,
+                                                                     task='transcribe' if args.transcribe else 'translate'))
+        if not args.hard_subs:
+            vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
+            chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
+            return segment_uri, chunk_name
 
     if args.hard_subs:
+        # Original hard subs logic
         async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix='.srt') as srt_file:
-            srt_content = segments_to_srt(segments, start_ts)
+            srt_content = segments_to_srt(segments if not args.both_tracks else segments_trans, start_ts)
             if not srt_content:
                 return segment_uri, chunk_name
 
             await srt_file.write(bytes(srt_content, 'utf-8'))
-
             await srt_file.close()
             chunk_fp_name_split = os.path.splitext(chunk_name)
             translated_chunk_name = chunk_fp_name_split[0] + '_trans' + chunk_fp_name_split[1]
@@ -179,10 +215,8 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
 
             os.unlink(chunk_name)
             return segment_uri, translated_chunk_name
-    else:
-        vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
-        chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
-        return segment_uri, chunk_name
+
+    return segment_uri, chunk_name
 
 
 async def cleanup(session: aiohttp.ClientSession, chunk_dir: str, prev_cwd: str, stop_event: threading.Event):
@@ -229,6 +263,8 @@ async def main():
                                                             'if known/not multi-lingual. Can be left unset.')
     parser.add_argument('-ua', '--user-agent', type=str, help='User agent to use to retrieve playlists / '
                                                               'stream chunks.', default='VLC/3.0.18 LibVLC/3.0.18')
+    parser.add_argument('-bt', '--both-tracks', action='store_true',
+                        help='Enable both transcription and translation tracks')
 
     args = parser.parse_args()
 
@@ -253,23 +289,41 @@ async def main():
     modified_base_playlist.playlists[0].uri = os.path.join(http_base_url, 'chunklist.m3u8')
 
     if not args.hard_subs:
-        # If translating, the target is English. If transcribing, use the specified source language.
-        if not args.transcribe:
-            subtitle_lang = 'en'
-            subtitle_name = 'English'
+        if args.both_tracks:
+            # Add both subtitle tracks
+            subtitle_trans = m3u8.Media(uri=os.path.join(http_base_url, 'subs.trans.m3u8'),
+                                      type='SUBTITLES', group_id='Subtitle',
+                                      language='en', name='English',
+                                      forced='NO', autoselect='NO')
+            
+            subtitle_orig = m3u8.Media(uri=os.path.join(http_base_url, 'subs.orig.m3u8'),
+                                     type='SUBTITLES', group_id='Subtitle',
+                                     language=args.language or 'ru', 
+                                     name={'en': 'English', 'ru': 'Russian'}.get(args.language or 'ru', 'Original'),
+                                     forced='NO', autoselect='NO')
+            
+            modified_base_playlist.add_media(subtitle_trans)
+            modified_base_playlist.add_media(subtitle_orig)
+            modified_base_playlist.playlists[0].media += [subtitle_trans, subtitle_orig]
         else:
-            subtitle_lang = args.language or 'en' # Default to English if no language specified for transcription
-            subtitle_name = {
-                'en': 'English',
-                'ru': 'Russian',
-                'nl': 'Dutch',
-            }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
+            # Original single subtitle track logic
+            if not args.transcribe:
+                subtitle_lang = 'en'
+                subtitle_name = 'English'
+            else:
+                subtitle_lang = args.language or 'en'
+                subtitle_name = {
+                    'en': 'English',
+                    'ru': 'Russian',
+                    'nl': 'Dutch',
+                }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
 
-        subtitle_list = m3u8.Media(uri=os.path.join(http_base_url, 'subs.m3u8'), type='SUBTITLES', group_id='Subtitle',
-                                   language=subtitle_lang, name=subtitle_name,
-                                   forced='NO', autoselect='NO')
-        modified_base_playlist.add_media(subtitle_list)
-        modified_base_playlist.playlists[0].media += [subtitle_list]
+            subtitle_list = m3u8.Media(uri=os.path.join(http_base_url, 'subs.m3u8'),
+                                     type='SUBTITLES', group_id='Subtitle',
+                                     language=subtitle_lang, name=subtitle_name,
+                                     forced='NO', autoselect='NO')
+            modified_base_playlist.add_media(subtitle_list)
+            modified_base_playlist.playlists[0].media += [subtitle_list]
 
     global BASE_PLAYLIST_SER
     BASE_PLAYLIST_SER = bytes(modified_base_playlist.dumps(), 'ascii')
@@ -338,12 +392,30 @@ async def main():
                 CHUNK_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
 
                 if not args.hard_subs:
-                    for segment in chunk_list.segments:
-                        subtitle_name = os.path.splitext(segment.uri)[0] + '.vtt'
-                        segment.uri = subtitle_name
+                    if args.both_tracks:
+                        # Create two separate subtitle playlists
+                        trans_chunk_list = copy.deepcopy(chunk_list)
+                        orig_chunk_list = copy.deepcopy(chunk_list)
+                        
+                        for segment in trans_chunk_list.segments:
+                            subtitle_name = os.path.splitext(segment.uri)[0] + '.trans.vtt'
+                            segment.uri = subtitle_name
+                            
+                        for segment in orig_chunk_list.segments:
+                            subtitle_name = os.path.splitext(segment.uri)[0] + '.orig.vtt'
+                            segment.uri = subtitle_name
 
-                    global SUB_LIST_SER
-                    SUB_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
+                        global SUB_LIST_TRANS_SER, SUB_LIST_ORIG_SER
+                        SUB_LIST_TRANS_SER = bytes(trans_chunk_list.dumps(), 'ascii')
+                        SUB_LIST_ORIG_SER = bytes(orig_chunk_list.dumps(), 'ascii')
+                    else:
+                        # Original single subtitle playlist logic
+                        for segment in chunk_list.segments:
+                            subtitle_name = os.path.splitext(segment.uri)[0] + '.vtt'
+                            segment.uri = subtitle_name
+
+                        global SUB_LIST_SER
+                        SUB_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
 
                 translated_chunk_paths.update(chunks_to_translate)
 
