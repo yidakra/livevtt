@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import logging
 import signal
+import socket
 
 import aiofiles.tempfile
 import aiohttp
@@ -182,10 +183,10 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
     else:
         # Original behavior
         segments, _ = await loop.run_in_executor(None,
-                                                lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
-                                                                     vad_filter=args.vad_filter,
-                                                                     language=args.language,
-                                                                     task='transcribe' if args.transcribe else 'translate'))
+                                                 lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
+                                                                          vad_filter=args.vad_filter,
+                                                                          language=args.language,
+                                                                          task='transcribe' if args.transcribe else 'translate'))
         if not args.hard_subs:
             vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
             chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
@@ -237,6 +238,18 @@ async def cleanup(session: aiohttp.ClientSession, chunk_dir: str, prev_cwd: str,
         stop_event.set()
 
 
+def get_local_ip():
+    try:
+        # Get the local IP by creating a temporary socket connection
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))  # Doesn't actually send any data
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
+
 async def main():
     check_bindeps_present()
     
@@ -249,6 +262,9 @@ async def main():
                                                                '(defaults to 127.0.0.1)', default='127.0.0.1')
     parser.add_argument('-p', '--bind-port', type=int, help='The port to bind to (defaults to 8000)',
                         default=8000)
+    parser.add_argument('-pl', '--public-address', type=str, help='The public IP address to use in URLs '
+                                                               '(defaults to bind-address)',
+                        default=None)
     parser.add_argument('-m', '--model', type=str, help='Whisper model to use (defaults to large)',
                         default='large', choices=available_models())
     parser.add_argument('-b', '--beam-size', type=int, help='Beam size to use (defaults to 5)', default=5)
@@ -283,7 +299,9 @@ async def main():
     highest_bitrate_stream = sorted(base_playlist.playlists, key=lambda x: x.stream_info.bandwidth, reverse=True)[0]
     base_playlist.playlists = PlaylistList([highest_bitrate_stream])
 
-    http_base_url = f'http://{args.bind_address}:{args.bind_port}/'
+    # Use actual IP if binding to all interfaces
+    public_address = get_local_ip() if args.bind_address == '0.0.0.0' else args.bind_address
+    http_base_url = f'http://{public_address}:{args.bind_port}/'
 
     modified_base_playlist = copy.deepcopy(base_playlist)
     modified_base_playlist.playlists[0].uri = os.path.join(http_base_url, 'chunklist.m3u8')
@@ -312,16 +330,16 @@ async def main():
                 subtitle_name = 'English'
             else:
                 subtitle_lang = args.language or 'en'
-                subtitle_name = {
-                    'en': 'English',
-                    'ru': 'Russian',
-                    'nl': 'Dutch',
-                }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
+            subtitle_name = {
+                'en': 'English',
+                'ru': 'Russian',
+                'nl': 'Dutch',
+            }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
 
             subtitle_list = m3u8.Media(uri=os.path.join(http_base_url, 'subs.m3u8'),
                                      type='SUBTITLES', group_id='Subtitle',
-                                     language=subtitle_lang, name=subtitle_name,
-                                     forced='NO', autoselect='NO')
+                                   language=subtitle_lang, name=subtitle_name,
+                                   forced='NO', autoselect='NO')
             modified_base_playlist.add_media(subtitle_list)
             modified_base_playlist.playlists[0].media += [subtitle_list]
 
