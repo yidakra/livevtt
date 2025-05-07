@@ -9,7 +9,7 @@ LiveVTT allows you to transcribe live audio/video streams and generate WebVTT su
 ## Usage
 
 ```bash
-livevtt -u <URL> [-s] [-l <BIND_ADDRESS>] [-p <BIND_PORT>] [-m <MODEL>] [-b <BEAM_SIZE>] [-c <USE_CUDA>] [-t] [-bt] [-vf <VAD_FILTER>] [-la <LANGUAGE>] [-ua <USER_AGENT>]
+livevtt -u <URL> [-s] [-l <BIND_ADDRESS>] [-p <BIND_PORT>] [-m <MODEL>] [-b <BEAM_SIZE>] [-c <USE_CUDA>] [-t] [-bt] [-vf <VAD_FILTER>] [-la <LANGUAGE>] [-ua <USER_AGENT>] [-f <FILTER_FILE>]
 ```
 
 ### Arguments
@@ -26,6 +26,7 @@ livevtt -u <URL> [-s] [-l <BIND_ADDRESS>] [-p <BIND_PORT>] [-m <MODEL>] [-b <BEA
 - `-vf, --vad-filter`: Whether to utilize the Silero VAD model to try and filter out silences. Defaults to false.
 - `-la, --language`: The original language of the stream, if known/not multilingual. Can be left unset.
 - `-ua, --user-agent`: User agent to use to retrieve playlists/stream chunks (defaults to 'VLC/3.0.18 LibVLC/3.0.18').
+- `-f, --filter-file`: Path to JSON file containing words to filter out (defaults to 'filter.json').
 
 ### Subtitle Modes
 
@@ -158,6 +159,11 @@ docker compose up --build
    livevtt -la ru -s
    ```
 
+6. Use custom filter file:
+   ```bash
+   livevtt -la ru -f custom_filters.json
+   ```
+
 ## Contributing
 
 Contributions are welcome! Please fork the repository and submit a pull request.
@@ -165,3 +171,30 @@ Contributions are welcome! Please fork the repository and submit a pull request.
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### Content Filtering
+
+The script supports filtering out subtitle segments containing specific words or phrases. To use this feature:
+
+1. Create a `filter.json` file with the following structure:
+   ```json
+   {
+       "filter_words": [
+           "word1",
+           "word2",
+           "phrase to filter"
+       ]
+   }
+   ```
+
+2. Place the file in the same directory as `main.py` or specify a custom path using `-f`:
+   ```bash
+   python3 main.py -f custom_filter.json
+   ```
+
+The filter:
+- Is case-insensitive
+- Works for both transcription and translation tracks
+- Removes entire segments containing any filtered word/phrase
+- Can be updated while the program is running
+- Applies to both soft and hard subtitles
