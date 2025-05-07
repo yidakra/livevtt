@@ -3,6 +3,8 @@ import asyncio
 import logging
 import signal
 import socket
+import json
+import os.path
 
 import aiofiles.tempfile
 import aiohttp
@@ -35,6 +37,9 @@ SUB_LIST_ORIG_SER = None   # New global for transcribed subtitles playlist
 
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
+
+FILTER_DICT = {}  # Dictionary of strings to filter out
+FILTER_FILE = 'filter.json'  # File to store filter words
 
 if sys.version_info < (3, 10):
     print(f'This script needs to be ran under Python 3.10 at minimum.')
@@ -149,6 +154,24 @@ async def download_chunk(session: aiohttp.ClientSession, base_uri: str, segment:
     return chunk_fp.name
 
 
+def load_filter_dict():
+    global FILTER_DICT
+    try:
+        if os.path.exists(FILTER_FILE):
+            with open(FILTER_FILE, 'r', encoding='utf-8') as f:
+                FILTER_DICT = json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load filter dictionary: {e}")
+
+
+def should_filter_segment(text: str) -> bool:
+    """Return True if segment should be filtered out based on content."""
+    if not FILTER_DICT:
+        return False
+    text = text.lower()
+    return any(word.lower() in text for word in FILTER_DICT.get('filter_words', []))
+
+
 async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_dir: str, segment_uri: str,
                            chunk_name: str) -> Tuple[str, str]:
     ts_probe_proc = await asyncio.create_subprocess_exec('ffprobe', '-i', chunk_name, '-show_entries',
@@ -175,27 +198,41 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                                                                             language=args.language,
                                                                             task='translate'))
         
+        # Filter segments
+        segments_orig = [seg for seg in segments_orig if not should_filter_segment(seg.text)]
+        segments_trans = [seg for seg in segments_trans if not should_filter_segment(seg.text)]
+        
         if not args.hard_subs:
             vtt_uri = os.path.splitext(segment_uri)[0]
-            chunk_to_vtt_orig[vtt_uri + '.orig.vtt'] = segments_to_webvtt(segments_orig, start_ts)
-            chunk_to_vtt_trans[vtt_uri + '.trans.vtt'] = segments_to_webvtt(segments_trans, start_ts)
+            if segments_orig:  # Only add if there are segments after filtering
+                chunk_to_vtt_orig[vtt_uri + '.orig.vtt'] = segments_to_webvtt(segments_orig, start_ts)
+            if segments_trans:  # Only add if there are segments after filtering
+                chunk_to_vtt_trans[vtt_uri + '.trans.vtt'] = segments_to_webvtt(segments_trans, start_ts)
             return segment_uri, chunk_name
     else:
-        # Original behavior
+        # Original behavior with filtering
         segments, _ = await loop.run_in_executor(None,
-                                                 lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
-                                                                          vad_filter=args.vad_filter,
-                                                                          language=args.language,
-                                                                          task='transcribe' if args.transcribe else 'translate'))
+                                             lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
+                                                                      vad_filter=args.vad_filter,
+                                                                      language=args.language,
+                                                                      task='transcribe' if args.transcribe else 'translate'))
+        
+        # Filter segments
+        segments = [seg for seg in segments if not should_filter_segment(seg.text)]
+        
         if not args.hard_subs:
             vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
-            chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
+            if segments:  # Only add if there are segments after filtering
+                chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
             return segment_uri, chunk_name
 
     if args.hard_subs:
-        # Original hard subs logic
+        # Original hard subs logic with filtering
         async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix='.srt') as srt_file:
-            srt_content = segments_to_srt(segments if not args.both_tracks else segments_trans, start_ts)
+            segments_to_use = segments if not args.both_tracks else segments_trans
+            segments_to_use = [seg for seg in segments_to_use if not should_filter_segment(seg.text)]
+            
+            srt_content = segments_to_srt(segments_to_use, start_ts)
             if not srt_content:
                 return segment_uri, chunk_name
 
@@ -252,6 +289,7 @@ def get_local_ip():
 
 async def main():
     check_bindeps_present()
+    load_filter_dict()  # Load filter dictionary at startup
     
     parser = argparse.ArgumentParser(prog='livevtt')
     parser.add_argument('-u', '--url', default='https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8',
@@ -281,6 +319,8 @@ async def main():
                                                               'stream chunks.', default='VLC/3.0.18 LibVLC/3.0.18')
     parser.add_argument('-bt', '--both-tracks', action='store_true',
                         help='Enable both transcription and translation tracks')
+    parser.add_argument('-f', '--filter-file', type=str, help='Path to JSON file containing words to filter out',
+                        default='filter.json')
 
     args = parser.parse_args()
 
@@ -443,6 +483,11 @@ async def main():
         finally:
             await cleanup(session, chunk_dir, prev_cwd, stop_event)
             http_thread.join(timeout=5)  # Wait for HTTP server to stop
+
+    # Update filter file path if provided
+    global FILTER_FILE
+    FILTER_FILE = args.filter_file
+    load_filter_dict()
 
 
 if __name__ == '__main__':
