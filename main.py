@@ -301,20 +301,20 @@ async def main():
 
     # Use actual IP if binding to all interfaces
     public_address = get_local_ip() if args.bind_address == '0.0.0.0' else args.bind_address
-    http_base_url = f'http://{public_address}:{args.bind_port}/'
+    http_base_url = '' # Changed from absolute to relative path
 
     modified_base_playlist = copy.deepcopy(base_playlist)
-    modified_base_playlist.playlists[0].uri = os.path.join(http_base_url, 'chunklist.m3u8')
+    modified_base_playlist.playlists[0].uri = 'chunklist.m3u8' # Removed path join
 
     if not args.hard_subs:
         if args.both_tracks:
             # Add both subtitle tracks
-            subtitle_trans = m3u8.Media(uri=os.path.join(http_base_url, 'subs.trans.m3u8'),
+            subtitle_trans = m3u8.Media(uri='subs.trans.m3u8', # Removed path join
                                       type='SUBTITLES', group_id='Subtitle',
                                       language='en', name='English',
                                       forced='NO', autoselect='NO')
             
-            subtitle_orig = m3u8.Media(uri=os.path.join(http_base_url, 'subs.orig.m3u8'),
+            subtitle_orig = m3u8.Media(uri='subs.orig.m3u8', # Removed path join
                                      type='SUBTITLES', group_id='Subtitle',
                                      language=args.language or 'ru', 
                                      name={'en': 'English', 'ru': 'Russian'}.get(args.language or 'ru', 'Original'),
@@ -336,7 +336,7 @@ async def main():
                 'nl': 'Dutch',
             }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
 
-            subtitle_list = m3u8.Media(uri=os.path.join(http_base_url, 'subs.m3u8'),
+            subtitle_list = m3u8.Media(uri='subs.m3u8', # Removed path join
                                      type='SUBTITLES', group_id='Subtitle',
                                    language=subtitle_lang, name=subtitle_name,
                                    forced='NO', autoselect='NO')
@@ -404,7 +404,7 @@ async def main():
 
                 for segment in chunk_list.segments:
                     segment_name = normalise_chunk_uri(segment.uri)
-                    segment.uri = os.path.join(http_base_url, segment_name)
+                    segment.uri = segment_name.lstrip('/') # Remove leading slash for relative path
 
                 global CHUNK_LIST_SER
                 CHUNK_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
