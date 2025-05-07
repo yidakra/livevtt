@@ -349,16 +349,16 @@ async def main():
     if not args.hard_subs:
         if args.both_tracks:
             # Add both subtitle tracks
-            subtitle_trans = m3u8.Media(uri='subs.trans.m3u8', # Removed path join
+            subtitle_trans = m3u8.Media(uri='subs.trans.m3u8',
                                       type='SUBTITLES', group_id='Subtitle',
                                       language='en', name='English',
-                                      forced='NO', autoselect='NO')
+                                      autoselect='NO')
             
-            subtitle_orig = m3u8.Media(uri='subs.orig.m3u8', # Removed path join
+            subtitle_orig = m3u8.Media(uri='subs.orig.m3u8',
                                      type='SUBTITLES', group_id='Subtitle',
                                      language=args.language or 'ru', 
                                      name={'en': 'English', 'ru': 'Russian'}.get(args.language or 'ru', 'Original'),
-                                     forced='NO', autoselect='NO')
+                                     autoselect='NO')
             
             modified_base_playlist.add_media(subtitle_trans)
             modified_base_playlist.add_media(subtitle_orig)
@@ -376,10 +376,10 @@ async def main():
                 'nl': 'Dutch',
             }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
 
-            subtitle_list = m3u8.Media(uri='subs.m3u8', # Removed path join
+            subtitle_list = m3u8.Media(uri='subs.m3u8',
                                      type='SUBTITLES', group_id='Subtitle',
-                                   language=subtitle_lang, name=subtitle_name,
-                                   forced='NO', autoselect='NO')
+                                     language=subtitle_lang, name=subtitle_name,
+                                     autoselect='NO')
             modified_base_playlist.add_media(subtitle_list)
             modified_base_playlist.playlists[0].media += [subtitle_list]
 
