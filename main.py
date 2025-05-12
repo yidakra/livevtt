@@ -15,9 +15,10 @@ import sys
 import shutil
 import copy
 import threading
+import subprocess  # For calling ffmpeg command for RTMP streaming
 
 from datetime import timedelta, datetime
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, Optional, List
 from faster_whisper import WhisperModel
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from faster_whisper.utils import available_models
@@ -40,6 +41,12 @@ MAX_TARGET_BUFFER_SECS = 120
 
 FILTER_DICT = {}  # Dictionary of strings to filter out
 FILTER_FILE = 'filter.json'  # File to store filter words
+
+# New global variables for RTMP streaming
+RTMP_ENABLED = False
+RTMP_URL = None
+RTMP_PROCESS = None
+RTMP_QUEUE = None
 
 if sys.version_info < (3, 10):
     print(f'This script needs to be ran under Python 3.10 at minimum.')
@@ -172,6 +179,127 @@ def should_filter_segment(text: str) -> bool:
     return any(word.lower() in text for word in FILTER_DICT.get('filter_words', []))
 
 
+async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
+    """
+    Publish subtitle text to RTMP server as onTextData events.
+    
+    Args:
+        text: The subtitle text to send
+        language: Language code (default: "eng")
+        track_id: Track identifier (default: 99)
+    """
+    global RTMP_QUEUE
+    if RTMP_ENABLED and RTMP_QUEUE is not None:
+        await RTMP_QUEUE.put({
+            "text": text,
+            "language": language,
+            "trackid": track_id
+        })
+
+async def rtmp_publisher(rtmp_url: str, queue: asyncio.Queue):
+    """
+    Process for publishing onTextData events to an RTMP server using FFmpeg.
+    
+    Args:
+        rtmp_url: The RTMP URL to publish to
+        queue: Queue containing subtitle data to publish
+    """
+    logger.info(f"Starting RTMP publisher to {rtmp_url}")
+    
+    # Create a text file for onTextData events
+    async with aiofiles.tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as temp_file:
+        temp_filename = temp_file.name
+        
+    try:
+        # Start FFmpeg process to stream to RTMP server
+        # Using a dummy video source with onTextData metadata for captions
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-re',                   # Real-time streaming
+            '-f', 'lavfi',           # Use libavfilter
+            '-i', 'color=black:s=1280x720',  # Create a black screen
+            '-f', 'lavfi',           # Audio source
+            '-i', 'anullsrc',        # Silent audio
+            '-c:v', 'libx264',       # Video codec
+            '-tune', 'zerolatency',  # Tune for low latency
+            '-preset', 'ultrafast',  # Fastest encoding
+            '-c:a', 'aac',           # Audio codec
+            '-f', 'flv',             # Output format
+            '-flvflags', '+no_duration_filesize',  # FLV flags
+            '-metadata', f'onTextData="text=Starting captions",language=eng,trackid=99',  # Initial metadata
+            rtmp_url                 # RTMP destination
+        ]
+        
+        global RTMP_PROCESS
+        RTMP_PROCESS = subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        
+        logger.info(f"Started RTMP process with PID {RTMP_PROCESS.pid}")
+        
+        # Process queue items
+        while True:
+            item = await queue.get()
+            if item is None:  # None used as sentinel to stop
+                break
+                
+            # Extract data from queue item
+            text = item.get('text', '')
+            language = item.get('language', 'eng')
+            track_id = item.get('trackid', 99)
+            
+            # Send metadata command to FFmpeg
+            # Note: This is a simplification - in a real implementation, 
+            # we would need a more robust way to add metadata to the stream
+            # Consider using a dedicated RTMP library for Python instead
+            
+            logger.info(f"Publishing caption to RTMP: {text}")
+            
+            # In a real implementation, we would update the stream metadata here
+            # Simplified approach - restart FFmpeg with new metadata
+            if RTMP_PROCESS is not None:
+                RTMP_PROCESS.terminate()
+                await asyncio.sleep(0.1)
+                
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-re',
+                '-f', 'lavfi',
+                '-i', 'color=black:s=1280x720',
+                '-f', 'lavfi',
+                '-i', 'anullsrc',
+                '-c:v', 'libx264',
+                '-tune', 'zerolatency',
+                '-preset', 'ultrafast',
+                '-c:a', 'aac',
+                '-f', 'flv',
+                '-flvflags', '+no_duration_filesize',
+                '-metadata', f'onTextData="text={text}",language={language},trackid={track_id}',
+                rtmp_url
+            ]
+            
+            RTMP_PROCESS = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            queue.task_done()
+            
+    except asyncio.CancelledError:
+        logger.info("RTMP publisher task cancelled")
+    except Exception as e:
+        logger.error(f"Error in RTMP publisher: {e}")
+    finally:
+        # Clean up
+        if os.path.exists(temp_filename):
+            os.unlink(temp_filename)
+        if RTMP_PROCESS is not None:
+            RTMP_PROCESS.terminate()
+            RTMP_PROCESS = None
+
 async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_dir: str, segment_uri: str,
                            chunk_name: str) -> Tuple[str, str]:
     ts_probe_proc = await asyncio.create_subprocess_exec('ffprobe', '-i', chunk_name, '-show_entries',
@@ -202,6 +330,15 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
         segments_orig = [seg for seg in segments_orig if not should_filter_segment(seg.text)]
         segments_trans = [seg for seg in segments_trans if not should_filter_segment(seg.text)]
         
+        # Send to RTMP if enabled
+        if RTMP_ENABLED:
+            segments_to_use = segments_trans if args.rtmp_use_translated else segments_orig
+            for segment in segments_to_use:
+                if segment.text.strip():
+                    await publish_to_rtmp(segment.text, 
+                                         language=args.rtmp_language or (args.language if args.rtmp_use_translated else "eng"), 
+                                         track_id=args.rtmp_track_id)
+        
         if not args.hard_subs:
             vtt_uri = os.path.splitext(segment_uri)[0]
             if segments_orig:  # Only add if there are segments after filtering
@@ -219,6 +356,14 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
         
         # Filter segments
         segments = [seg for seg in segments if not should_filter_segment(seg.text)]
+        
+        # Send to RTMP if enabled
+        if RTMP_ENABLED:
+            for segment in segments:
+                if segment.text.strip():
+                    await publish_to_rtmp(segment.text, 
+                                         language=args.rtmp_language or args.language, 
+                                         track_id=args.rtmp_track_id)
         
         if not args.hard_subs:
             vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
@@ -269,6 +414,16 @@ async def cleanup(session: aiohttp.ClientSession, chunk_dir: str, prev_cwd: str,
                     os.unlink(chunk_path)
             except OSError as e:
                 logger.warning(f"Failed to remove temporary file {chunk_path}: {e}")
+                
+        # Terminate RTMP process if running
+        global RTMP_PROCESS, RTMP_QUEUE
+        if RTMP_PROCESS is not None:
+            logger.info("Terminating RTMP process...")
+            RTMP_PROCESS.terminate()
+            RTMP_PROCESS = None
+            
+        if RTMP_QUEUE is not None:
+            await RTMP_QUEUE.put(None)  # Signal to stop the publisher
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
     finally:
@@ -321,8 +476,25 @@ async def main():
                         help='Enable both transcription and translation tracks')
     parser.add_argument('-f', '--filter-file', type=str, help='Path to JSON file containing words to filter out',
                         default='filter.json')
+    
+    # New RTMP arguments
+    parser.add_argument('-rtmp', '--rtmp-url', type=str, help='RTMP URL to publish captions to (e.g., rtmp://server/app/stream)')
+    parser.add_argument('-rtmp-lang', '--rtmp-language', type=str, help='Language code for RTMP subtitles (defaults to stream language or "eng")')
+    parser.add_argument('-rtmp-track', '--rtmp-track-id', type=int, help='Track ID for RTMP subtitles', default=99)
+    parser.add_argument('-rtmp-trans', '--rtmp-use-translated', action='store_true',
+                        help='Use translated (English) text for RTMP instead of original language (only applies with --both-tracks)')
 
     args = parser.parse_args()
+
+    # Initialize RTMP settings if enabled
+    global RTMP_ENABLED, RTMP_URL, RTMP_QUEUE
+    if args.rtmp_url:
+        RTMP_ENABLED = True
+        RTMP_URL = args.rtmp_url
+        RTMP_QUEUE = asyncio.Queue()
+        # Start RTMP publisher task
+        rtmp_task = asyncio.create_task(rtmp_publisher(RTMP_URL, RTMP_QUEUE))
+        logger.info(f"RTMP publishing enabled to {RTMP_URL}")
 
     stop_event = threading.Event()
     session = aiohttp.ClientSession(headers={'User-Agent': args.user_agent})

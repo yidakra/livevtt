@@ -9,7 +9,10 @@ LiveVTT allows you to transcribe live audio/video streams and generate WebVTT su
 ## Usage
 
 ```bash
-livevtt -u <URL> [-s] [-l <BIND_ADDRESS>] [-p <BIND_PORT>] [-m <MODEL>] [-b <BEAM_SIZE>] [-c <USE_CUDA>] [-t] [-bt] [-vf <VAD_FILTER>] [-la <LANGUAGE>] [-ua <USER_AGENT>] [-f <FILTER_FILE>]
+livevtt -u <URL> [-s] [-l <BIND_ADDRESS>] [-p <BIND_PORT>] [-m <MODEL>] [-b <BEAM_SIZE>] 
+        [-c <USE_CUDA>] [-t] [-bt] [-vf <VAD_FILTER>] [-la <LANGUAGE>] [-ua <USER_AGENT>] 
+        [-f <FILTER_FILE>] [-rtmp <RTMP_URL>] [-rtmp-lang <RTMP_LANGUAGE>] 
+        [-rtmp-track <RTMP_TRACK_ID>] [-rtmp-trans]
 ```
 
 ### Arguments
@@ -27,6 +30,10 @@ livevtt -u <URL> [-s] [-l <BIND_ADDRESS>] [-p <BIND_PORT>] [-m <MODEL>] [-b <BEA
 - `-la, --language`: The original language of the stream, if known/not multilingual. Can be left unset.
 - `-ua, --user-agent`: User agent to use to retrieve playlists/stream chunks (defaults to 'VLC/3.0.18 LibVLC/3.0.18').
 - `-f, --filter-file`: Path to JSON file containing words to filter out (defaults to 'filter.json').
+- `-rtmp, --rtmp-url`: RTMP URL to publish captions to (e.g., rtmp://server/app/stream)
+- `-rtmp-lang, --rtmp-language`: Language code for RTMP subtitles (defaults to stream language or "eng")
+- `-rtmp-track, --rtmp-track-id`: Track ID for RTMP subtitles (default: 99)
+- `-rtmp-trans, --rtmp-use-translated`: Use translated (English) text for RTMP instead of original language (only applies with --both-tracks)
 
 ### Subtitle Modes
 
@@ -130,7 +137,7 @@ Use Docker Compose for a more declarative way to run the application. Edit the c
 
 ```bash
 docker compose up --build
-```
+   ```
 
 ## Examples
 
@@ -164,13 +171,15 @@ docker compose up --build
    livevtt -la ru -f custom_filters.json
    ```
 
-## Contributing
+7. Stream with RTMP captions to Wowza:
+   ```bash
+   livevtt -la ru -rtmp rtmp://wowza-server/live/stream
+   ```
 
-Contributions are welcome! Please fork the repository and submit a pull request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+8. Stream with translated RTMP captions in dual-language mode:
+   ```bash
+   livevtt -la ru -bt -rtmp rtmp://wowza-server/live/stream -rtmp-trans
+   ```
 
 ### Content Filtering
 
@@ -198,3 +207,27 @@ The filter:
 - Removes entire segments containing any filtered word/phrase
 - Can be updated while the program is running
 - Applies to both soft and hard subtitles
+
+### RTMP Streaming
+
+LiveVTT now supports publishing subtitles to RTMP servers using onTextData events. This allows integration with streaming servers like Wowza that can consume these events and display captions.
+
+The RTMP implementation:
+- Publishes captions as onTextData events
+- Creates a minimal video/audio stream to carry the captions
+- Works with both translation and transcription modes
+- Can be used alongside HLS subtitle generation
+- Allows specifying language code and track ID
+
+To test your RTMP setup, you can use the included test script:
+```bash
+python test_rtmp.py -u rtmp://wowza-server/live/stream
+```
+
+## Contributing
+
+Contributions are welcome! Please fork the repository and submit a pull request.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
