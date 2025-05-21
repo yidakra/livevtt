@@ -147,7 +147,7 @@ public class LiveVTTCaptionModule extends ModuleBase {
         
         private void sendCaptionData(CaptionData captionData) {
             try {
-                if (stream != null && stream.isPublishStreamReady()) {
+                if (stream != null && stream.isPublishStreamReady(true, true)) {
                     AMFDataObj amfData = new AMFDataObj();
                     amfData.put("text", new AMFDataItem(captionData.getText()));
                     amfData.put("language", new AMFDataItem(captionData.getLanguage()));
@@ -249,9 +249,8 @@ public class LiveVTTCaptionModule extends ModuleBase {
     /**
      * Called when a new stream is created
      */
-    @Override
     public void onStreamCreate(IMediaStream stream) {
-        if (stream.isPublishStreamReady() && !stream.isTranscodeResult()) {
+        if (stream.isPublishStreamReady(true, true) && !stream.isTranscodeResult()) {
             CaptionStreamListener listener = new CaptionStreamListener(stream);
             streamListeners.put(stream.getName(), listener);
             stream.addClientListener(listener);
@@ -265,7 +264,6 @@ public class LiveVTTCaptionModule extends ModuleBase {
     /**
      * Called when a stream is destroyed
      */
-    @Override
     public void onStreamDestroy(IMediaStream stream) {
         CaptionStreamListener listener = streamListeners.remove(stream.getName());
         if (listener != null) {

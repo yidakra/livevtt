@@ -98,7 +98,9 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
             IApplication app = vhost.getApplication("live"); // Default to "live" application
             if (app == null) {
                 // Try to find any application that has our module
-                for (String appName : vhost.getApplicationNames()) {
+                List<String> appNames = vhost.getApplicationNames();
+                for (Object appNameObj : appNames) {
+                    String appName = appNameObj.toString();
                     IApplication testApp = vhost.getApplication(appName);
                     if (testApp != null && testApp.getAppInstance("_definst_") != null) {
                         app = testApp;
@@ -120,7 +122,7 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
             }
             
             // Find our module
-            LiveVTTCaptionModule module = (LiveVTTCaptionModule) appInstance.getModuleList().get("LiveVTTCaptionModule");
+            LiveVTTCaptionModule module = (LiveVTTCaptionModule) appInstance.getModuleList().getModuleByName("LiveVTTCaptionModule");
             if (module == null) {
                 sendError(resp, 500, "LiveVTTCaptionModule not found in application");
                 return;
@@ -280,7 +282,7 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
     /**
      * Perform HTTP authentication if required
      */
-    private boolean doHTTPAuthentication(IVHost vhost, IHTTPRequest req, IHTTPResponse resp) {
+    public boolean doHTTPAuthentication(IVHost vhost, IHTTPRequest req, IHTTPResponse resp) {
         // This can be expanded to include actual authentication logic
         return true;
     }
