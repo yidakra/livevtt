@@ -15,7 +15,6 @@ import sys
 import shutil
 import copy
 import threading
-import subprocess  # For calling ffmpeg command for RTMP streaming
 
 from datetime import timedelta, datetime
 from typing import Iterable, Tuple, Optional, List
@@ -45,7 +44,6 @@ FILTER_FILE = 'filter.json'  # File to store filter words
 # New global variables for RTMP streaming
 RTMP_ENABLED = False
 RTMP_URL = None
-RTMP_PROCESS = None
 RTMP_QUEUE = None
 
 if sys.version_info < (3, 10):
@@ -181,124 +179,66 @@ def should_filter_segment(text: str) -> bool:
 
 async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
     """
-    Publish subtitle text to RTMP server as onTextData events.
+    Publish subtitle text to Wowza Streaming Engine via HTTP as onTextData events.
     
     Args:
         text: The subtitle text to send
         language: Language code (default: "eng")
         track_id: Track identifier (default: 99)
     """
-    global RTMP_QUEUE
-    if RTMP_ENABLED and RTMP_QUEUE is not None:
-        await RTMP_QUEUE.put({
-            "text": text,
-            "language": language,
-            "trackid": track_id
-        })
+    global RTMP_ENABLED, RTMP_URL
+    if RTMP_ENABLED and RTMP_URL is not None:
+        try:
+            # Extract server and application name from RTMP URL
+            # Example: rtmp://localhost/live/stream
+            parts = RTMP_URL.split('/')
+            if len(parts) >= 3:
+                server = parts[2]
+                stream_name = parts[-1]
+                
+                # Prepare HTTP request to Wowza module
+                url = f"http://{server}:8087/livevtt/captions?streamname={stream_name}"
+                headers = {'Content-Type': 'application/json'}
+                data = {
+                    "text": text,
+                    "language": language,
+                    "trackId": track_id
+                }
+                
+                # Send HTTP request to Wowza module
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=data, headers=headers) as response:
+                        if response.status != 200:
+                            response_text = await response.text()
+                            logger.error(f"Failed to send caption to Wowza: {response.status} - {response_text}")
+                        else:
+                            if args.debug:
+                                logger.info(f"Caption sent to Wowza: {text}")
+            else:
+                logger.error(f"Invalid RTMP URL format: {RTMP_URL}")
+        except Exception as e:
+            logger.error(f"Error sending caption to Wowza: {e}")
 
 async def rtmp_publisher(rtmp_url: str, queue: asyncio.Queue):
     """
-    Process for publishing onTextData events to an RTMP server using FFmpeg.
-    
-    Args:
-        rtmp_url: The RTMP URL to publish to
-        queue: Queue containing subtitle data to publish
+    Process for publishing onTextData events to an RTMP server using Wowza module.
+    This function is kept for backward compatibility but is no longer used.
+    All caption publishing is now done directly in publish_to_rtmp.
     """
-    logger.info(f"Starting RTMP publisher to {rtmp_url}")
+    logger.info(f"RTMP publishing is now handled directly via HTTP to Wowza module")
     
-    # Create a text file for onTextData events
-    async with aiofiles.tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as temp_file:
-        temp_filename = temp_file.name
-        
+    # Just consume the queue items to prevent queue from filling up
+    # in case old code is still putting items in the queue
     try:
-        # Start FFmpeg process to stream to RTMP server
-        # Using a dummy video source with onTextData metadata for captions
-        ffmpeg_cmd = [
-            'ffmpeg',
-            '-re',                   # Real-time streaming
-            '-f', 'lavfi',           # Use libavfilter
-            '-i', 'color=black:s=1280x720',  # Create a black screen
-            '-f', 'lavfi',           # Audio source
-            '-i', 'anullsrc',        # Silent audio
-            '-c:v', 'libx264',       # Video codec
-            '-tune', 'zerolatency',  # Tune for low latency
-            '-preset', 'ultrafast',  # Fastest encoding
-            '-c:a', 'aac',           # Audio codec
-            '-f', 'flv',             # Output format
-            '-flvflags', '+no_duration_filesize',  # FLV flags
-            '-metadata', f'onTextData="text=Starting captions",language=eng,trackid=99',  # Initial metadata
-            rtmp_url                 # RTMP destination
-        ]
-        
-        global RTMP_PROCESS
-        RTMP_PROCESS = subprocess.Popen(
-            ffmpeg_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        
-        logger.info(f"Started RTMP process with PID {RTMP_PROCESS.pid}")
-        
-        # Process queue items
         while True:
             item = await queue.get()
             if item is None:  # None used as sentinel to stop
                 break
-                
-            # Extract data from queue item
-            text = item.get('text', '')
-            language = item.get('language', 'eng')
-            track_id = item.get('trackid', 99)
-            
-            # Send metadata command to FFmpeg
-            # Note: This is a simplification - in a real implementation, 
-            # we would need a more robust way to add metadata to the stream
-            # Consider using a dedicated RTMP library for Python instead
-            
-            logger.info(f"Publishing caption to RTMP: {text}")
-            
-            # In a real implementation, we would update the stream metadata here
-            # Simplified approach - restart FFmpeg with new metadata
-            if RTMP_PROCESS is not None:
-                RTMP_PROCESS.terminate()
-                await asyncio.sleep(0.1)
-                
-            ffmpeg_cmd = [
-                'ffmpeg',
-                '-re',
-                '-f', 'lavfi',
-                '-i', 'color=black:s=1280x720',
-                '-f', 'lavfi',
-                '-i', 'anullsrc',
-                '-c:v', 'libx264',
-                '-tune', 'zerolatency',
-                '-preset', 'ultrafast',
-                '-c:a', 'aac',
-                '-f', 'flv',
-                '-flvflags', '+no_duration_filesize',
-                '-metadata', f'onTextData="text={text}",language={language},trackid={track_id}',
-                rtmp_url
-            ]
-            
-            RTMP_PROCESS = subprocess.Popen(
-                ffmpeg_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            
             queue.task_done()
-            
     except asyncio.CancelledError:
         logger.info("RTMP publisher task cancelled")
     except Exception as e:
         logger.error(f"Error in RTMP publisher: {e}")
-    finally:
-        # Clean up
-        if os.path.exists(temp_filename):
-            os.unlink(temp_filename)
-        if RTMP_PROCESS is not None:
-            RTMP_PROCESS.terminate()
-            RTMP_PROCESS = None
 
 async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_dir: str, segment_uri: str,
                            chunk_name: str) -> Tuple[str, str]:
@@ -415,13 +355,8 @@ async def cleanup(session: aiohttp.ClientSession, chunk_dir: str, prev_cwd: str,
             except OSError as e:
                 logger.warning(f"Failed to remove temporary file {chunk_path}: {e}")
                 
-        # Terminate RTMP process if running
-        global RTMP_PROCESS, RTMP_QUEUE
-        if RTMP_PROCESS is not None:
-            logger.info("Terminating RTMP process...")
-            RTMP_PROCESS.terminate()
-            RTMP_PROCESS = None
-            
+        # Signal to stop the RTMP queue if it exists
+        global RTMP_QUEUE
         if RTMP_QUEUE is not None:
             await RTMP_QUEUE.put(None)  # Signal to stop the publisher
     except Exception as e:
@@ -492,9 +427,9 @@ async def main():
         RTMP_ENABLED = True
         RTMP_URL = args.rtmp_url
         RTMP_QUEUE = asyncio.Queue()
-        # Start RTMP publisher task
+        # Keep compatibility with old code by starting the queue consumer
         rtmp_task = asyncio.create_task(rtmp_publisher(RTMP_URL, RTMP_QUEUE))
-        logger.info(f"RTMP publishing enabled to {RTMP_URL}")
+        logger.info(f"RTMP caption publishing enabled to {RTMP_URL}")
 
     stop_event = threading.Event()
     session = aiohttp.ClientSession(headers={'User-Agent': args.user_agent})

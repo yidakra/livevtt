@@ -7,116 +7,140 @@ This script tests sending captions to an RTMP server without requiring a full vi
 import asyncio
 import argparse
 import logging
-import subprocess
 import time
 import sys
-import signal
+import aiohttp
+import json
+from urllib.parse import urlparse
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("rtmp-test")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger('livevtt-test')
 
-# Global variables
-RTMP_PROCESS = None
-
-async def publish_test_captions(rtmp_url, num_captions=5, delay=5):
-    """Publish test captions to the specified RTMP URL."""
-    global RTMP_PROCESS
+async def send_test_captions(url, num_captions=5, interval=3.0):
+    """
+    Send test captions to the Wowza LiveVTT Caption Module via HTTP.
     
-    test_captions = [
-        "This is a test caption 1",
-        "Testing RTMP subtitle functionality",
-        "Captions should appear in Wowza",
-        "Lorem ipsum dolor sit amet",
-        "Final test caption"
-    ]
+    Args:
+        url: RTMP URL of the stream
+        num_captions: Number of test captions to send
+        interval: Interval between captions in seconds
+    """
+    # Parse RTMP URL to get server and stream name
+    parsed_url = urlparse(url)
+    server = parsed_url.netloc
+    path_parts = parsed_url.path.strip('/').split('/')
     
-    for i in range(min(num_captions, len(test_captions))):
-        caption = test_captions[i]
-        logger.info(f"Publishing caption {i+1}/{num_captions}: '{caption}'")
-        
-        # Stop previous process if running
-        if RTMP_PROCESS is not None:
-            RTMP_PROCESS.terminate()
-            await asyncio.sleep(0.1)
+    if len(path_parts) < 2:
+        logger.error(f"Invalid RTMP URL format: {url}")
+        logger.error("URL should be in format: rtmp://server/application/streamname")
+        return False
+    
+    stream_name = path_parts[-1]
+    
+    # HTTP endpoint for the Wowza module
+    http_url = f"http://{server}:8087/livevtt/captions?streamname={stream_name}"
+    
+    logger.info(f"Testing caption delivery to Wowza at {http_url}")
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            for i in range(1, num_captions + 1):
+                caption_text = f"This is test caption {i} of {num_captions} from LiveVTT"
+                
+                # Prepare JSON payload
+                payload = {
+                    "text": caption_text,
+                    "language": "eng",
+                    "trackId": 99
+                }
+                
+                # Send HTTP request
+                logger.info(f"Sending caption: {caption_text}")
+                async with session.post(http_url, json=payload, headers={'Content-Type': 'application/json'}) as response:
+                    if response.status == 200:
+                        logger.info(f"Caption {i} sent successfully")
+                    else:
+                        response_text = await response.text()
+                        logger.error(f"Failed to send caption {i}: {response.status} - {response_text}")
+                
+                # Wait for the specified interval
+                await asyncio.sleep(interval)
             
-        # Start FFmpeg process with new caption
-        ffmpeg_cmd = [
-            'ffmpeg',
-            '-re',
-            '-f', 'lavfi',
-            '-i', 'color=black:s=1280x720',
-            '-f', 'lavfi',
-            '-i', 'anullsrc',
-            '-c:v', 'libx264',
-            '-tune', 'zerolatency',
-            '-preset', 'ultrafast',
-            '-c:a', 'aac',
-            '-f', 'flv',
-            '-flvflags', '+no_duration_filesize',
-            '-metadata', f'onTextData="text={caption}",language=eng,trackid=99',
-            rtmp_url
-        ]
-        
-        RTMP_PROCESS = subprocess.Popen(
-            ffmpeg_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        
-        logger.info(f"Started RTMP process with PID {RTMP_PROCESS.pid}")
-        
-        # Wait between captions
-        await asyncio.sleep(delay)
-    
-    logger.info("Caption test complete")
-    
-    # Cleanup
-    if RTMP_PROCESS is not None:
-        RTMP_PROCESS.terminate()
-        RTMP_PROCESS = None
+            logger.info("Caption test completed")
+            return True
+    except Exception as e:
+        logger.error(f"Error sending captions: {e}")
+        return False
 
-async def cleanup(sig=None):
-    """Clean up resources when terminating."""
-    if sig:
-        logger.info(f"Received signal {sig}, shutting down...")
-    
-    global RTMP_PROCESS
-    if RTMP_PROCESS is not None:
-        RTMP_PROCESS.terminate()
-        RTMP_PROCESS = None
-    
-    logger.info("Cleanup complete")
+async def check_wowza_connection(server, port=8087):
+    """Check if the Wowza server is reachable via HTTP"""
+    url = f"http://{server}:{port}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as response:
+                if response.status == 200:
+                    logger.info(f"Wowza server at {url} is reachable")
+                    return True
+                else:
+                    logger.warning(f"Wowza server at {url} returned status {response.status}")
+                    return False
+    except aiohttp.ClientError as e:
+        logger.error(f"Cannot connect to Wowza server at {url}: {e}")
+        return False
+
+async def check_livevtt_module(server, port=8087):
+    """Check if the LiveVTT Caption Module is installed and responding"""
+    url = f"http://{server}:{port}/livevtt/captions/status"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    logger.info(f"LiveVTT Caption Module is installed and responding: {data}")
+                    return True
+                else:
+                    logger.warning(f"LiveVTT Caption Module check failed with status {response.status}")
+                    return False
+    except aiohttp.ClientError as e:
+        logger.error(f"Cannot connect to LiveVTT Caption Module at {url}: {e}")
+        return False
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON response from LiveVTT Caption Module")
+        return False
 
 async def main():
-    parser = argparse.ArgumentParser(description='Test RTMP caption publishing')
-    parser.add_argument('-u', '--rtmp-url', type=str, required=True,
-                        help='RTMP URL to publish captions to (e.g., rtmp://server/app/stream)')
-    parser.add_argument('-n', '--num-captions', type=int, default=5,
-                        help='Number of test captions to publish (default: 5)')
-    parser.add_argument('-d', '--delay', type=int, default=5,
-                        help='Delay between captions in seconds (default: 5)')
-    
+    parser = argparse.ArgumentParser(description='Test LiveVTT caption delivery to Wowza')
+    parser.add_argument('-u', '--url', required=True, help='RTMP URL (e.g., rtmp://server/application/streamname)')
+    parser.add_argument('-n', '--num-captions', type=int, default=5, help='Number of test captions to send')
+    parser.add_argument('-i', '--interval', type=float, default=3.0, help='Interval between captions in seconds')
     args = parser.parse_args()
     
-    # Set up signal handlers
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(cleanup(sig)))
+    # Parse server from URL
+    parsed_url = urlparse(args.url)
+    server = parsed_url.netloc
     
-    try:
-        logger.info(f"Starting RTMP test with URL: {args.rtmp_url}")
-        await publish_test_captions(args.rtmp_url, args.num_captions, args.delay)
-    except Exception as e:
-        logger.error(f"Error in RTMP test: {e}")
-    finally:
-        await cleanup()
+    # Check Wowza connection
+    if not await check_wowza_connection(server):
+        logger.error("Cannot connect to Wowza server. Please check if it's running.")
+        return 1
+    
+    # Check LiveVTT module
+    if not await check_livevtt_module(server):
+        logger.warning("LiveVTT Caption Module check failed. Module may not be installed properly.")
+    
+    # Send test captions
+    success = await send_test_captions(args.url, args.num_captions, args.interval)
+    
+    return 0 if success else 1
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        sys.exit(asyncio.run(main()))
     except KeyboardInterrupt:
-        logger.info("Shutting down gracefully...")
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        sys.exit(1) 
+        logger.info("Test interrupted by user")
+        sys.exit(0) 

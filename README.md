@@ -208,21 +208,40 @@ The filter:
 - Can be updated while the program is running
 - Applies to both soft and hard subtitles
 
-### RTMP Streaming
+## RTMP Closed Captioning Integration
 
-LiveVTT now supports publishing subtitles to RTMP servers using onTextData events. This allows integration with streaming servers like Wowza that can consume these events and display captions.
+LiveVTT supports sending closed captions to RTMP streams via Wowza Streaming Engine. This is done through a custom Java module that properly injects onTextData events into the live stream.
 
-The RTMP implementation:
-- Publishes captions as onTextData events
-- Creates a minimal video/audio stream to carry the captions
-- Works with both translation and transcription modes
-- Can be used alongside HLS subtitle generation
-- Allows specifying language code and track ID
+### How It Works
 
-To test your RTMP setup, you can use the included test script:
-```bash
-python test_rtmp.py -u rtmp://wowza-server/live/stream
-```
+1. The LiveVTT application transcribes audio from a live stream in real-time
+2. Caption text is sent via HTTP to the LiveVTTCaptionModule in Wowza
+3. The Java module formats the captions as proper onTextData events and injects them into the live stream
+4. Players that support closed captions (like JW Player, THEOplayer, etc.) can display these captions
+
+### Setup Instructions
+
+1. Build and install the LiveVTTCaptionModule in your Wowza Streaming Engine:
+   - Follow the instructions in `wowza_module_config.txt`
+   - Use the provided `java_module_build.sh` script to compile the module
+   - Install the compiled JAR file in Wowza's `lib` directory
+
+2. Configure your LiveVTT application to send captions to Wowza:
+   ```bash
+   python main.py -u <HLS_URL> --rtmp-url rtmp://your-wowza-server/application/stream
+   ```
+
+3. Verify the integration using the `check_wowza.py` script:
+   ```bash
+   python check_wowza.py --url http://your-wowza-server:8087
+   ```
+
+### RTMP Command Line Options
+
+- `-rtmp, --rtmp-url`: RTMP URL for the stream (e.g., rtmp://server/application/stream)
+- `-rtmp-lang, --rtmp-language`: Language code for captions (default: "eng")
+- `-rtmp-track, --rtmp-track-id`: Track ID for captions (default: 99)
+- `-rtmp-trans, --rtmp-use-translated`: Use translated text for captions (only with --both-tracks)
 
 ## Contributing
 
