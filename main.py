@@ -212,8 +212,7 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
                             response_text = await response.text()
                             logger.error(f"Failed to send caption to Wowza: {response.status} - {response_text}")
                         else:
-                            if args.debug:
-                                logger.info(f"Caption sent to Wowza: {text}")
+                            logger.info(f"Caption sent to Wowza: {text}")
             else:
                 logger.error(f"Invalid RTMP URL format: {RTMP_URL}")
         except Exception as e:
@@ -358,7 +357,10 @@ async def cleanup(session: aiohttp.ClientSession, chunk_dir: str, prev_cwd: str,
         # Signal to stop the RTMP queue if it exists
         global RTMP_QUEUE
         if RTMP_QUEUE is not None:
-            await RTMP_QUEUE.put(None)  # Signal to stop the publisher
+            try:
+                await RTMP_QUEUE.put(None)  # Signal to stop the publisher
+            except Exception as e:
+                logger.warning(f"Failed to stop RTMP queue: {e}")
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
     finally:
@@ -418,8 +420,15 @@ async def main():
     parser.add_argument('-rtmp-track', '--rtmp-track-id', type=int, help='Track ID for RTMP subtitles', default=99)
     parser.add_argument('-rtmp-trans', '--rtmp-use-translated', action='store_true',
                         help='Use translated (English) text for RTMP instead of original language (only applies with --both-tracks)')
+    parser.add_argument('-d', '--debug', action='store_true',
+                        help='Enable debug logging')
 
     args = parser.parse_args()
+
+    # Set logging level based on debug flag
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("Debug logging enabled")
 
     # Initialize RTMP settings if enabled
     global RTMP_ENABLED, RTMP_URL, RTMP_QUEUE
@@ -428,7 +437,7 @@ async def main():
         RTMP_URL = args.rtmp_url
         RTMP_QUEUE = asyncio.Queue()
         # Keep compatibility with old code by starting the queue consumer
-        rtmp_task = asyncio.create_task(rtmp_publisher(RTMP_URL, RTMP_QUEUE))
+        asyncio.create_task(rtmp_publisher(RTMP_URL, RTMP_QUEUE))
         logger.info(f"RTMP caption publishing enabled to {RTMP_URL}")
 
     stop_event = threading.Event()
@@ -603,5 +612,5 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         logger.info("Shutting down gracefully...")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}", exc_info=True)
         sys.exit(1)
