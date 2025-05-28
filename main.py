@@ -177,7 +177,8 @@ def should_filter_segment(text: str) -> bool:
     return any(word.lower() in text for word in FILTER_DICT.get('filter_words', []))
 
 
-async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
+async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, http_port: int = 8087, 
+                          username: str = None, password: str = None):
     """
     Publish subtitle text to Wowza Streaming Engine via HTTP as onTextData events.
     
@@ -185,6 +186,9 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
         text: The subtitle text to send
         language: Language code (default: "eng")
         track_id: Track identifier (default: 99)
+        http_port: HTTP port for Wowza caption API (default: 8087)
+        username: Username for Wowza authentication (default: None)
+        password: Password for Wowza authentication (default: None)
     """
     global RTMP_ENABLED, RTMP_URL
     if RTMP_ENABLED and RTMP_URL is not None:
@@ -196,8 +200,9 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
                 server = parts[2]
                 stream_name = parts[-1]
                 
-                # Prepare HTTP request to Wowza module - use mock server port
-                url = f"http://{server}:8099/livevtt/captions?streamname={stream_name}"
+                # Prepare HTTP request to Wowza module using configured port
+                # Fixed URL format to match what the HTTP Provider expects
+                url = f"http://{server}:{http_port}/livevtt/captions?streamname={stream_name}"
                 headers = {'Content-Type': 'application/json'}
                 data = {
                     "text": text,
@@ -205,9 +210,15 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
                     "trackId": track_id
                 }
                 
+                # Setup auth parameters if credentials are provided
+                auth = None
+                if username and password:
+                    auth = aiohttp.BasicAuth(username, password)
+                    logger.debug(f"Using authentication for Wowza API request")
+                
                 # Send HTTP request to Wowza module
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(url, json=data, headers=headers) as response:
+                    async with session.post(url, json=data, headers=headers, auth=auth) as response:
                         if response.status != 200:
                             response_text = await response.text()
                             logger.error(f"Failed to send caption to Wowza: {response.status} - {response_text}")
@@ -276,7 +287,10 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                 if segment.text.strip():
                     await publish_to_rtmp(segment.text, 
                                          language=args.rtmp_language or (args.language if args.rtmp_use_translated else "eng"), 
-                                         track_id=args.rtmp_track_id)
+                                         track_id=args.rtmp_track_id,
+                                         http_port=args.rtmp_http_port,
+                                         username=args.rtmp_username,
+                                         password=args.rtmp_password)
         
         if not args.hard_subs:
             vtt_uri = os.path.splitext(segment_uri)[0]
@@ -302,7 +316,10 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                 if segment.text.strip():
                     await publish_to_rtmp(segment.text, 
                                          language=args.rtmp_language or args.language, 
-                                         track_id=args.rtmp_track_id)
+                                         track_id=args.rtmp_track_id,
+                                         http_port=args.rtmp_http_port,
+                                         username=args.rtmp_username,
+                                         password=args.rtmp_password)
         
         if not args.hard_subs:
             vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
@@ -420,6 +437,9 @@ async def main():
     parser.add_argument('-rtmp-track', '--rtmp-track-id', type=int, help='Track ID for RTMP subtitles', default=99)
     parser.add_argument('-rtmp-trans', '--rtmp-use-translated', action='store_true',
                         help='Use translated (English) text for RTMP instead of original language (only applies with --both-tracks)')
+    parser.add_argument('-rtmp-port', '--rtmp-http-port', type=int, help='HTTP port for Wowza caption API (defaults to 8087)', default=8087)
+    parser.add_argument('-rtmp-user', '--rtmp-username', type=str, help='Username for Wowza API authentication', default=None)
+    parser.add_argument('-rtmp-pass', '--rtmp-password', type=str, help='Password for Wowza API authentication', default=None)
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug logging')
 

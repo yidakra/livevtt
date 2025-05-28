@@ -20,7 +20,7 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
     private static final Class<?> CLASS = LiveVTTCaptionHTTPProvider.class;
     private WMSLogger logger = WMSLoggerFactory.getLogger(CLASS);
     
-    private boolean debugLogging = false;
+    private boolean debugLogging = true;
     
     @Override
     public void onHTTPRequest(IVHost vhost, IHTTPRequest req, IHTTPResponse resp) {
@@ -38,7 +38,7 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
         }
         
         // Only handle POST requests to /livevtt/captions
-        if (!"POST".equalsIgnoreCase(requestMethod) || !requestPath.endsWith("/livevtt/captions")) {
+        if (!"POST".equalsIgnoreCase(requestMethod) || !requestPath.contains("/livevtt/captions")) {
             sendError(resp, 404, "Not Found");
             return;
         }
