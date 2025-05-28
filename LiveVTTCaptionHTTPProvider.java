@@ -18,7 +18,7 @@ import com.wowza.wms.amf.*;
 public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
     
     private static final Class<?> CLASS = LiveVTTCaptionHTTPProvider.class;
-    private WMSLogger logger = WMSLoggerFactory.getLogger(CLASS);
+    private static final WMSLogger logger = WMSLoggerFactory.getLogger(CLASS);
     
     private boolean debugLogging = true;
     

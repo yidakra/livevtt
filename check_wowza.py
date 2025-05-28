@@ -12,6 +12,7 @@ import sys
 import json
 import logging
 from urllib.parse import urlparse
+import base64
 
 # Configure logging
 logging.basicConfig(
@@ -22,12 +23,14 @@ logging.basicConfig(
 logger = logging.getLogger('livevtt-check')
 
 class WowzaChecker:
-    def __init__(self, url, timeout=5):
+    def __init__(self, url, timeout=5, username=None, password=None):
         """Initialize the Wowza checker with the server URL."""
         parsed = urlparse(url)
         self.server = parsed.netloc.split(':')[0]  # Extract hostname without port
         self.url = url
         self.timeout = timeout
+        self.username = username
+        self.password = password
         self.results = {
             "server_reachable": False,
             "rtmp_port_open": False,
@@ -73,13 +76,27 @@ class WowzaChecker:
         """Check if the LiveVTT Caption Module is installed."""
         try:
             url = f"{self.url}/livevtt/captions/status"
-            async with aiohttp.ClientSession() as session:
+            auth = None
+            if self.username and self.password:
+                auth = aiohttp.BasicAuth(self.username, self.password)
+            
+            async with aiohttp.ClientSession(auth=auth) as session:
                 async with session.get(url, timeout=self.timeout) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        self.results["module_installed"] = True
-                        self.results["module_version"] = data.get("version", "unknown")
-                        logger.info(f"✓ LiveVTT Caption Module is installed (version: {self.results['module_version']})")
+                        try:
+                            data = await response.json()
+                            self.results["module_installed"] = True
+                            self.results["module_version"] = data.get("version", "unknown")
+                            logger.info(f"✓ LiveVTT Caption Module is installed (version: {self.results['module_version']})")
+                        except:
+                            # If it's not JSON, try to check the content
+                            text = await response.text()
+                            if "LiveVTT" in text:
+                                self.results["module_installed"] = True
+                                logger.info(f"✓ LiveVTT Caption Module is installed (version: unknown)")
+                            else:
+                                logger.error(f"✗ LiveVTT Caption Module response doesn't contain expected content")
+                                return False
                         return True
                     else:
                         logger.error(f"✗ LiveVTT Caption Module is not installed or not responding (status: {response.status})")
@@ -96,11 +113,25 @@ class WowzaChecker:
         try:
             # This endpoint might require authentication on production Wowza servers
             url = f"{self.url}/v2/servers/_defaultServer_/vhosts/_defaultVHost_/applications"
-            async with aiohttp.ClientSession() as session:
+            auth = None
+            if self.username and self.password:
+                auth = aiohttp.BasicAuth(self.username, self.password)
+                
+            async with aiohttp.ClientSession(auth=auth) as session:
                 async with session.get(url, timeout=self.timeout) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        applications = data.get("applications", [])
+                        content_type = response.headers.get('Content-Type', '')
+                        if 'application/json' in content_type:
+                            data = await response.json()
+                            applications = data.get("applications", [])
+                        else:
+                            # If it's XML, parse it differently (simple approach)
+                            text = await response.text()
+                            # Check if there are application tags
+                            if "<Application>" in text:
+                                applications = [{"name": "live"}]  # Assume 'live' application exists
+                            else:
+                                applications = []
                         
                         if applications:
                             logger.info(f"✓ Found {len(applications)} applications on Wowza server")
@@ -108,13 +139,25 @@ class WowzaChecker:
                             # Check for streams in each application
                             for app in applications:
                                 app_name = app.get("name")
-                                streams_url = f"{self.url}/v2/servers/_defaultServer_/vhosts/_defaultVHost_/applications/{app_name}/instances/_definst_/streamfiles"
+                                streams_url = f"{self.url}/v2/servers/_defaultServer_/vhosts/_defaultVHost_/applications/{app_name}/instances/_definst_/incomingstreams"
                                 
                                 try:
                                     async with session.get(streams_url, timeout=self.timeout) as streams_response:
                                         if streams_response.status == 200:
-                                            streams_data = await streams_response.json()
-                                            streams = streams_data.get("streamfiles", [])
+                                            content_type = streams_response.headers.get('Content-Type', '')
+                                            if 'application/json' in content_type:
+                                                streams_data = await streams_response.json()
+                                                streams = streams_data.get("incomingStreams", [])
+                                            else:
+                                                # If it's XML, parse it differently (simple approach)
+                                                text = await streams_response.text()
+                                                # Check if there are stream tags
+                                                if "<n>" in text:
+                                                    # Very basic parsing, just count occurrences
+                                                    stream_count = text.count("<n>")
+                                                    streams = [{"name": f"stream{i}"} for i in range(stream_count)]
+                                                else:
+                                                    streams = []
                                             
                                             for stream in streams:
                                                 stream_name = stream.get("name")
@@ -131,6 +174,46 @@ class WowzaChecker:
                         logger.warning(f"✗ Could not retrieve applications (status: {response.status})")
         except Exception as e:
             logger.warning(f"✗ Error checking active streams: {e}")
+    
+    async def test_send_caption(self):
+        """Test sending a caption to an active stream."""
+        if not self.results["streams"]:
+            logger.warning("No active streams to test caption sending")
+            return False
+            
+        # Use the first stream found
+        test_stream = self.results["streams"][0]
+        stream_name = test_stream["name"]
+        app_name = test_stream["application"]
+        
+        try:
+            url = f"{self.url}/livevtt/captions"
+            payload = {
+                "text": "This is a test caption from LiveVTT checker",
+                "language": "eng",
+                "trackId": 99,
+                "streamname": stream_name
+            }
+            
+            auth = None
+            if self.username and self.password:
+                auth = aiohttp.BasicAuth(self.username, self.password)
+                
+            async with aiohttp.ClientSession(auth=auth) as session:
+                async with session.post(url, json=payload, timeout=self.timeout) as response:
+                    if response.status == 200:
+                        logger.info(f"✓ Successfully sent test caption to stream {app_name}/{stream_name}")
+                        return True
+                    else:
+                        try:
+                            response_text = await response.text()
+                            logger.error(f"✗ Failed to send test caption (status: {response.status}): {response_text}")
+                        except:
+                            logger.error(f"✗ Failed to send test caption (status: {response.status})")
+                        return False
+        except Exception as e:
+            logger.error(f"✗ Error sending test caption: {e}")
+            return False
     
     async def run_all_checks(self):
         """Run all Wowza configuration checks."""
@@ -153,6 +236,10 @@ class WowzaChecker:
             
             # Check for active streams
             await self.check_active_streams()
+            
+            # If streams are found, test sending a caption
+            if self.results["streams"]:
+                await self.test_send_caption()
         
         return self.results
 
@@ -160,9 +247,27 @@ async def main():
     parser = argparse.ArgumentParser(description="Check Wowza Streaming Engine configuration for LiveVTT")
     parser.add_argument("--url", "-u", required=True, help="Wowza Streaming Engine HTTP URL (e.g., http://server:8087)")
     parser.add_argument("--timeout", "-t", type=int, default=5, help="Connection timeout in seconds")
+    parser.add_argument("--username", help="Username for Wowza authentication")
+    parser.add_argument("--password", help="Password for Wowza authentication")
     args = parser.parse_args()
     
-    checker = WowzaChecker(args.url, args.timeout)
+    # Parse URL to extract username/password if provided in URL
+    parsed_url = urlparse(args.url)
+    username = args.username
+    password = args.password
+    
+    # If credentials are in the URL, use those instead
+    if parsed_url.username:
+        username = parsed_url.username
+        # Remove credentials from URL to avoid confusion
+        url = args.url.replace(f"{parsed_url.username}:{parsed_url.password}@", "")
+    else:
+        url = args.url
+    
+    if parsed_url.password:
+        password = parsed_url.password
+    
+    checker = WowzaChecker(url, args.timeout, username, password)
     results = await checker.run_all_checks()
     
     # Print summary

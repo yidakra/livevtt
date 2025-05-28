@@ -237,10 +237,10 @@ public class LiveVTTCaptionModule extends ModuleBase {
     public void onAppStop(IApplicationInstance appInstance) {
         // Clean up any resources
         synchronized (streamListeners) {
-            for (CaptionStreamListener listener : streamListeners.values()) {
-                listener.stop();
-            }
-            streamListeners.clear();
+        for (CaptionStreamListener listener : streamListeners.values()) {
+            listener.stop();
+        }
+        streamListeners.clear();
         }
         
         logger.info("LiveVTTCaptionModule.onAppStop: Application: " + appInstance.getApplication().getName() + "/" + appInstance.getName());
