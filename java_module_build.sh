@@ -2,7 +2,7 @@
 # Script to compile and package the LiveVTT caption module for Wowza Streaming Engine
 
 # Configuration
-WOWZA_LIB_DIR="/Library/WowzaStreamingEngine/lib"
+WOWZA_LIB_DIR="/usr/local/WowzaStreamingEngine/lib/"
 MODULE_NAME="livevtt-caption-module"
 PACKAGE_NAME="com.livevtt.wowza"
 BUILD_DIR="./build"

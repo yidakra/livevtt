@@ -221,29 +221,29 @@ public class LiveVTTCaptionModule extends ModuleBase {
     /**
      * Module initialization when application starts
      */
-    @Override
     public void onAppStart(IApplicationInstance appInstance) {
-        // Load configuration from application properties
+        // Load configuration from appInstance
         defaultLanguage = appInstance.getProperties().getPropertyStr("livevtt.caption.language", defaultLanguage);
         defaultTrackId = appInstance.getProperties().getPropertyInt("livevtt.caption.trackId", defaultTrackId);
         debugLogging = appInstance.getProperties().getPropertyBoolean("livevtt.caption.debug", debugLogging);
         
-        logger.info("LiveVTTCaptionModule: Initialized with language=" + defaultLanguage + 
-                   ", trackId=" + defaultTrackId + ", debug=" + debugLogging);
+        logger.info("LiveVTTCaptionModule.onAppStart: Application: " + appInstance.getApplication().getName() + "/" + appInstance.getName());
+        logger.info("LiveVTTCaptionModule: Initialized with language=" + defaultLanguage + ", trackId=" + defaultTrackId);
     }
     
     /**
      * Called when application instance is shut down
      */
-    @Override
     public void onAppStop(IApplicationInstance appInstance) {
-        // Clean up all stream listeners
-        for (CaptionStreamListener listener : streamListeners.values()) {
-            listener.stop();
+        // Clean up any resources
+        synchronized (streamListeners) {
+            for (CaptionStreamListener listener : streamListeners.values()) {
+                listener.stop();
+            }
+            streamListeners.clear();
         }
-        streamListeners.clear();
         
-        logger.info("LiveVTTCaptionModule: Stopped");
+        logger.info("LiveVTTCaptionModule.onAppStop: Application: " + appInstance.getApplication().getName() + "/" + appInstance.getName());
     }
     
     /**

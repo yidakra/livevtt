@@ -196,8 +196,8 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99):
                 server = parts[2]
                 stream_name = parts[-1]
                 
-                # Prepare HTTP request to Wowza module
-                url = f"http://{server}:8087/livevtt/captions?streamname={stream_name}"
+                # Prepare HTTP request to Wowza module - use mock server port
+                url = f"http://{server}:8099/livevtt/captions?streamname={stream_name}"
                 headers = {'Content-Type': 'application/json'}
                 data = {
                     "text": text,

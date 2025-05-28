@@ -88,28 +88,27 @@ async def handle_root(request):
     })
 
 async def main():
-    # Create web application
+    # Create a mock caption server
     app = web.Application()
-    
-    # Add routes
     app.add_routes([
-        web.get('/', handle_root),
         web.get('/livevtt/captions/status', handle_status),
         web.post('/livevtt/captions', handle_captions),
-        web.get('/livevtt/captions/list', handle_list_captions),
     ])
     
-    # Start server
+    # Set up the server on a different port to avoid conflicts
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, 'localhost', 8087)
+    site = web.TCPSite(runner, '127.0.0.1', 8099)
     await site.start()
     
-    logger.info("Mock Wowza server running on http://localhost:8087")
+    print(f"Mock Wowza server running at http://127.0.0.1:8099")
+    print("Available endpoints:")
+    print("  GET /livevtt/captions/status - Check server status")
+    print("  POST /livevtt/captions?streamname=name - Add captions to stream")
     
     # Keep the server running
     while True:
-        await asyncio.sleep(3600)  # Sleep for an hour (or until interrupted)
+        await asyncio.sleep(3600)  # Run for a long time
 
 if __name__ == "__main__":
     try:
