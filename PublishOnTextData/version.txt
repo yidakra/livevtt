@@ -1,0 +1,9 @@
+build 7328
+
+* Added properties "publishOnTextDataLanguageID" and "publishOnTextDataTrackNumber" to ModuleOnTextDataPublisher 
+  * "publishOnTextDataLanguageID" (String, default: "eng") 
+  * "publishOnTextDataTrackNumber" (Integer, default: 99) 
+
+build 5144
+
+* Initial release
