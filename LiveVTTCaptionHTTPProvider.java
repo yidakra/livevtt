@@ -51,7 +51,7 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
         }
         
         // Handle caption request
-        if (requestPath.contains("/livevtt/captions") && 
+        if (requestPath.equals("/livevtt/captions") && 
             ("POST".equalsIgnoreCase(requestMethod) || "PUT".equalsIgnoreCase(requestMethod))) {
             
             try {

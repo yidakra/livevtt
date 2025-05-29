@@ -128,7 +128,79 @@ Before proceeding, verify that your environment meets the requirements:
         > **Note**: Use the same tag format (`<Name>` or `<n>`) as your existing properties in the file.
     *   Save the `Application.xml` file.
 
-## Step 4: Configure the HTTP Provider
+## Step 4: Configure Application.xml for HLS WebVTT (Cupertino)
+
+For HLS (Apple's HTTP Live Streaming) to properly include WebVTT subtitles, specific properties need to be configured in your application's `Application.xml` file (`[wowza-install-dir]/conf/[application-name]/Application.xml`).
+
+1.  **Edit `Application.xml`:**
+    *   Open the file for your streaming application (e.g., `[wowza-install-dir]/conf/live/Application.xml`).
+    *   Locate the `<HTTPStreamers>` section. Ensure `cupertinostreaming` is listed.
+        ```xml
+        <HTTPStreamers>
+            <HTTPStreamer>cupertinostreaming</HTTPStreamer>
+            <HTTPStreamer>mpegdashstreaming</HTTPStreamer>
+            <!-- other http streamers -->
+        </HTTPStreamers>
+        ```
+    *   Locate the `<LiveStreamPacketizers>` section. Ensure `cupertinostreamingpacketizer` is listed.
+        ```xml
+        <LiveStreamPacketizers>
+            <LiveStreamPacketizer>cupertinostreamingpacketizer</LiveStreamPacketizer>
+            <LiveStreamPacketizer>mpegdashstreamingpacketizer</LiveStreamPacketizer>
+            <!-- other packetizers -->
+        </LiveStreamPacketizers>
+        ```
+    *   Find the main application-level `<Properties>` container (usually near the end of the file, a direct child of `<Application>`).
+    *   Add or verify the following properties are present and correctly configured:
+        ```xml
+        <!-- Properties for HLS (Cupertino) WebVTT captions -->
+        <Property>
+            <Name>cupertinoCreateAudioOnlyRendition</Name>
+            <Value>false</Value>
+            <Type>Boolean</Type>
+        </Property>
+        <Property>
+            <Name>cupertinoChunkDurationTarget</Name>
+            <Value>10000</Value> <!-- e.g., 10 seconds -->
+            <Type>Integer</Type>
+        </Property>
+        <Property>
+            <Name>cupertinoMaxChunkCount</Name>
+            <Value>10</Value>
+            <Type>Integer</Type>
+        </Property>
+        <Property>
+            <Name>cupertinoPlaylistChunkCount</Name>
+            <Value>3</Value>
+            <Type>Integer</Type>
+        </Property>
+        <Property>
+            <Name>cupertinoRepeaterChunkCount</Name>
+            <Value>3</Value>
+            <Type>Integer</Type>
+        </Property>
+        <!-- Property to enable WebVTT captions for Cupertino -->
+        <Property>
+            <Name>cupertinoTagVTT</Name>
+            <Value>true</Value>
+            <Type>Boolean</Type>
+        </Property>
+        <!-- Property to set the caption language for WebVTT (use BCP-47 language tags) -->
+        <Property>
+            <Name>cupertinoTagVTTLanguage</Name>
+            <Value>eng</Value> <!-- Example: English. Change as needed. -->
+            <Type>String</Type>
+        </Property>
+        <!-- Property to specify how captions are ingested (onTextData for this module) -->
+        <Property>
+            <Name>captionLiveIngestType</Name>
+            <Value>onTextData</Value>
+            <Type>String</Type>
+        </Property>
+        ```
+    *   Save the `Application.xml` file.
+
+## Step 5: Configure the HTTP Provider in VHost.xml
 
 1.  **Locate `VHost.xml`:**
     *   This file is usually located in the main Wowza configuration directory.
@@ -136,18 +208,19 @@ Before proceeding, verify that your environment meets the requirements:
 
 2.  **Edit `VHost.xml`:**
     *   Open the file in a text editor.
-    *   Find the `<HTTPProviders>` section.
-    *   Add the following `<HTTPProvider>` entry **inside** the `<HTTPProviders>` section:
+    *   Find the `<HTTPProviders>` section within the `<HostPort>` that Wowza uses for administration and HTTP-based services (often port `8086` or `8087`. **For caption submission, LiveVTT defaults to port 8086**).
+    *   Add the following `<HTTPProvider>` entry **inside** the relevant `<HTTPProviders>` section:
         ```xml
         <HTTPProvider>
             <BaseClass>com.livevtt.wowza.LiveVTTCaptionHTTPProvider</BaseClass>
-            <RequestFilters>livevtt/captions*</RequestFilters> <!-- This ensures the provider handles requests to /livevtt/captions -->
-            <AuthenticationMethod>none</AuthenticationMethod> <!-- For production, consider 'admin-digest' or other methods -->
+            <RequestFilters>livevtt/captions*</RequestFilters> <!-- This ensures the provider handles requests to /livevtt/captions and /livevtt/captions/status -->
+            <AuthenticationMethod>none</AuthenticationMethod> <!-- For initial testing. For production, consider 'admin-digest' or other secure methods -->
         </HTTPProvider>
         ```
+    *   **Important:** Ensure that if `LiveVTTCaptionHTTPProvider` is already listed (e.g., under port 1935), it's also configured correctly for the port `main.py` will use (default 8086). The `RequestFilters` should be `livevtt/captions*` to handle both `/livevtt/captions` (for POSTing data) and `/livevtt/captions/status` (for GETting status).
     *   Save the `VHost.xml` file.
 
-## Step 5: Restart Wowza Streaming Engine
+## Step 6: Restart Wowza Streaming Engine
 
 For the changes to take effect, you must restart the Wowza Streaming Engine service.
 
@@ -164,7 +237,7 @@ For the changes to take effect, you must restart the Wowza Streaming Engine serv
     *   Use the Wowza Streaming Engine Manager application to stop and start the services.
     *   Alternatively, use the Windows Services console (`services.msc`).
 
-## Step 6: Verify the Installation
+## Step 7: Verify the Installation
 
 1.  **Check Wowza Logs:**
     *   Monitor the Wowza logs for any errors during startup and module loading.
@@ -172,42 +245,43 @@ For the changes to take effect, you must restart the Wowza Streaming Engine serv
     *   Look for lines similar to:
         ```
         INFO server comment - LiveVTTCaptionModule.onAppStart: Application: live/_definst_
-        INFO server comment - LiveVTTCaptionHTTPProvider.onHTTPRequest: uri:/livevtt/captions/status
+        INFO server comment - LiveVTTCaptionHTTPProvider: POST /livevtt/captions (HTTP Provider in use)
+        INFO server comment - LiveVTTCaptionHTTPProvider: GET /livevtt/captions/status (HTTP Provider in use)
         ```
     *   Successful loading messages for `LiveVTTCaptionModule` and `LiveVTTCaptionHTTPProvider` should appear.
 
 2.  **Test HTTP Provider Status Endpoint:**
-    *   Open a web browser or use `curl` to access the status endpoint:
+    *   Open a web browser or use `curl` to access the status endpoint. Use the port configured in `VHost.xml` for the `LiveVTTCaptionHTTPProvider` (e.g., 8086 or 8087):
         ```bash
-        curl "http://[your-wowza-server-ip]:8087/livevtt/captions/status"
+        curl "http://[your-wowza-server-ip]:8086/livevtt/captions/status"
         ```
     *   You should receive a JSON response indicating the module is running, for example:
         ```json
-        {"module":"LiveVTTCaptionModule","version":"1.0.0","status":"running","captionsReceived":0}
+        {"status":"active","version":"1.0.0","timestamp":1678886400000}
         ```
 
 3.  **Test Sending a Caption (Optional, but recommended):**
-    *   Use `curl` to send a test caption. Replace `[your-wowza-server-ip]` and `yourStreamName` accordingly.
+    *   Use `curl` to send a test caption. Replace `[your-wowza-server-ip]`, port (e.g. 8086), and `yourStreamName` accordingly.
         ```bash
         curl -X POST -H "Content-Type: application/json" \
-             -d '{"text":"Hello Wowza from LiveVTT!","language":"eng","trackId":99}' \
-             "http://[your-wowza-server-ip]:8087/livevtt/captions?streamname=yourStreamName"
+             -d '{"text":"Hello Wowza from LiveVTT!","language":"eng","trackId":99, "streamname":"yourStreamName"}' \
+             "http://[your-wowza-server-ip]:8086/livevtt/captions"
         ```
     *   You should receive a JSON success response:
         ```json
-        {"status":"success","message":"Caption received and processed","captionId":1}
+        {"success":true,"message":"Caption added successfully"}
         ```
-    *   If you have a stream named `yourStreamName` running and a player connected, you might see this caption.
+    *   If you have a stream named `yourStreamName` running and a player connected, and `Application.xml` is set for WebVTT, you might see this caption in an HLS stream.
 
 4.  **Use `check_wowza.py` Script (from the LiveVTT project):**
     *   This script provides a more comprehensive check.
-    *   Ensure the script is executable and run:
+    *   Ensure the script is executable and run, pointing it to the correct port (e.g., 8086 for the caption submission endpoint, or the port where the status endpoint is if different):
         ```bash
-        python check_wowza.py -u http://[your-wowza-server-ip]:8087
+        python check_wowza.py -u http://[your-wowza-server-ip]:8086
         ```
     *   Review the output for any failures.
 
-## Step 7: Testing with Mock Wowza Server
+## Step 8: Testing with Mock Wowza Server
 
 Before deploying to a production Wowza server, you can test the LiveVTT caption functionality using the included mock server:
 
@@ -215,7 +289,7 @@ Before deploying to a production Wowza server, you can test the LiveVTT caption 
    ```bash
    python mock_wowza.py
    ```
-   This starts a server on `http://localhost:8087` that simulates the Wowza caption API.
+   This starts a server on `http://localhost:8086` that simulates the Wowza caption API.
 
 2. **Test the LiveVTT integration:**
    ```bash
@@ -228,27 +302,28 @@ Before deploying to a production Wowza server, you can test the LiveVTT caption 
 
 3. **Test the API directly:**
    ```bash
-   python test_wowza_api.py -u http://localhost:8087
+   python test_wowza_api.py -u http://localhost:8086
    ```
    This sends test captions directly to the mock server.
 
 For more detailed testing instructions, see the `TESTING.md` file.
 
-## Step 8: Configure LiveVTT to Send Captions to Wowza
+## Step 9: Configure LiveVTT to Send Captions to Wowza
 
-1.  **Run the LiveVTT `main.py` script with the `-rtmp` option:**
+1.  **Run the LiveVTT `main.py` script with the `-rtmp` and `-rtmp-port` options:**
     ```bash
-    python main.py -u <HLS_STREAM_URL> -la <LANGUAGE_CODE> --rtmp rtmp://[your-wowza-server-ip]/[application-name]/[stream-name]
+    python main.py -u <HLS_STREAM_URL> -la <LANGUAGE_CODE> --rtmp rtmp://[your-wowza-server-ip]/[application-name]/[stream-name] --rtmp-http-port 8086
     ```
     *   Example:
         ```bash
-        python main.py -u https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8 -la ru -bt -rtmp rtmp://localhost/live/myStream
+        python main.py -u https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8 -la ru -bt -rtmp rtmp://localhost/live/myStream --rtmp-http-port 8086
         ```
     *   Replace `[your-wowza-server-ip]`, `[application-name]` (e.g., `live`), and `[stream-name]` (e.g., `myStream`) with your actual Wowza RTMP stream details.
+    *   Ensure `--rtmp-http-port` matches the port where `LiveVTTCaptionHTTPProvider` is configured in `VHost.xml` and active for caption submission.
 
 2.  **Verify captions in your player:**
-    *   Connect a player that supports CEA-608/708 closed captions (e.g., JW Player, THEOplayer, VLC) to your Wowza RTMP stream.
-    *   You should see the captions generated by LiveVTT appearing in the player.
+    *   Connect an HLS player (e.g., VLC, Safari, or a web-based HLS player) to your Wowza HLS stream URL (e.g., `http://[your-wowza-server-ip]:1935/[application-name]/[stream-name]/playlist.m3u8`).
+    *   You should see the WebVTT captions generated by LiveVTT appearing in the player.
 
 ## Troubleshooting
 
@@ -256,12 +331,13 @@ For more detailed testing instructions, see the `TESTING.md` file.
     *   Double-check all paths in `Application.xml` and `VHost.xml`.
     *   Ensure the class names (`com.livevtt.wowza.LiveVTTCaptionModule`, `com.livevtt.wowza.LiveVTTCaptionHTTPProvider`) are correct.
     *   Verify the JAR file is in `[wowza-install-dir]/lib/` and has correct permissions.
-    *   Check Wowza logs for detailed Java exceptions.
-*   **HTTP Provider Not Responding (404 Error):**
-    *   Ensure the `<RequestFilters>livevtt/captions*</RequestFilters>` in `VHost.xml` is correct.
-    *   Verify Wowza's HTTP server is running on port 8087 (or the port configured in `VHost.xml`).
-*   **Captions Not Appearing in Player:**
-    *   Enable debug logging in the module by setting `livevtt.caption.debug` to `true` in `Application.xml` (and restart Wowza). Check Wowza logs for caption processing messages.
-    *   Confirm the `streamname` parameter in the HTTP POST request from LiveVTT matches an active stream in Wowza.
-    *   Ensure your player is configured to display closed captions and supports the format (CEA-608/708 over RTMP).
-    *   Check LiveVTT logs (`main.py` output) for errors when sending captions.
+    *   Check Wowza logs for detailed Java exceptions or messages indicating the module or HTTP provider could not be loaded or initialized.
+*   **HTTP Provider Not Responding (404 Error from LiveVTT `main.py`):**
+    *   Ensure the `<RequestFilters>livevtt/captions*</RequestFilters>` in `VHost.xml` is correct for the HostPort that `main.py` is sending to (default 8086).
+    *   The `LiveVTTCaptionHTTPProvider.java` should handle requests to `/livevtt/captions` (POST) and `/livevtt/captions/status` (GET).
+    *   Verify Wowza's HTTP server is running on the configured port (e.g., 8086) and that no firewall is blocking access.
+*   **Captions Not Appearing in HLS Player (but no 404 errors from `main.py`):**
+    *   Double-check all `cupertino...` properties in `Application.xml` as listed in **Step 4**.
+    *   Ensure `captionLiveIngestType` is set to `onTextData`.
+    *   Verify that the `LiveStreamPacketizers` includes `cupertinostreamingpacketizer`.
+    *   Enable debug logging in the Wowza module (`livevtt.caption.debug` to `true` in `Application.xml`, then restart Wowza). Check Wowza logs for messages from `LiveVTTCaptionModule` and `LiveVTTCaptionHTTPProvider`.

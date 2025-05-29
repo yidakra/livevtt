@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 from aiohttp import web
+import aiohttp_cors
 
 # Configure logging
 logging.basicConfig(
@@ -93,22 +94,43 @@ async def main():
     app.add_routes([
         web.get('/livevtt/captions/status', handle_status),
         web.post('/livevtt/captions', handle_captions),
+        web.get('/livevtt/captions', handle_list_captions),
+        web.get('/', handle_root),
     ])
     
-    # Set up the server on a different port to avoid conflicts
+    # Set CORS headers
+    cors = aiohttp_cors.setup(app, defaults={
+        "*": aiohttp_cors.ResourceOptions(
+            allow_credentials=True,
+            expose_headers="*",
+            allow_headers="*",
+            allow_methods=["GET", "POST", "OPTIONS"]
+        )
+    })
+    
+    # Apply CORS to all routes
+    for route in list(app.router.routes()):
+        cors.add(route)
+    
+    # Start the server
+    port = 8086
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '127.0.0.1', 8099)
+    site = web.TCPSite(runner, '127.0.0.1', port)
     await site.start()
     
-    print(f"Mock Wowza server running at http://127.0.0.1:8099")
+    print(f"Mock Wowza server running at http://127.0.0.1:{port}")
     print("Available endpoints:")
     print("  GET /livevtt/captions/status - Check server status")
     print("  POST /livevtt/captions?streamname=name - Add captions to stream")
     
-    # Keep the server running
-    while True:
-        await asyncio.sleep(3600)  # Run for a long time
+    try:
+        while True:
+            await asyncio.sleep(3600)  # Keep the server running
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await runner.cleanup()
 
 if __name__ == "__main__":
     try:

@@ -34,6 +34,9 @@ livevtt -u <URL> [-s] [-l <BIND_ADDRESS>] [-p <BIND_PORT>] [-m <MODEL>] [-b <BEA
 - `-rtmp-lang, --rtmp-language`: Language code for RTMP subtitles (defaults to stream language or "eng")
 - `-rtmp-track, --rtmp-track-id`: Track ID for RTMP subtitles (default: 99)
 - `-rtmp-trans, --rtmp-use-translated`: Use translated (English) text for RTMP instead of original language (only applies with --both-tracks)
+- `-rtmp-port, --rtmp-http-port`: HTTP port for Wowza caption API (defaults to 8086). Ensure this matches the port your Wowza `LiveVTTCaptionHTTPProvider` is listening on (typically the Admin HostPort, 8086).
+- `-rtmp-user, --rtmp-username`: Username for Wowza API authentication (if configured on the HTTP Provider).
+- `-rtmp-pass, --rtmp-password`: Password for Wowza API authentication (if configured on the HTTP Provider).
 
 ### Subtitle Modes
 
@@ -211,6 +214,7 @@ The filter:
 ## RTMP Closed Captioning Integration
 
 LiveVTT supports sending closed captions to RTMP streams via Wowza Streaming Engine. This is done through a custom Java module that properly injects onTextData events into the live stream.
+For HLS (Cupertino) output with WebVTT subtitles, ensure your Wowza Application.xml is correctly configured (see `WOWZA_SETUP.md`).
 
 ### How It Works
 
@@ -222,19 +226,21 @@ LiveVTT supports sending closed captions to RTMP streams via Wowza Streaming Eng
 ### Setup Instructions
 
 1. Build and install the LiveVTTCaptionModule in your Wowza Streaming Engine:
-   - Follow the instructions in `wowza_module_config.txt`
-   - Use the provided `java_module_build.sh` script to compile the module
-   - Install the compiled JAR file in Wowza's `lib` directory
+   - Follow the instructions in `WOWZA_SETUP.md` (this file replaces the old `wowza_module_config.txt`).
+   - Use the provided `java_module_build.sh` script to compile the module.
+   - Install the compiled JAR file in Wowza's `lib` directory.
 
 2. Configure your LiveVTT application to send captions to Wowza:
    ```bash
-   python main.py -u <HLS_URL> --rtmp-url rtmp://your-wowza-server/application/stream
+   python main.py -u <HLS_URL> --rtmp-url rtmp://your-wowza-server/application/stream --rtmp-http-port 8086
    ```
+   (Adjust `--rtmp-http-port` if your Wowza HTTP Provider for captions uses a different port).
 
 3. Verify the integration using the `check_wowza.py` script:
    ```bash
-   python check_wowza.py --url http://your-wowza-server:8087
+   python check_wowza.py --url http://your-wowza-server:8086
    ```
+   (Adjust the port if your `LiveVTTCaptionHTTPProvider` status endpoint is on a different port, e.g. 8087, though 8086 is recommended for the caption *submission* endpoint).
 
 ### RTMP Command Line Options
 
@@ -242,6 +248,9 @@ LiveVTT supports sending closed captions to RTMP streams via Wowza Streaming Eng
 - `-rtmp-lang, --rtmp-language`: Language code for captions (default: "eng")
 - `-rtmp-track, --rtmp-track-id`: Track ID for captions (default: 99)
 - `-rtmp-trans, --rtmp-use-translated`: Use translated text for captions (only with --both-tracks)
+- `-rtmp-port, --rtmp-http-port`: HTTP port for Wowza caption API (default: 8086). This should match the port where `LiveVTTCaptionHTTPProvider` is configured in Wowza's `VHost.xml`.
+- `-rtmp-user, --rtmp-username`: Username for Wowza API authentication.
+- `-rtmp-pass, --rtmp-password`: Password for Wowza API authentication.
 
 ## Contributing
 

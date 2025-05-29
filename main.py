@@ -177,7 +177,7 @@ def should_filter_segment(text: str) -> bool:
     return any(word.lower() in text for word in FILTER_DICT.get('filter_words', []))
 
 
-async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, http_port: int = 8087, 
+async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, http_port: int = 8086, 
                           username: str = "admin", password: str = "password"):
     """
     Publish subtitle text to Wowza Streaming Engine via HTTP as onTextData events.
@@ -186,7 +186,7 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, 
         text: The subtitle text to send
         language: Language code (default: "eng")
         track_id: Track identifier (default: 99)
-        http_port: HTTP port for Wowza caption API (default: 8087)
+        http_port: HTTP port for Wowza caption API (default: 8086)
         username: Username for Wowza authentication (default: admin)
         password: Password for Wowza authentication (default: password)
     """
@@ -212,17 +212,20 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, 
                 }
                 
                 # Setup auth parameters if credentials are provided
-                auth = aiohttp.BasicAuth(username, password)
-                logger.debug(f"Using authentication for Wowza API request with username: {username}")
+                auth = aiohttp.BasicAuth(username, password) if username and password else None
+                
+                # Enhanced debug logging
+                logger.info(f"Sending caption to {url} with auth: {username if username else 'None'}")
+                logger.info(f"Caption data: {data}")
                 
                 # Send HTTP request to Wowza module
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json=data, headers=headers, auth=auth) as response:
+                        response_text = await response.text()
                         if response.status != 200:
-                            response_text = await response.text()
                             logger.error(f"Failed to send caption to Wowza: {response.status} - {response_text}")
                         else:
-                            logger.info(f"Caption sent to Wowza: {text}")
+                            logger.info(f"Caption sent to Wowza successfully: {response_text}")
             else:
                 logger.error(f"Invalid RTMP URL format: {RTMP_URL}")
         except Exception as e:
@@ -436,7 +439,7 @@ async def main():
     parser.add_argument('-rtmp-track', '--rtmp-track-id', type=int, help='Track ID for RTMP subtitles', default=99)
     parser.add_argument('-rtmp-trans', '--rtmp-use-translated', action='store_true',
                         help='Use translated (English) text for RTMP instead of original language (only applies with --both-tracks)')
-    parser.add_argument('-rtmp-port', '--rtmp-http-port', type=int, help='HTTP port for Wowza caption API (defaults to 8087)', default=8087)
+    parser.add_argument('-rtmp-port', '--rtmp-http-port', type=int, help='HTTP port for Wowza caption API (defaults to 8086)', default=8086)
     parser.add_argument('-rtmp-user', '--rtmp-username', type=str, help='Username for Wowza API authentication')
     parser.add_argument('-rtmp-pass', '--rtmp-password', type=str, help='Password for Wowza API authentication')
     parser.add_argument('-d', '--debug', action='store_true',
