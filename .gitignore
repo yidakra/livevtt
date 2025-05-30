@@ -159,10 +159,52 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Log files and outputs
+*.log
+nohup.out
+*.out
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# FFmpeg outputs
+*.mp4
+*.avi
+*.mkv
+*.flv
+
+# Audio files
+*.wav
+*.mp3
+*.aac
+
+# Chunk directories
+chunks/
+temp_chunks/
+
+# Wowza specific
+*.ts
+*.m3u8
+
+# IDE and Editor files
+.vscode/
+.cursor/
+*.swp
+*.swo
+
+# Testing artifacts
+test_output/
+*.test
+
 # Java build artifacts
 *.class
 *.jar
 
-# OS specific files
-.DS_Store
-Thumbs.db
+# Allow the built LiveVTT module JAR for distribution
+!build/livevtt-caption-module.jar

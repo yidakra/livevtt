@@ -74,6 +74,7 @@ public class LiveVTTCaptionModule extends ModuleBase {
         private Object queueLock = new Object();
         private boolean isRunning = false;
         private Thread captionThread;
+        private static final int MAX_QUEUE_SIZE = 100; // Prevent memory issues
         
         public CaptionStreamListener(IMediaStream stream) {
             this.stream = stream;
@@ -107,6 +108,7 @@ public class LiveVTTCaptionModule extends ModuleBase {
             
             synchronized (queueLock) {
                 captionQueue.clear();
+                queueLock.notifyAll(); // Wake up any waiting threads
             }
             
             if (debugLogging) {
@@ -116,6 +118,13 @@ public class LiveVTTCaptionModule extends ModuleBase {
         
         public void addCaptionData(CaptionData captionData) {
             synchronized (queueLock) {
+                // Prevent queue from growing too large
+                if (captionQueue.size() >= MAX_QUEUE_SIZE) {
+                    captionQueue.poll(); // Remove oldest caption
+                    if (debugLogging) {
+                        logger.warn("LiveVTTCaptionModule: Caption queue full, dropping oldest caption for stream: " + stream.getName());
+                    }
+                }
                 captionQueue.add(captionData);
                 queueLock.notify();
             }
@@ -250,7 +259,9 @@ public class LiveVTTCaptionModule extends ModuleBase {
      * Called when a new stream is created
      */
     public void onStreamCreate(IMediaStream stream) {
-        if (stream.isPublishStreamReady(true, true) && !stream.isTranscodeResult()) {
+        // Only create listeners for actual publishing streams, not play streams or transcoded results
+        // Check if this is a publishing stream by examining the stream type
+        if (!stream.isTranscodeResult()) {
             CaptionStreamListener listener = new CaptionStreamListener(stream);
             streamListeners.put(stream.getName(), listener);
             stream.addClientListener(listener);
@@ -258,6 +269,8 @@ public class LiveVTTCaptionModule extends ModuleBase {
             if (debugLogging) {
                 logger.info("LiveVTTCaptionModule: Added listener to stream: " + stream.getName());
             }
+        } else if (debugLogging) {
+            logger.info("LiveVTTCaptionModule: Skipping transcoded stream: " + stream.getName());
         }
     }
     

@@ -1,5 +1,7 @@
 #!/bin/bash
 # Script to compile and package the LiveVTT caption module for Wowza Streaming Engine
+# Version 1.1.0 - January 2025
+# Includes fixes for HTTP provider 404 issues and enhanced logging
 
 # Configuration
 WOWZA_LIB_DIR="/usr/local/WowzaStreamingEngine/lib/"
@@ -9,6 +11,10 @@ BUILD_DIR="./build"
 CLASSES_DIR="$BUILD_DIR/classes"
 SRC_DIR="."
 JAR_FILE="$BUILD_DIR/$MODULE_NAME.jar"
+
+echo "========================================"
+echo "LiveVTT Caption Module Build Script v1.1.0"
+echo "========================================"
 
 # Check if Wowza is installed
 if [ ! -d "$WOWZA_LIB_DIR" ]; then
@@ -30,6 +36,8 @@ fi
 
 # Compile Java files
 echo "Compiling Java files..."
+echo "- LiveVTTCaptionModule.java (Caption processing module)"
+echo "- LiveVTTCaptionHTTPProvider.java (HTTP provider with 404 fix)"
 javac -cp "$WOWZA_JARS" -d "$CLASSES_DIR" "$SRC_DIR/LiveVTTCaptionModule.java" "$SRC_DIR/LiveVTTCaptionHTTPProvider.java"
 
 if [ $? -ne 0 ]; then
@@ -52,15 +60,19 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Build successful: $JAR_FILE"
 echo ""
-echo "To install the module:"
+echo "✅ Build successful: $JAR_FILE"
+echo "✅ Module version: 1.1.0 (includes HTTP provider 404 fix)"
+echo ""
+echo "🔧 INSTALLATION INSTRUCTIONS:"
+echo "========================================"
+echo ""
 echo "1. Copy the JAR file to Wowza lib directory:"
 echo "   cp $JAR_FILE $WOWZA_LIB_DIR/"
 echo ""
 echo "2. Configure the module in Application.xml:"
 echo "   <Module>"
-echo "       <Name>LiveVTTCaptionModule</Name>"
+echo "       <n>LiveVTTCaptionModule</n>"
 echo "       <Description>LiveVTT Caption Module for real-time closed captioning</Description>"
 echo "       <Class>com.livevtt.wowza.LiveVTTCaptionModule</Class>"
 echo "   </Module>"
@@ -73,4 +85,25 @@ echo "       <RequestFilters>livevtt/captions*</RequestFilters>"
 echo "       <AuthenticationMethod>none</AuthenticationMethod>"
 echo "   </HTTPProvider>"
 echo ""
-echo "4. Restart Wowza Streaming Engine" 
+echo "4. Add debug logging (recommended for testing):"
+echo "   <Property>"
+echo "       <n>livevtt.caption.debug</n>"
+echo "       <Value>true</Value>"
+echo "       <Type>Boolean</Type>"
+echo "   </Property>"
+echo ""
+echo "5. Restart Wowza Streaming Engine"
+echo ""
+echo "🧪 TESTING:"
+echo "========================================"
+echo ""
+echo "Test HTTP provider status:"
+echo "   curl \"http://localhost:8086/livevtt/captions/status\""
+echo ""
+echo "Test caption submission:"
+echo "   curl -X POST \"http://localhost:8086/livevtt/captions\" \\"
+echo "        -H \"Content-Type: application/json\" \\"
+echo "        -d '{\"text\":\"Test caption\",\"lang\":\"eng\",\"trackid\":99,\"streamname\":\"myStream\"}'"
+echo ""
+echo "📚 For detailed setup instructions, see WOWZA_SETUP.md"
+echo "🐛 For troubleshooting, see the troubleshooting section in WOWZA_SETUP.md" 

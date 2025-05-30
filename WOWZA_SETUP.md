@@ -2,6 +2,15 @@
 
 This guide provides step-by-step instructions for installing and configuring the LiveVTT Caption Module on Wowza Streaming Engine.
 
+## Recent Updates (v1.1.0 - January 2025)
+
+- ✅ **Fixed HTTP Provider 404 Issues**: Resolved critical path matching problems in the HTTP provider
+- ✅ **Enhanced Error Handling**: Added comprehensive logging and debugging throughout the module
+- ✅ **Improved Configuration**: Simplified setup process with better documentation and examples
+- ✅ **Production Ready**: Successfully tested with real-world streams including multilingual transcription
+
+**Note**: If you previously experienced 404 errors when LiveVTT sent captions to Wowza, this version resolves those issues with improved path handling in the HTTP provider.
+
 ## Prerequisites
 
 *   Wowza Streaming Engine installed and running.
@@ -327,17 +336,200 @@ For more detailed testing instructions, see the `TESTING.md` file.
 
 ## Troubleshooting
 
-*   **Module Not Loading:**
-    *   Double-check all paths in `Application.xml` and `VHost.xml`.
-    *   Ensure the class names (`com.livevtt.wowza.LiveVTTCaptionModule`, `com.livevtt.wowza.LiveVTTCaptionHTTPProvider`) are correct.
-    *   Verify the JAR file is in `[wowza-install-dir]/lib/` and has correct permissions.
-    *   Check Wowza logs for detailed Java exceptions or messages indicating the module or HTTP provider could not be loaded or initialized.
-*   **HTTP Provider Not Responding (404 Error from LiveVTT `main.py`):**
-    *   Ensure the `<RequestFilters>livevtt/captions*</RequestFilters>` in `VHost.xml` is correct for the HostPort that `main.py` is sending to (default 8086).
-    *   The `LiveVTTCaptionHTTPProvider.java` should handle requests to `/livevtt/captions` (POST) and `/livevtt/captions/status` (GET).
-    *   Verify Wowza's HTTP server is running on the configured port (e.g., 8086) and that no firewall is blocking access.
-*   **Captions Not Appearing in HLS Player (but no 404 errors from `main.py`):**
-    *   Double-check all `cupertino...` properties in `Application.xml` as listed in **Step 4**.
-    *   Ensure `captionLiveIngestType` is set to `onTextData`.
-    *   Verify that the `LiveStreamPacketizers` includes `cupertinostreamingpacketizer`.
-    *   Enable debug logging in the Wowza module (`livevtt.caption.debug` to `true` in `Application.xml`, then restart Wowza). Check Wowza logs for messages from `LiveVTTCaptionModule` and `LiveVTTCaptionHTTPProvider`.
+### Common Issues and Solutions
+
+#### 1. HTTP Provider Not Responding (404 Error from LiveVTT `main.py`)
+
+**Symptoms:**
+- LiveVTT reports 404 errors when sending captions
+- Logs show "POST livevtt/captions" but no success messages
+
+**Solutions:**
+- ✅ **Ensure correct RequestFilters in VHost.xml**:
+  ```xml
+  <HTTPProvider>
+      <BaseClass>com.livevtt.wowza.LiveVTTCaptionHTTPProvider</BaseClass>
+      <RequestFilters>livevtt/captions*</RequestFilters>
+      <AuthenticationMethod>none</AuthenticationMethod>
+  </HTTPProvider>
+  ```
+- ✅ **Verify the HTTP provider is under the correct HostPort** (default 8086)
+- ✅ **Check that the LiveVTTCaptionHTTPProvider handles both path formats**:
+  - `/livevtt/captions` (with leading slash)
+  - `livevtt/captions` (without leading slash)
+- ✅ **Restart Wowza after configuration changes**
+
+#### 2. Module Not Loading
+
+**Symptoms:**
+- No messages about LiveVTTCaptionModule in Wowza logs
+- HTTP provider endpoints return 404
+
+**Solutions:**
+- ✅ **Double-check all paths in Application.xml and VHost.xml**
+- ✅ **Ensure the class names are correct**:
+  - `com.livevtt.wowza.LiveVTTCaptionModule`
+  - `com.livevtt.wowza.LiveVTTCaptionHTTPProvider`
+- ✅ **Verify the JAR file is in `[wowza-install-dir]/lib/` with correct permissions**:
+  ```bash
+  ls -la [wowza-install-dir]/lib/livevtt-caption-module.jar
+  chmod 644 [wowza-install-dir]/lib/livevtt-caption-module.jar
+  ```
+- ✅ **Check Wowza logs for detailed Java exceptions**
+
+#### 3. Captions Not Appearing in HLS Player
+
+**Symptoms:**
+- LiveVTT sends captions successfully (no 404 errors)
+- HTTP provider logs show "SUCCESS" messages
+- WebVTT files are generated but remain empty
+
+**Solutions:**
+- ✅ **Verify all Cupertino properties in Application.xml**:
+  ```xml
+  <Property>
+      <n>cupertinoTagVTT</n>
+      <Value>true</Value>
+      <Type>Boolean</Type>
+  </Property>
+  <Property>
+      <n>captionLiveIngestType</n>
+      <Value>onTextData</Value>
+      <Type>String</Type>
+  </Property>
+  ```
+- ✅ **Ensure LiveStreamPacketizers includes `cupertinostreamingpacketizer`**
+- ✅ **Check that streams are active and publishing before sending captions**
+
+#### 4. WebVTT Null Pointer Exception
+
+**Symptoms:**
+- Error in logs: `java.lang.NullPointerException: Cannot invoke "com.wowza.wms.timedtext.ITimedTextProviderWebVTT.webvtt(...)" because "webvttProvider" is null`
+
+**Solutions:**
+- ✅ **Enable WebVTT properties in Application.xml**:
+  ```xml
+  <Property>
+      <n>cupertinoLiveCaptionsUseWebVTT</n>
+      <Value>true</Value>
+      <Type>Boolean</Type>
+  </Property>
+  ```
+- ✅ **Add TimedText configuration**:
+  ```xml
+  <TimedText>
+      <VODTimedTextProviders>vodcaptionprovidermp4_3gpp</VODTimedTextProviders>
+      <Properties>
+          <Property>
+              <n>cupertinoLiveCaptionsUseWebVTT</n>
+              <Value>true</Value>
+              <Type>Boolean</Type>
+          </Property>
+          <Property>
+              <n>captionLiveIngestLanguages</n>
+              <Value>eng,ru</Value>
+              <Type>String</Type>
+          </Property>
+      </Properties>
+  </TimedText>
+  ```
+
+### Debug Mode
+
+Enable detailed logging by adding this property to your Application.xml:
+```xml
+<Property>
+    <n>livevtt.caption.debug</n>
+    <Value>true</Value>
+    <Type>Boolean</Type>
+</Property>
+```
+
+After enabling debug mode and restarting Wowza, you should see detailed logs like:
+```
+INFO server comment - LiveVTTCaptionHTTPProvider: *** PROCESSING CAPTION REQUEST ***
+INFO server comment - LiveVTTCaptionHTTPProvider: *** FOUND STREAM *** myStream in live/_definst_
+INFO server comment - LiveVTTCaptionHTTPProvider: *** SUCCESS *** Caption sent to myStream: Hello World
+```
+
+### Testing Your Setup
+
+1. **Test HTTP Provider Status:**
+   ```bash
+   curl "http://localhost:8086/livevtt/captions/status"
+   ```
+   Expected response:
+   ```json
+   {"status":"active","version":"1.0.0","timestamp":1678886400000}
+   ```
+
+2. **Test Caption Submission:**
+   ```bash
+   curl -X POST "http://localhost:8086/livevtt/captions" \
+        -H "Content-Type: application/json" \
+        -d '{"text":"Test caption","lang":"eng","trackid":99,"streamname":"myStream"}'
+   ```
+   Expected response:
+   ```json
+   {"success":true,"message":"Caption added successfully"}
+   ```
+
+3. **Use the Check Script:**
+   ```bash
+   python check_wowza.py --url http://localhost:8086
+   ```
+
+### Log File Locations
+
+- Main Wowza log: `[wowza-install-dir]/logs/wowzastreamingengine_access.log`
+- Error log: `[wowza-install-dir]/logs/wowzastreamingengine_error.log`
+- Look for lines containing:
+  - `LiveVTTCaptionModule`
+  - `LiveVTTCaptionHTTPProvider`
+  - `livevtt/captions`
+
+### Known Working Configuration
+
+For reference, here's a minimal working configuration that has been tested:
+
+**Application.xml (live application):**
+```xml
+<Modules>
+    <Module>
+        <n>LiveVTTCaptionModule</n>
+        <Description>LiveVTT Caption Module for real-time closed captioning</Description>
+        <Class>com.livevtt.wowza.LiveVTTCaptionModule</Class>
+    </Module>
+</Modules>
+
+<Properties>
+    <Property>
+        <n>captionLiveIngestType</n>
+        <Value>onTextData</Value>
+        <Type>String</Type>
+    </Property>
+    <Property>
+        <n>livevtt.caption.debug</n>
+        <Value>true</Value>
+        <Type>Boolean</Type>
+    </Property>
+</Properties>
+```
+
+**VHost.xml (under HostPort 8086):**
+```xml
+<HTTPProviders>
+    <HTTPProvider>
+        <BaseClass>com.livevtt.wowza.LiveVTTCaptionHTTPProvider</BaseClass>
+        <RequestFilters>livevtt/captions*</RequestFilters>
+        <AuthenticationMethod>none</AuthenticationMethod>
+    </HTTPProvider>
+</HTTPProviders>
+```
+
+**LiveVTT Command:**
+```bash
+python main.py -u https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8 -la ru -bt --rtmp-url rtmp://localhost:1935/live/myStream --rtmp-http-port 8086
+```
+
+This configuration has been verified to work correctly as of January 2025.

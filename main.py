@@ -194,10 +194,15 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, 
     if RTMP_ENABLED and RTMP_URL is not None:
         try:
             # Extract server and application name from RTMP URL
-            # Example: rtmp://localhost/live/stream
+            # Example: rtmp://localhost:1935/live/stream -> extract only localhost
             parts = RTMP_URL.split('/')
             if len(parts) >= 3:
-                server = parts[2]
+                # Extract hostname without port from the server part
+                server_part = parts[2]
+                if ':' in server_part:
+                    server = server_part.split(':')[0]  # Extract only hostname
+                else:
+                    server = server_part
                 stream_name = parts[-1]
                 
                 # Prepare HTTP request to Wowza module using configured port
@@ -206,8 +211,8 @@ async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, 
                 headers = {'Content-Type': 'application/json'}
                 data = {
                     "text": text,
-                    "language": language,
-                    "trackId": track_id,
+                    "lang": language,
+                    "trackid": track_id,
                     "streamname": stream_name
                 }
                 

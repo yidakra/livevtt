@@ -51,11 +51,14 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
         }
         
         // Handle caption request
-        if (requestPath.equals("/livevtt/captions") && 
+        if ((requestPath.equals("/livevtt/captions") || requestPath.equals("livevtt/captions")) && 
             ("POST".equalsIgnoreCase(requestMethod) || "PUT".equalsIgnoreCase(requestMethod))) {
+            
+            logger.info("LiveVTTCaptionHTTPProvider: *** PROCESSING CAPTION REQUEST ***");
             
             try {
                 // Read request body
+                logger.info("LiveVTTCaptionHTTPProvider: Reading request body...");
                 InputStream is = req.getInputStream();
                 StringBuilder bodyBuilder = new StringBuilder();
                 byte[] buffer = new byte[1024];
@@ -65,68 +68,100 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
                 }
                 String requestBody = bodyBuilder.toString();
                 
-                logger.info("LiveVTTCaptionHTTPProvider: Request body: " + requestBody);
+                logger.info("LiveVTTCaptionHTTPProvider: Request body: '" + requestBody + "'");
                 
                 // Extract fields from JSON (simplified parsing)
+                logger.info("LiveVTTCaptionHTTPProvider: Parsing JSON...");
                 Map<String, String> fields = parseJson(requestBody);
                 
-                if (fields == null || !fields.containsKey("text")) {
+                logger.info("LiveVTTCaptionHTTPProvider: Parsed fields: " + (fields != null ? fields.toString() : "null"));
+                
+                if (fields == null) {
+                    logger.warn("LiveVTTCaptionHTTPProvider: Fields is null - JSON parsing failed");
+                    sendErrorResponse(resp, 400, "Invalid JSON");
+                    return;
+                }
+                
+                if (!fields.containsKey("text")) {
+                    logger.warn("LiveVTTCaptionHTTPProvider: Missing text field. Available fields: " + fields.keySet());
                     sendErrorResponse(resp, 400, "Missing required field: text");
                     return;
                 }
                 
                 if (!fields.containsKey("streamname")) {
+                    logger.warn("LiveVTTCaptionHTTPProvider: Missing streamname field. Available fields: " + fields.keySet());
                     sendErrorResponse(resp, 400, "Missing required field: streamname");
                     return;
                 }
                 
                 String text = fields.get("text");
                 String streamName = fields.get("streamname");
-                String language = fields.getOrDefault("language", "eng");
+                String language = fields.getOrDefault("lang", fields.getOrDefault("language", "eng"));
                 int trackId = 99;
                 try {
-                    if (fields.containsKey("trackId")) {
+                    if (fields.containsKey("trackid")) {
+                        trackId = Integer.parseInt(fields.get("trackid"));
+                    } else if (fields.containsKey("trackId")) {
                         trackId = Integer.parseInt(fields.get("trackId"));
                     }
                 } catch (NumberFormatException e) {
-                    // Use default trackId
+                    logger.warn("LiveVTTCaptionHTTPProvider: Invalid trackid, using default 99");
                 }
+                
+                logger.info("LiveVTTCaptionHTTPProvider: Extracted data - text: '" + text + "', streamName: '" + streamName + "', language: '" + language + "', trackId: " + trackId);
                 
                 // Find application with specified stream
                 boolean captionSent = false;
                 
-                // Try each application
-                for (Object appNameObj : vhost.getApplicationNames()) {
-                    String appName = appNameObj.toString();
-                    IApplication app = vhost.getApplication(appName);
-                    if (app != null) {
-                        for (String instanceName : app.getAppInstanceNames()) {
-                            IApplicationInstance appInstance = app.getAppInstance(instanceName);
-                            if (appInstance != null) {
-                                // Try to find the stream
-                                IMediaStream stream = appInstance.getStreams().getStream(streamName);
+                logger.info("LiveVTTCaptionHTTPProvider: === SEARCHING FOR STREAM ===");
+                logger.info("LiveVTTCaptionHTTPProvider: Target stream name: '" + streamName + "'");
+                
+                try {
+                    // First try the most common case: live/_definst_
+                    logger.info("LiveVTTCaptionHTTPProvider: Getting 'live' application...");
+                    IApplication liveApp = vhost.getApplication("live");
+                    if (liveApp != null) {
+                        logger.info("LiveVTTCaptionHTTPProvider: Got 'live' application, getting '_definst_' instance...");
+                        IApplicationInstance defInst = liveApp.getAppInstance("_definst_");
+                        if (defInst != null) {
+                            logger.info("LiveVTTCaptionHTTPProvider: Got '_definst_' instance, looking for stream: " + streamName);
+                            IMediaStream stream = defInst.getStreams().getStream(streamName);
                                 if (stream != null) {
-                                    logger.info("LiveVTTCaptionHTTPProvider: Found stream in " + 
-                                              appName + "/" + instanceName);
+                                logger.info("LiveVTTCaptionHTTPProvider: *** FOUND STREAM *** " + streamName + " in live/_definst_");
+                                logger.info("LiveVTTCaptionHTTPProvider: Stream type: " + stream.getClass().getSimpleName());
+                                logger.info("LiveVTTCaptionHTTPProvider: Stream isPublishStreamReady: " + stream.isPublishStreamReady(false, false));
                                     
                                     // Create caption data
                                     AMFDataObj captionData = new AMFDataObj();
                                     captionData.put("text", new AMFDataItem(text));
-                                    captionData.put("language", new AMFDataItem(language));
+                                captionData.put("lang", new AMFDataItem(language));
                                     captionData.put("trackid", new AMFDataItem(trackId));
                                     
+                                logger.info("LiveVTTCaptionHTTPProvider: Created AMF data, sending to stream...");
+                                
+                                try {
                                     // Send caption to stream
                                     stream.sendDirect("onTextData", captionData);
-                                    logger.info("LiveVTTCaptionHTTPProvider: Sent caption to stream " + streamName);
+                                    logger.info("LiveVTTCaptionHTTPProvider: *** SUCCESS *** Caption sent to " + streamName + ": " + text);
                                     captionSent = true;
-                                    break;
+                                } catch (Exception e) {
+                                    logger.error("LiveVTTCaptionHTTPProvider: Error sending caption to stream: " + e.getMessage(), e);
                                 }
+                            } else {
+                                logger.info("LiveVTTCaptionHTTPProvider: Stream '" + streamName + "' not found in live/_definst_");
                             }
+                        } else {
+                            logger.warn("LiveVTTCaptionHTTPProvider: _definst_ not found in live application");
                         }
+                    } else {
+                        logger.warn("LiveVTTCaptionHTTPProvider: live application not found");
                     }
                     
-                    if (captionSent) break;
+                } catch (Exception e) {
+                    logger.error("LiveVTTCaptionHTTPProvider: Exception during stream search: " + e.getMessage(), e);
                 }
+                
+                logger.info("LiveVTTCaptionHTTPProvider: === SEARCH COMPLETE === Result: " + (captionSent ? "SUCCESS" : "NOT FOUND"));
                 
                 if (captionSent) {
                     sendResponse(resp, 200, "{\"success\":true,\"message\":\"Caption added successfully\"}", "application/json");
@@ -143,6 +178,7 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
         }
         
         // Handle unknown requests
+        logger.info("LiveVTTCaptionHTTPProvider: Unknown request: " + requestMethod + " " + requestPath);
         sendErrorResponse(resp, 404, "Not Found");
     }
     
@@ -190,6 +226,11 @@ public class LiveVTTCaptionHTTPProvider extends HTTProvider2Base {
                         // Remove quotes from key
                         if (key.startsWith("\"") && key.endsWith("\"")) {
                             key = key.substring(1, key.length() - 1);
+                        }
+                        
+                        // Normalise legacy key name
+                        if ("language".equalsIgnoreCase(key)) {
+                            key = "lang";
                         }
                         
                         // Remove quotes from value
