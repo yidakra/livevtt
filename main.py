@@ -438,7 +438,7 @@ async def main():
     parser.add_argument('-f', '--filter-file', type=str, help='Path to JSON file containing words to filter out',
                         default='filter.json')
     
-    # New RTMP arguments
+    # RTMP arguments
     parser.add_argument('-rtmp', '--rtmp-url', type=str, help='RTMP URL to publish captions to (e.g., rtmp://server/app/stream)')
     parser.add_argument('-rtmp-lang', '--rtmp-language', type=str, help='Language code for RTMP subtitles (defaults to stream language or "eng")')
     parser.add_argument('-rtmp-track', '--rtmp-track-id', type=int, help='Track ID for RTMP subtitles', default=99)
