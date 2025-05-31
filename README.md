@@ -83,36 +83,78 @@ python main.py \
 --model MODEL               # Whisper model (tiny, base, small, medium, large)
 --beam-transcription        # Enable beam search for better accuracy
 --use-cuda                  # Enable GPU acceleration
---filter-file FILE          # Content filter configuration
+--filter-file FILE          # Content filter configuration (default: filter.json)
+--vocabulary-file FILE      # Custom vocabulary configuration (default: vocabulary.json)
 --rtmp-track-id ID          # Caption track ID (default: 99)
---custom-vocab FILE        # Custom vocabulary file (default: custom_vocab.json)
+--custom-vocabulary         # Enable custom vocabulary (default: true)
 ```
 
 ### Custom Vocabulary
-LiveVTT supports language-specific custom vocabulary to improve transcription accuracy. Create a `custom_vocab.json` file:
 
-```json
-{
-    "en": {
-        "vocabulary": [
-            "LiveVTT",
-            "Wowza",
-            "RTMP",
-            "WebVTT",
-            "HLS"
-        ]
-    },
-    "ru": {
-        "vocabulary": [
-            "Прямой эфир",
-            "трансляция",
-            "субтитры"
-        ]
-    }
-}
+LiveVTT supports custom vocabulary to improve transcription accuracy for specific terms, acronyms, or names that may appear in your streams.
+
+#### Configuration
+
+To set up custom vocabulary:
+
+1. Create separate configuration files:
+
+   **`filter.json`** (for content filtering):
+   ```json
+   {
+       "filter_words": [
+           "unwanted-word1",
+           "unwanted-word2"
+       ]
+   }
+   ```
+
+   **`vocabulary.json`** (for custom vocabulary):
+   ```json
+   {
+       "custom_vocabulary": {
+           "ru": ["Гаага", "Российская Федерация"],
+           "en": ["example"],
+           "de": ["Bundesrat", "Bundestag"]
+       }
+   }
+   ```
+
+2. The vocabulary list for the specified language (`-la` argument) will be automatically loaded:
+   - `python main.py -la ru` → uses the `"ru"` vocabulary list
+   - `python main.py -la en` → uses the `"en"` vocabulary list  
+   - `python main.py -la fr` → no vocabulary (fallback behavior)
+
+3. Control with command-line flags:
+   - Enable: `--custom-vocabulary true` (default)
+   - Disable: `--custom-vocabulary false`
+   - Custom files: `--filter-file custom_filter.json --vocabulary-file custom_vocab.json`
+
+#### How It Works
+
+When custom vocabulary is enabled, LiveVTT creates an **initial prompt** for the Whisper model that biases the transcription toward recognizing the specified vocabulary terms. 
+
+The initial prompt is a text hint given to Whisper before transcription starts, like: 
+> "The following terms may appear in this audio: LiveVTT, SDR, Wowza, RTMP, API."
+
+This helps Whisper correctly identify these terms instead of mishearing them as similar-sounding words. This is particularly useful for:
+
+- Technical terms and acronyms
+- Product names  
+- Person names or titles
+- Domain-specific terminology
+
+#### Example
+
+```bash
+# Enable custom vocabulary with default files
+python main.py -u "https://live-stream-url.m3u8" -la en
+
+# Use custom configuration files
+python main.py -u "https://live-stream-url.m3u8" -la ru \
+  --filter-file my_filters.json \
+  --vocabulary-file my_vocabulary.json
 ```
-
-The vocabulary file is loaded automatically if present. You can specify a different file with `--custom-vocab`.
 
 ### Environment Variables
 ```bash

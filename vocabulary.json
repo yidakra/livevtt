@@ -1,0 +1,7 @@
+{
+    "custom_vocabulary": {
+        "ru": ["Гаага", "гей"],
+        "en": ["example"],
+        "de": ["Bundesrat", "Bundestag"]
+    }
+} 
