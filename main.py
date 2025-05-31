@@ -46,6 +46,9 @@ RTMP_ENABLED = False
 RTMP_URL = None
 RTMP_QUEUE = None
 
+CUSTOM_VOCAB_PROMPT = None
+CUSTOM_VOCAB_FILE = 'custom_vocab.json'  # Default vocabulary file name
+
 if sys.version_info < (3, 10):
     print(f'This script needs to be ran under Python 3.10 at minimum.')
     sys.exit(1)
@@ -177,6 +180,33 @@ def should_filter_segment(text: str) -> bool:
     return any(word.lower() in text for word in FILTER_DICT.get('filter_words', []))
 
 
+def load_custom_vocab():
+    """Load custom vocabulary from JSON file and construct initial prompt."""
+    global CUSTOM_VOCAB_PROMPT
+    try:
+        vocab_path = args.custom_vocab if args.custom_vocab else CUSTOM_VOCAB_FILE
+        if os.path.exists(vocab_path):
+            with open(vocab_path, 'r', encoding='utf-8') as f:
+                vocab_data = json.load(f)
+                
+            # Get vocabulary for the specified language
+            lang = args.language or 'en'
+            lang_vocab = vocab_data.get(lang, {}).get('vocabulary', [])
+            
+            if lang_vocab:
+                CUSTOM_VOCAB_PROMPT = f"The following terms may appear in the audio: {', '.join(lang_vocab)}."
+                logger.info(f"Loaded custom vocabulary with {len(lang_vocab)} items for language '{lang}'")
+            else:
+                CUSTOM_VOCAB_PROMPT = None
+                logger.info(f"No vocabulary found for language '{lang}'")
+        else:
+            logger.info(f"Custom vocabulary file not found at {vocab_path}")
+            CUSTOM_VOCAB_PROMPT = None
+    except Exception as e:
+        logger.error(f"Failed to load custom vocabulary: {e}")
+        CUSTOM_VOCAB_PROMPT = None
+
+
 async def publish_to_rtmp(text: str, language: str = "eng", track_id: int = 99, http_port: int = 8086, 
                           username: str = "admin", password: str = "password"):
     """
@@ -259,7 +289,7 @@ async def rtmp_publisher(rtmp_url: str, queue: asyncio.Queue):
 
 async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_dir: str, segment_uri: str,
                            chunk_name: str) -> Tuple[str, str]:
-    ts_probe_proc = await asyncio.create_subprocess_exec('ffprobe', '-i', chunk_name, '-show_entries',
+    ts_probe_proc = await asyncio.create_subprocess_exec('ffmpeg', '-i', chunk_name, '-show_entries',
                                                          'stream=start_time', '-loglevel', 'quiet',
                                                          '-select_streams', 'a:0', '-of',
                                                          'csv=p=0', stdout=asyncio.subprocess.PIPE)
@@ -270,17 +300,19 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
     
     # Run transcription and translation in parallel if both_tracks is enabled
     if args.both_tracks:
-        # Transcribe in source language
+        # Transcribe in source language with custom vocabulary
         segments_orig, _ = await loop.run_in_executor(None,
                                                      lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
                                                                            vad_filter=args.vad_filter,
                                                                            language=args.language,
+                                                                           initial_prompt=CUSTOM_VOCAB_PROMPT,
                                                                            task='transcribe'))
-        # Translate to English
+        # Translate to English with custom vocabulary
         segments_trans, _ = await loop.run_in_executor(None,
                                                       lambda: model.transcribe(chunk_name, beam_size=args.beam_size,
                                                                             vad_filter=args.vad_filter,
                                                                             language=args.language,
+                                                                            initial_prompt=CUSTOM_VOCAB_PROMPT,
                                                                             task='translate'))
         
         # Filter segments
@@ -437,6 +469,10 @@ async def main():
                         help='Enable both transcription and translation tracks')
     parser.add_argument('-f', '--filter-file', type=str, help='Path to JSON file containing words to filter out',
                         default='filter.json')
+    
+    parser.add_argument('-cv', '--custom-vocab', type=str, 
+                       help=f'Path to JSON file containing custom vocabulary (default: {CUSTOM_VOCAB_FILE})',
+                       default=None)
     
     # RTMP arguments
     parser.add_argument('-rtmp', '--rtmp-url', type=str, help='RTMP URL to publish captions to (e.g., rtmp://server/app/stream)')
@@ -631,6 +667,9 @@ async def main():
     global FILTER_FILE
     FILTER_FILE = args.filter_file
     load_filter_dict()
+
+    # Load custom vocabulary if provided
+    load_custom_vocab()
 
 
 if __name__ == '__main__':

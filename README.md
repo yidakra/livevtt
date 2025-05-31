@@ -85,7 +85,34 @@ python main.py \
 --use-cuda                  # Enable GPU acceleration
 --filter-file FILE          # Content filter configuration
 --rtmp-track-id ID          # Caption track ID (default: 99)
+--custom-vocab FILE        # Custom vocabulary file (default: custom_vocab.json)
 ```
+
+### Custom Vocabulary
+LiveVTT supports language-specific custom vocabulary to improve transcription accuracy. Create a `custom_vocab.json` file:
+
+```json
+{
+    "en": {
+        "vocabulary": [
+            "LiveVTT",
+            "Wowza",
+            "RTMP",
+            "WebVTT",
+            "HLS"
+        ]
+    },
+    "ru": {
+        "vocabulary": [
+            "Прямой эфир",
+            "трансляция",
+            "субтитры"
+        ]
+    }
+}
+```
+
+The vocabulary file is loaded automatically if present. You can specify a different file with `--custom-vocab`.
 
 ### Environment Variables
 ```bash
@@ -218,23 +245,3 @@ python main.py --debug --url "stream_url" --language ru
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/livevtt/issues)
-- **Documentation**: [Wiki](https://github.com/yourusername/livevtt/wiki)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/livevtt/discussions)
-
-## ✅ Production Status
-
-LiveVTT has been successfully tested and deployed with:
-- ✅ **Caption Injection**: HTTP API working with 100% success rate
-- ✅ **Stream Discovery**: Automatic stream detection and connection
-- ✅ **Multi-language**: Tested with Russian, English transcription
-- ✅ **Error Handling**: Comprehensive logging and recovery
-- ✅ **Performance**: Production-ready with optimizations
-- ✅ **Integration**: Full Wowza Streaming Engine compatibility
-
----
-
-**Built with ❤️ for the live streaming community**
