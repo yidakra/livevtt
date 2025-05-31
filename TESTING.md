@@ -1,94 +1,237 @@
 # Testing LiveVTT with Wowza Integration
 
-This document provides instructions for testing the LiveVTT and Wowza integration without having access to a real Wowza Streaming Engine server.
+This document provides instructions for testing the LiveVTT and Wowza integration with a focus on reliable, non-brittle testing approaches.
 
-## Testing Tools
+## Recommended Testing Strategy
 
-We've created several testing scripts to help verify that the LiveVTT to Wowza integration is working correctly:
+### 🎯 Core Testing Tools (Reliable)
 
-1. **mock_wowza.py** - A mock Wowza server that simulates the LiveVTT Caption Module HTTP endpoints
-2. **test_wowza_api.py** - A script to test the Wowza module's HTTP API directly
-3. **test_integration.py** - A comprehensive test that verifies the end-to-end flow from LiveVTT to Wowza
-4. **test_rtmp.py** - A script to test sending captions to a Wowza server (can be used with the mock server)
-5. **check_wowza.py** - A script to check if a Wowza server is properly configured for LiveVTT
+**Primary Tests - Use These:**
+
+1. **`test_simple_integration.py`** ⭐ - Simple, focused integration test
+   - Tests API endpoints without external dependencies
+   - Automatically uses mock Wowza if real server not available
+   - Includes concurrent request testing
+   - **Usage:** `python test_simple_integration.py`
+
+2. **`test_caption.py`** ⭐ - Manual caption testing CLI
+   - Flexible command-line tool for testing specific scenarios
+   - Perfect for development and debugging
+   - **Usage:** `python test_caption.py --server localhost --port 8086 --stream myStream`
+
+3. **`test_caption_generator.py`** ⭐ - Continuous caption generator
+   - Great for load testing and demonstrations
+   - Simple and reliable
+   - **Usage:** `python test_caption_generator.py`
+
+4. **`test_final_integration.py`** ⭐ - Production readiness verification
+   - Comprehensive health checks for production deployments
+   - Tests memory stability and real Wowza configuration
+   - **Usage:** `python test_final_integration.py`
+
+### 🔧 Specialized Tools
+
+5. **`test_rtmp.py`** - RTMP-specific testing (improved)
+   - Now includes better error handling and retries
+   - Configurable timeouts and server settings
+   - **Usage:** `python test_rtmp.py --server localhost --port 8086`
+
+6. **`test_wowza_api.py`** - Direct API testing
+   - Tests Wowza API endpoints directly
+   - Good for API-specific debugging
+   - **Usage:** `python test_wowza_api.py -u http://localhost:8086`
+
+### ❌ Deprecated/Brittle Tests
+
+**Avoid These (Too Brittle):**
+
+- ~~`test_integration.py`~~ - **REMOVED** - Too complex and dependent on external streams
+  - Issues: Hard-coded TVRain stream, complex subprocess management, timing assumptions
+  - Replacement: Use `test_simple_integration.py` instead
+
+## Quick Start Testing Guide
+
+### 1. **Basic Functionality Test**
+```bash
+# Test if everything is working
+python test_simple_integration.py
+```
+
+### 2. **Manual Caption Testing**
+```bash
+# Send a single test caption
+python test_caption.py --server localhost --port 8086 --stream myStream --text "Hello World"
+
+# Send multiple captions with custom interval
+python test_caption.py --server localhost --port 8086 --stream myStream --count 5 --interval 2
+```
+
+### 3. **Load Testing**
+```bash
+# Generate continuous captions for load testing
+python test_caption_generator.py
+```
+
+### 4. **Production Verification**
+```bash
+# Verify production readiness
+python test_final_integration.py
+```
 
 ## Testing with Mock Wowza Server
 
-The mock Wowza server simulates the HTTP endpoints of the LiveVTT Caption Module without requiring a real Wowza Streaming Engine server.
-
-### Starting the Mock Server
+The mock Wowza server simulates the HTTP endpoints without requiring a real Wowza installation:
 
 ```bash
+# Start mock server (in separate terminal)
 python mock_wowza.py
+
+# Run tests against mock server
+python test_simple_integration.py --port 8086
+python test_wowza_api.py -u http://localhost:8086
 ```
 
-This will start a server on `http://localhost:8087` that responds to the same endpoints as a real Wowza server with the LiveVTT Caption Module installed.
+## Testing with Real Wowza Server
 
-### Testing the API Directly
+### Prerequisites
+- Wowza Streaming Engine running
+- LiveVTT Caption Module installed
+- HTTP Provider configured on port 8086
 
-Once the mock server is running, you can test the API directly:
+### Verification Steps
 
+1. **Check Wowza Configuration:**
+   ```bash
+   python check_wowza.py -u http://your-wowza-server:8086
+   ```
+
+2. **Test Caption API:**
+   ```bash
+   python test_simple_integration.py --host your-wowza-server --port 8086
+   ```
+
+3. **Send Test Captions to Active Stream:**
+   ```bash
+   python test_caption.py --server your-wowza-server --port 8086 --stream your-stream-name
+   ```
+
+## Automated Testing Best Practices
+
+### Following AAA Pattern
+
+Our tests follow the **Arrange, Act, Assert** pattern:
+
+```python
+# ✅ Good example from test_simple_integration.py
+async def test_caption_submission(self) -> bool:
+    # ARRANGE
+    test_captions = [
+        {"text": "Basic test caption", "lang": "eng", "trackid": 99, "streamname": "testStream"}
+    ]
+    
+    # ACT
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=caption) as response:
+            
+    # ASSERT
+    if response.status in [200, 404]:
+        return True
+```
+
+### Non-Brittle Test Characteristics
+
+**✅ What Makes Tests Robust:**
+- Configurable parameters (hosts, ports, timeouts)
+- Graceful fallbacks (mock server if real one unavailable)
+- Acceptable failure modes (404 for missing streams is OK)
+- Retry logic with reasonable timeouts
+- Clear error messages
+- Isolated test cases
+
+**❌ What Makes Tests Brittle:**
+- Hard-coded external URLs
+- Fixed timing assumptions
+- Complex subprocess management
+- Network dependencies without fallbacks
+- Overly specific assertions
+
+## Continuous Integration
+
+### Recommended CI Pipeline
+```yaml
+# .github/workflows/test.yml example
+test:
+  runs-on: ubuntu-latest
+  steps:
+    - name: Basic Integration Test
+      run: python test_simple_integration.py
+      
+    - name: API Test
+      run: python test_wowza_api.py -u http://localhost:8086
+      
+    # Skip tests that require external dependencies in CI
+```
+
+### Local Development Testing
 ```bash
-python test_wowza_api.py -u http://localhost:8087
+# Full test suite for local development
+python test_simple_integration.py
+python test_caption.py --server localhost --port 8086 --stream testStream --count 3
+python test_final_integration.py  # Only if real Wowza is running
 ```
 
-This will send test captions to the mock server and verify that they are received correctly.
+## Troubleshooting Tests
 
-### Running the Integration Test
+### Common Issues
 
-The integration test verifies the end-to-end flow from LiveVTT to Wowza:
-
+**Test Timeouts:**
 ```bash
-python test_integration.py
+# Increase timeouts for slow systems
+python test_simple_integration.py --timeout 30
+python test_rtmp.py --timeout 15 --retries 5
 ```
 
-This test:
-1. Starts the mock Wowza server
-2. Starts LiveVTT with RTMP output pointing to the mock server
-3. Verifies that captions are being generated and sent to the mock server
-4. Cleans up all processes when done
-
-## Testing with a Real Wowza Server
-
-If you have access to a real Wowza Streaming Engine server with the LiveVTT Caption Module installed, you can use these scripts to test it:
-
-### Checking the Wowza Configuration
-
+**Port Conflicts:**
 ```bash
-python check_wowza.py -u http://your-wowza-server:8087
+# Use different ports
+python test_simple_integration.py --port 8087
 ```
 
-This will check if the server is properly configured for LiveVTT.
-
-### Testing Caption Delivery
-
+**Mock Server Issues:**
 ```bash
-python test_rtmp.py -u rtmp://your-wowza-server/live/stream
+# Start mock server manually first
+python mock_wowza.py &
+python test_simple_integration.py --skip-mock
 ```
 
-This will send test captions to the specified RTMP stream.
+### Debug Mode
 
-### Running LiveVTT with RTMP Output
-
+Enable verbose logging:
 ```bash
-python main.py -u https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8 -la ru -bt -rtmp rtmp://your-wowza-server/live/stream
+# Most tests support debug output
+python test_simple_integration.py --debug
+python test_caption.py --debug --server localhost --port 8086 --stream test
 ```
 
-This will start LiveVTT with RTMP output to your Wowza server.
+## Test Output Interpretation
 
-## Troubleshooting
+**✅ Success Indicators:**
+- Green checkmarks (✅)
+- "PASSED" status
+- HTTP 200 responses
+- HTTP 404 for missing streams (expected)
 
-If you encounter issues during testing, check the following:
+**⚠️ Warning Indicators:**
+- Yellow warnings (⚠️)
+- "Module not found" (if using mock server)
+- Timeout warnings (may indicate slow system)
 
-1. **Mock server not starting**: Make sure port 8087 is not already in use
-2. **LiveVTT not connecting**: Check that the TVRain stream is accessible
-3. **Captions not being sent**: Check the LiveVTT logs for errors
-4. **API test failing**: Verify that the mock server is running and responding to requests
+**❌ Failure Indicators:**
+- Red X marks (❌)
+- "FAILED" status
+- Connection refused errors
+- Repeated timeouts
 
-## Interpreting Test Results
+---
 
-- **Green checkmarks (✅)** indicate that a test passed
-- **Red X marks (❌)** indicate that a test failed
-- Check the logs for detailed information about what went wrong
-
-If all tests pass, it means that the LiveVTT to Wowza integration is working correctly and should work with a real Wowza server as well. 
+**The improved test suite focuses on reliability and usefulness while avoiding brittle dependencies that can break CI/CD pipelines.** 

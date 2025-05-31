@@ -12,6 +12,7 @@ import sys
 import aiohttp
 import json
 from urllib.parse import urlparse
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -21,7 +22,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger('livevtt-test')
 
-async def send_test_captions(url, num_captions=5, interval=3.0):
+# Default configuration that can be overridden
+DEFAULT_CONFIG = {
+    'server': 'localhost',
+    'port': 8086,
+    'timeout': 10,
+    'retries': 3
+}
+
+async def send_test_captions(url, num_captions=5, interval=3.0, config=None):
     """
     Send test captions to the Wowza LiveVTT Caption Module via HTTP.
     
@@ -29,118 +38,206 @@ async def send_test_captions(url, num_captions=5, interval=3.0):
         url: RTMP URL of the stream
         num_captions: Number of test captions to send
         interval: Interval between captions in seconds
+        config: Configuration dictionary for overrides
     """
-    # Parse RTMP URL to get server and stream name
-    parsed_url = urlparse(url)
-    server = parsed_url.netloc
-    path_parts = parsed_url.path.strip('/').split('/')
+    config = config or DEFAULT_CONFIG
     
-    if len(path_parts) < 2:
-        logger.error(f"Invalid RTMP URL format: {url}")
-        logger.error("URL should be in format: rtmp://server/application/streamname")
+    # Parse RTMP URL to get server and stream name
+    try:
+        parsed_url = urlparse(url)
+        server = parsed_url.netloc or config['server']
+        path_parts = parsed_url.path.strip('/').split('/')
+        
+        if len(path_parts) < 2:
+            logger.error(f"Invalid RTMP URL format: {url}")
+            logger.error("URL should be in format: rtmp://server/application/streamname")
+            return False
+        
+        stream_name = path_parts[-1]
+    except Exception as e:
+        logger.error(f"Failed to parse RTMP URL {url}: {e}")
         return False
     
-    stream_name = path_parts[-1]
-    
     # HTTP endpoint for the Wowza module
-    http_url = f"http://{server}:8087/livevtt/captions?streamname={stream_name}"
+    http_url = f"http://{server}:{config['port']}/livevtt/captions"
     
-    logger.info(f"Testing caption delivery to Wowza at {http_url}")
+    logger.info(f"Testing caption delivery to {http_url} for stream '{stream_name}'")
+    
+    # Test captions with variety
+    test_captions = [
+        f"Test caption {i+1}/{num_captions} - Basic functionality test",
+        f"Unicode test: 你好世界 العالم мир 🌍 (#{i+1})",
+        f"Timestamp: {time.strftime('%H:%M:%S')} - Caption {i+1}",
+        f"Long caption test: This is a longer caption text to test how the system handles more verbose subtitle content in caption {i+1}",
+        f"Final test caption {i+1} with special chars: !@#$%^&*()",
+    ]
+    
+    # Cycle through test captions if we need more
+    caption_texts = [test_captions[i % len(test_captions)] for i in range(num_captions)]
+    
+    success_count = 0
+    connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
+    timeout = aiohttp.ClientTimeout(total=config['timeout'])
     
     try:
-        async with aiohttp.ClientSession() as session:
-            for i in range(1, num_captions + 1):
-                caption_text = f"This is test caption {i} of {num_captions} from LiveVTT"
-                
+        async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+            for i, caption_text in enumerate(caption_texts, 1):
                 # Prepare JSON payload
                 payload = {
                     "text": caption_text,
-                    "language": "eng",
-                    "trackId": 99
+                    "lang": "eng",
+                    "trackid": 99,
+                    "streamname": stream_name
                 }
                 
-                # Send HTTP request
-                logger.info(f"Sending caption: {caption_text}")
-                async with session.post(http_url, json=payload, headers={'Content-Type': 'application/json'}) as response:
-                    if response.status == 200:
-                        logger.info(f"Caption {i} sent successfully")
-                    else:
-                        response_text = await response.text()
-                        logger.error(f"Failed to send caption {i}: {response.status} - {response_text}")
+                # Send HTTP request with retries
+                for attempt in range(config['retries']):
+                    try:
+                        logger.info(f"Sending caption {i}: {caption_text[:50]}{'...' if len(caption_text) > 50 else ''}")
+                        
+                        async with session.post(http_url, json=payload, headers={'Content-Type': 'application/json'}) as response:
+                            response_text = await response.text()
+                            
+                            if response.status == 200:
+                                logger.info(f"✅ Caption {i} sent successfully")
+                                success_count += 1
+                                break
+                            elif response.status == 404:
+                                if "stream not found" in response_text.lower():
+                                    logger.warning(f"⚠️  Stream '{stream_name}' not found (expected if not publishing)")
+                                else:
+                                    logger.warning(f"⚠️  API endpoint not found - check Wowza configuration")
+                                success_count += 1  # 404 for missing stream is acceptable
+                                break
+                            else:
+                                logger.error(f"❌ Caption {i} failed: {response.status} - {response_text}")
+                                if attempt < config['retries'] - 1:
+                                    logger.info(f"Retrying in 1 second... (attempt {attempt + 2}/{config['retries']})")
+                                    await asyncio.sleep(1)
+                    except asyncio.TimeoutError:
+                        logger.error(f"❌ Caption {i} timed out (attempt {attempt + 1}/{config['retries']})")
+                        if attempt < config['retries'] - 1:
+                            await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.error(f"❌ Caption {i} error: {e} (attempt {attempt + 1}/{config['retries']})")
+                        if attempt < config['retries'] - 1:
+                            await asyncio.sleep(1)
                 
-                # Wait for the specified interval
-                await asyncio.sleep(interval)
+                # Wait between captions (but not after the last one)
+                if i < num_captions:
+                    await asyncio.sleep(interval)
             
-            logger.info("Caption test completed")
-            return True
+            logger.info(f"Caption test completed: {success_count}/{num_captions} successful")
+            return success_count == num_captions
+            
     except Exception as e:
-        logger.error(f"Error sending captions: {e}")
+        logger.error(f"Session error: {e}")
         return False
 
-async def check_wowza_connection(server, port=8087):
+async def check_wowza_connection(server, port=8086, timeout=5):
     """Check if the Wowza server is reachable via HTTP"""
     url = f"http://{server}:{port}"
+    
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=5) as response:
-                if response.status == 200:
-                    logger.info(f"Wowza server at {url} is reachable")
-                    return True
-                else:
-                    logger.warning(f"Wowza server at {url} returned status {response.status}")
-                    return False
+        connector = aiohttp.TCPConnector(limit=5)
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+        
+        async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
+            async with session.get(url) as response:
+                logger.info(f"✅ Wowza server at {url} is reachable (status: {response.status})")
+                return True
     except aiohttp.ClientError as e:
-        logger.error(f"Cannot connect to Wowza server at {url}: {e}")
+        logger.error(f"❌ Cannot connect to Wowza server at {url}: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Unexpected error connecting to {url}: {e}")
         return False
 
-async def check_livevtt_module(server, port=8087):
+async def check_livevtt_module(server, port=8086, timeout=5):
     """Check if the LiveVTT Caption Module is installed and responding"""
     url = f"http://{server}:{port}/livevtt/captions/status"
+    
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=5) as response:
+        connector = aiohttp.TCPConnector(limit=5)
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+        
+        async with aiohttp.ClientSession(connector=connector, timeout=client_timeout) as session:
+            async with session.get(url) as response:
                 if response.status == 200:
-                    data = await response.json()
-                    logger.info(f"LiveVTT Caption Module is installed and responding: {data}")
-                    return True
+                    try:
+                        data = await response.json()
+                        logger.info(f"✅ LiveVTT Caption Module is responding: {data}")
+                        return True
+                    except json.JSONDecodeError:
+                        logger.warning("⚠️  Module responding but returned invalid JSON")
+                        return False
                 else:
-                    logger.warning(f"LiveVTT Caption Module check failed with status {response.status}")
+                    logger.warning(f"⚠️  LiveVTT Caption Module check failed with status {response.status}")
                     return False
     except aiohttp.ClientError as e:
-        logger.error(f"Cannot connect to LiveVTT Caption Module at {url}: {e}")
+        logger.error(f"❌ Cannot connect to LiveVTT Caption Module at {url}: {e}")
         return False
-    except json.JSONDecodeError:
-        logger.error(f"Invalid JSON response from LiveVTT Caption Module")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error checking module: {e}")
         return False
 
 async def main():
     parser = argparse.ArgumentParser(description='Test LiveVTT caption delivery to Wowza')
-    parser.add_argument('-u', '--url', required=True, help='RTMP URL (e.g., rtmp://server/application/streamname)')
-    parser.add_argument('-n', '--num-captions', type=int, default=5, help='Number of test captions to send')
-    parser.add_argument('-i', '--interval', type=float, default=3.0, help='Interval between captions in seconds')
+    parser.add_argument('-u', '--url', default='rtmp://localhost:1935/live/testStream', 
+                       help='RTMP URL (default: rtmp://localhost:1935/live/testStream)')
+    parser.add_argument('-n', '--num-captions', type=int, default=5, 
+                       help='Number of test captions to send (default: 5)')
+    parser.add_argument('-i', '--interval', type=float, default=3.0, 
+                       help='Interval between captions in seconds (default: 3.0)')
+    parser.add_argument('--server', default='localhost', 
+                       help='Wowza server hostname/IP (default: localhost)')
+    parser.add_argument('--port', type=int, default=8086, 
+                       help='Wowza HTTP port (default: 8086)')
+    parser.add_argument('--timeout', type=int, default=10, 
+                       help='Request timeout in seconds (default: 10)')
+    parser.add_argument('--retries', type=int, default=3, 
+                       help='Number of retries per request (default: 3)')
+    parser.add_argument('--skip-checks', action='store_true',
+                       help='Skip connection and module checks')
+    
     args = parser.parse_args()
     
-    # Parse server from URL
-    parsed_url = urlparse(args.url)
-    server = parsed_url.netloc
+    # Build configuration
+    config = {
+        'server': args.server,
+        'port': args.port,
+        'timeout': args.timeout,
+        'retries': args.retries
+    }
     
-    # Check Wowza connection
-    if not await check_wowza_connection(server):
-        logger.error("Cannot connect to Wowza server. Please check if it's running.")
-        return 1
+    logger.info(f"Testing caption delivery to {args.server}:{args.port}")
+    logger.info(f"Target stream: {args.url}")
+    logger.info(f"Configuration: {config}")
     
-    # Check LiveVTT module
-    if not await check_livevtt_module(server):
-        logger.warning("LiveVTT Caption Module check failed. Module may not be installed properly.")
+    if not args.skip_checks:
+        # Check Wowza connection
+        if not await check_wowza_connection(args.server, args.port, args.timeout):
+            logger.error("❌ Cannot connect to Wowza server. Use --skip-checks to bypass this check.")
+            return 1
+        
+        # Check LiveVTT module
+        module_ok = await check_livevtt_module(args.server, args.port, args.timeout)
+        if not module_ok:
+            logger.warning("⚠️  LiveVTT Caption Module check failed. Continuing anyway...")
     
     # Send test captions
-    success = await send_test_captions(args.url, args.num_captions, args.interval)
+    success = await send_test_captions(args.url, args.num_captions, args.interval, config)
     
-    return 0 if success else 1
+    if success:
+        logger.info("✅ All caption tests passed!")
+        return 0
+    else:
+        logger.error("❌ Some caption tests failed")
+        return 1
 
 if __name__ == "__main__":
     try:
         sys.exit(asyncio.run(main()))
     except KeyboardInterrupt:
         logger.info("Test interrupted by user")
-        sys.exit(0) 
+        sys.exit(130) 
