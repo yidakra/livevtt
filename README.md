@@ -50,7 +50,14 @@ Follow the detailed setup in [WOWZA_SETUP.md](WOWZA_SETUP.md)
 
 ### Basic Usage
 ```bash
-# Transcribe Russian live stream with RTMP output
+# 1. Start Wowza Streaming Engine
+sudo /usr/local/WowzaStreamingEngine/bin/startup.sh
+
+# 2. Publish source stream to Wowza
+ffmpeg -re -i "https://example.com/stream/playlist.m3u8" \
+  -c copy -f flv rtmp://localhost:1935/live/myStream
+
+# 3. Start LiveVTT with captions
 python main.py \
   --url "https://example.com/stream/playlist.m3u8" \
   --language ru \
@@ -60,13 +67,20 @@ python main.py \
 
 ### Real-world Example
 ```bash
-# TVRain stream with Russian captions
+# 1. Publish TVRain stream to Wowza
+ffmpeg -re -i "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
+  -c copy -f flv rtmp://localhost:1935/live/tvrain &
+
+# 2. Start LiveVTT with Russian captions
 python main.py \
   -u "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
   -la ru \
   --rtmp-url "rtmp://localhost:1935/live/tvrain" \
   --rtmp-http-port 8086 \
   --beam-transcription
+
+# 3. Access captioned stream
+# http://YOUR_SERVER_IP:1935/live/tvrain/playlist.m3u8
 ```
 
 ## 🔧 Configuration
@@ -180,29 +194,72 @@ export LIVEVTT_WOWZA_PORT="8086"
 
 ## 🔌 Wowza Integration
 
+### Prerequisites
+
+**⚠️ IMPORTANT**: You must publish a stream to Wowza **BEFORE** starting LiveVTT captions.
+
+### Step-by-Step Workflow
+
+#### 1. Start Wowza Streaming Engine
+```bash
+sudo /usr/local/WowzaStreamingEngine/bin/startup.sh
+```
+
+#### 2. Publish Your Source Stream to Wowza
+```bash
+# Example: Publish TV Rain stream to Wowza as "tvrain"
+ffmpeg -re -i "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
+  -c copy -f flv rtmp://localhost:1935/live/tvrain
+```
+
+#### 3. Start LiveVTT with RTMP Integration
+```bash
+python main.py \
+  --url "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
+  --language ru \
+  --rtmp-url "rtmp://localhost:1935/live/tvrain" \
+  --rtmp-http-port 8086 \
+  --model large \
+  --transcribe \
+  --custom-vocabulary true
+```
+
+#### 4. Access Stream with Captions
+```
+http://YOUR_SERVER_IP:1935/live/tvrain/playlist.m3u8
+```
+
+### Caption Delivery Method
+
+LiveVTT uses **onTextData events** to deliver captions:
+- Captions are sent as **AMF data** directly to the stream
+- **Embedded** in the video stream (not separate subtitle files)
+- Players receive captions as **metadata events**
+- More integrated than separate HLS subtitle tracks
+
 ### HTTP API Endpoints
-   ```bash
+```bash
 # Send caption to stream
 curl -X POST "http://localhost:8086/livevtt/captions" \
   -H "Content-Type: application/json" \
   -d '{
     "text": "Caption text here",
-    "lang": "eng",
+    "lang": "ru",
     "trackid": 99,
-    "streamname": "myStream"
+    "streamname": "tvrain"
   }'
 
 # Check provider status
 curl "http://localhost:8086/livevtt/captions/status"
-   ```
+```
 
 ### Response Format
-   ```json
-   {
+```json
+{
   "success": true,
   "message": "Caption added successfully"
-   }
-   ```
+}
+```
 
 ## 📊 Performance
 
@@ -245,8 +302,15 @@ python test_integration.py
 
 ### Common Issues
 
+#### Stream Not Found (404 Errors)
+```bash
+# Error: "Stream not found: streamname"
+# Solution: Ensure stream is published to Wowza FIRST
+ffmpeg -re -i "your_source_stream.m3u8" -c copy -f flv rtmp://localhost:1935/live/streamname
+```
+
 #### 404 Errors from Wowza
-   ```bash
+```bash
 # Check module is loaded
 curl "http://localhost:8086/livevtt/captions/status"
 
