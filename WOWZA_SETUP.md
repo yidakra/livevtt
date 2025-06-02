@@ -2,15 +2,6 @@
 
 This guide provides step-by-step instructions for installing and configuring the LiveVTT Caption Module on Wowza Streaming Engine.
 
-## Recent Updates (v1.1.0 - January 2025)
-
-- ✅ **Fixed HTTP Provider 404 Issues**: Resolved critical path matching problems in the HTTP provider
-- ✅ **Enhanced Error Handling**: Added comprehensive logging and debugging throughout the module
-- ✅ **Improved Configuration**: Simplified setup process with better documentation and examples
-- ✅ **Production Ready**: Successfully tested with real-world streams including multilingual transcription
-
-**Note**: If you previously experienced 404 errors when LiveVTT sent captions to Wowza, this version resolves those issues with improved path handling in the HTTP provider.
-
 ## Prerequisites
 
 *   Wowza Streaming Engine installed and running.
