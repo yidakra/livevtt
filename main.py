@@ -552,17 +552,30 @@ async def main():
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
 
     base_playlist = m3u8.load(args.url)
-    highest_bitrate_stream = sorted(base_playlist.playlists, key=lambda x: x.stream_info.bandwidth, reverse=True)[0]
-    base_playlist.playlists = PlaylistList([highest_bitrate_stream])
+    
+    # Handle both master playlists (with multiple streams) and media playlists (direct stream)
+    if base_playlist.playlists:
+        # Master playlist - select highest bitrate stream
+        highest_bitrate_stream = sorted(base_playlist.playlists, key=lambda x: x.stream_info.bandwidth, reverse=True)[0]
+        base_playlist.playlists = PlaylistList([highest_bitrate_stream])
+        stream_uri = highest_bitrate_stream.absolute_uri
+    else:
+        # Media playlist - use it directly
+        logger.info("Direct media playlist detected, using stream directly")
+        stream_uri = args.url
 
     # Use actual IP if binding to all interfaces
     public_address = get_local_ip() if args.bind_address == '0.0.0.0' else args.bind_address
     http_base_url = '' # Changed from absolute to relative path
 
     modified_base_playlist = copy.deepcopy(base_playlist)
-    modified_base_playlist.playlists[0].uri = 'chunklist.m3u8' # Removed path join
+    
+    # Only modify playlist URI if it's a master playlist
+    if modified_base_playlist.playlists:
+        modified_base_playlist.playlists[0].uri = 'chunklist.m3u8' # Removed path join
 
-    if not args.hard_subs:
+    if not args.hard_subs and modified_base_playlist.playlists:
+        # Only add subtitle tracks for master playlists
         if args.both_tracks:
             # Add both subtitle tracks
             subtitle_trans = m3u8.Media(uri='subs.trans.m3u8',
@@ -615,7 +628,7 @@ async def main():
 
         try:
             while not stop_event.is_set():
-                chunk_list = m3u8.load(base_playlist.playlists[0].absolute_uri)
+                chunk_list = m3u8.load(stream_uri)
 
                 sleep_duration = chunk_list.target_duration or 10
 
