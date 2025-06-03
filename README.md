@@ -30,15 +30,6 @@ LiveVTT enables real-time caption delivery to live video streams. It consists of
 - **Testing Tools**: Python utilities for testing and monitoring
 - **WebVTT Output**: Standards-compliant caption tracks in HLS/DASH streams
 
-### Key Features
-- ✅ Real-time caption delivery to live streams
-- ✅ Multiple language support (ISO 639-2 codes)
-- ✅ HTTP-based API for easy integration
-- ✅ WebVTT format compatibility
-- ✅ HLS and DASH streaming support
-- ✅ Memory-efficient processing
-- ✅ Production-ready monitoring
-
 ---
 
 ## 🚀 Quick Start
@@ -218,24 +209,6 @@ ffmpeg -re -i video.mp4 -c copy -f flv rtmp://localhost:1935/live/testStream
 
 ---
 
-## 📊 Performance
-
-**Typical metrics on production systems:**
-- Memory usage: 0.5-2% of system RAM
-- CPU overhead: <1% for caption processing  
-- Latency: <100ms caption delivery
-- Throughput: 1000+ captions/minute per stream
-
-**Load testing**:
-```bash
-# Test multiple concurrent streams
-for i in {1..10}; do
-  python caption_sender.py --stream "stream$i" --count 100 --interval 0.1 &
-done
-```
-
----
-
 ## 🔧 Configuration Files
 
 | File | Purpose | Documentation |
@@ -307,7 +280,3 @@ tail -f /usr/local/WowzaStreamingEngine/logs/wowzastreamingengine_error.log
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
-
----
-
-**Ready to get started?** 👉 [**Deployment Guide →**](docs/DEPLOYMENT.md)
