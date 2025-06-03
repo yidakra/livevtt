@@ -1,0 +1,3 @@
+#!/bin/bash
+# Convenience script for test_final_integration.py
+python src/python/tools/test_final_integration.py "$@" 

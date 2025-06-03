@@ -182,13 +182,13 @@ python caption_sender.py --stream myStream --count 100 --interval 5
 
 **"Stream not found" errors**:
 - Check if RTMP stream is actively publishing
-- Use `stream_checker.py` to verify active streams
+- Use `./stream_checker` to verify active streams
 - Ensure stream name matches exactly
 
 **Connection errors**:
 - Verify Wowza is running: `ps aux | grep -i wowza`
 - Check if port 8086 is listening: `netstat -tlnp | grep :8086`
-- Run integration test: `python test_final_integration.py`
+- Run integration test: `./test_integration`
 
 **Memory issues**:
 - Integration test monitors memory usage
@@ -197,8 +197,21 @@ python caption_sender.py --stream myStream --count 100 --interval 5
 
 ### Getting Help
 
-1. **System Status**: `python test_final_integration.py`
-2. **Stream Status**: `python stream_checker.py`  
-3. **API Test**: `python caption_sender.py --stream test --count 1`
+1. **System Status**: `./test_integration`
+2. **Stream Status**: `./stream_checker`  
+3. **API Test**: `./caption_sender --stream test --count 1`
 
-All tools provide helpful error messages and guidance for resolving issues. 
+All tools provide helpful error messages and guidance for resolving issues.
+
+## 📚 Reference Materials
+
+### Wowza onTextData Reference Implementation
+
+The `PublishOnTextData/` directory contains official Wowza reference code showing how to implement onTextData caption injection:
+
+- **`src/ModulePublishOnTextData.java`**: Complete Wowza module implementation
+- **`README.html`**: Detailed documentation and setup instructions  
+- **`content/ontextdata.txt`**: Sample caption text file
+- **Configuration examples**: Properties and module setup
+
+This reference implementation demonstrates the same core functionality that LiveVTT provides, serving as valuable documentation for understanding how caption injection works at the Wowza level. 

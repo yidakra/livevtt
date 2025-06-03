@@ -25,22 +25,22 @@ from m3u8 import PlaylistList, SegmentList
 
 translated_chunk_paths = {}
 chunk_to_vtt = {}
-chunk_to_vtt_trans = {}  # New dictionary for translated subtitles
-chunk_to_vtt_orig = {}   # New dictionary for transcribed subtitles
+chunk_to_vtt_trans = {}  # Dictionary for translated subtitles
+chunk_to_vtt_orig = {}   # Dictionary for transcribed subtitles
 
 CHUNK_LIST_BASE_URI = None
 BASE_PLAYLIST_SER = None
 CHUNK_LIST_SER = None
 SUB_LIST_SER = None
-SUB_LIST_TRANS_SER = None  # New global for translated subtitles playlist
-SUB_LIST_ORIG_SER = None   # New global for transcribed subtitles playlist
+SUB_LIST_TRANS_SER = None  # Global for translated subtitles playlist
+SUB_LIST_ORIG_SER = None   # Global for transcribed subtitles playlist
 
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
 
 FILTER_DICT = {}  # Dictionary of strings to filter out
-FILTER_FILE = 'filter.json'  # File to store filter words
-VOCABULARY_FILE = 'vocabulary.json'  # File to store custom vocabulary
+FILTER_FILE = 'config/filter.json'  # File to store filter words
+VOCABULARY_FILE = 'config/vocabulary.json'  # File to store custom vocabulary
 
 # New global variables for custom vocabulary
 CUSTOM_VOCABULARY = {}  # Dictionary of custom vocabulary
@@ -175,12 +175,16 @@ def load_filter_dict():
         logger.error(f"Failed to load filter dictionary: {e}")
 
 
-def load_custom_vocabulary(language: str):
+def load_custom_vocabulary(language: str, vocabulary_file: str = None):
     """Load language-specific custom vocabulary"""
     global CUSTOM_VOCABULARY, INITIAL_PROMPT
+    
+    # Use provided file path or fall back to global
+    vocab_file_path = vocabulary_file or VOCABULARY_FILE
+    
     try:
-        if os.path.exists(VOCABULARY_FILE):
-            with open(VOCABULARY_FILE, 'r', encoding='utf-8') as f:
+        if os.path.exists(vocab_file_path):
+            with open(vocab_file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 
                 # Process custom vocabulary if it exists
@@ -209,7 +213,7 @@ def load_custom_vocabulary(language: str):
             # No vocabulary file - disable
             CUSTOM_VOCABULARY = []
             INITIAL_PROMPT = ""
-            logger.info(f"Vocabulary file '{VOCABULARY_FILE}' not found - custom vocabulary disabled")
+            logger.info(f"Vocabulary file '{vocab_file_path}' not found - custom vocabulary disabled")
     except Exception as e:
         logger.error(f"Failed to load custom vocabulary: {e}")
         CUSTOM_VOCABULARY = []
@@ -491,9 +495,9 @@ async def main():
     parser.add_argument('-bt', '--both-tracks', action='store_true',
                         help='Enable both transcription and translation tracks')
     parser.add_argument('-f', '--filter-file', type=str, help='Path to JSON file containing words to filter out',
-                        default='filter.json')
+                        default='config/filter.json')
     parser.add_argument('-v', '--vocabulary-file', type=str, help='Path to JSON file containing custom vocabulary for better transcription accuracy',
-                        default='vocabulary.json')
+                        default='config/vocabulary.json')
     parser.add_argument('-cv', '--custom-vocabulary', type=lambda x: str(x).lower() in ['true', '1', 'yes'],
                         help='Enable custom vocabulary to improve transcription accuracy for specific terms. Defaults to true.',
                         default=True)
@@ -524,7 +528,7 @@ async def main():
         logger.info("Custom vocabulary disabled via command line argument")
     else:
         # Load language-specific custom vocabulary
-        load_custom_vocabulary(args.language or "en")
+        load_custom_vocabulary(args.language or "en", args.vocabulary_file)
 
     # Initialize RTMP settings if enabled
     global RTMP_ENABLED, RTMP_URL, RTMP_QUEUE

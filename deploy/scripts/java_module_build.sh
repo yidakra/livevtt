@@ -7,9 +7,9 @@
 WOWZA_LIB_DIR="/usr/local/WowzaStreamingEngine/lib/"
 MODULE_NAME="livevtt-caption-module"
 PACKAGE_NAME="com.livevtt.wowza"
-BUILD_DIR="./build"
+BUILD_DIR="../../build"
 CLASSES_DIR="$BUILD_DIR/classes"
-SRC_DIR="."
+SRC_DIR="../../src/java"
 JAR_FILE="$BUILD_DIR/$MODULE_NAME.jar"
 
 echo "========================================"

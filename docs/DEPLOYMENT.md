@@ -32,14 +32,11 @@ netstat -tlnp | grep -E ':(1935|8086)'
 # Clone/download LiveVTT project
 cd /path/to/livevtt
 
-# Make build script executable
-chmod +x java_module_build.sh
+# Build the module using convenience script
+./build.sh
 
-# Edit build script if needed (set WOWZA_LIB_DIR)
-nano java_module_build.sh
-
-# Build the module
-./java_module_build.sh
+# Or build directly (if needed)
+cd deploy/scripts && ./java_module_build.sh
 ```
 
 **Expected output**: `build/livevtt-caption-module.jar` created successfully.
@@ -119,7 +116,7 @@ tail -f /usr/local/WowzaStreamingEngine/logs/wowzastreamingengine_access.log
 
 ```bash
 # Run integration test
-python test_final_integration.py
+./test_integration
 ```
 
 **Expected output**:
@@ -149,7 +146,7 @@ curl -X POST http://localhost:8086/livevtt/captions \
 ffmpeg -re -i test_video.mp4 -c copy -f flv rtmp://localhost:1935/live/testStream &
 
 # 2. Send caption
-python caption_sender.py --stream testStream --text "Live caption test"
+./caption_sender --stream testStream --text "Live caption test"
 
 # 3. Verify in player (browse to HLS/DASH stream URL)
 ```
@@ -243,7 +240,7 @@ jps -l | grep -i wowza
 
 ### Getting Support
 
-1. **Integration Test**: Run `python test_final_integration.py`
+1. **Integration Test**: Run `./test_integration`
 2. **Collect Logs**: Check Wowza logs for errors
 3. **Network Test**: Verify connectivity with `telnet localhost 8086`
 4. **Configuration Review**: Validate XML syntax
@@ -260,7 +257,7 @@ jps -l | grep -i wowza
 ```bash
 # Test multiple streams
 for i in {1..10}; do
-  python caption_sender.py --stream "stream$i" --count 100 --interval 0.1 &
+  ./caption_sender --stream "stream$i" --count 100 --interval 0.1 &
 done
 ```
 
@@ -272,7 +269,7 @@ done
 2. Stop Wowza: `sudo service WowzaStreamingEngine stop`
 3. Replace JAR: `cp build/livevtt-caption-module.jar /usr/local/WowzaStreamingEngine/lib/`
 4. Start Wowza: `sudo service WowzaStreamingEngine start`
-5. Verify: `python test_final_integration.py`
+5. Verify: `./test_integration`
 
 ### Backup Configuration
 

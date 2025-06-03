@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- LiveVTT HTTP Provider Configuration Example -->
+<!-- Add this section to your Wowza VHost.xml file -->
+
+<!-- Add to <HTTPProviders> section under the appropriate HostPort (typically 8086) -->
+<HTTPProvider>
+    <BaseClass>com.livevtt.wowza.LiveVTTCaptionHTTPProvider</BaseClass>
+    <RequestFilters>livevtt*</RequestFilters>
+    <AuthenticationMethod>none</AuthenticationMethod>
+</HTTPProvider>
+
+<!-- Example with authentication enabled -->
+<!--
+<HTTPProvider>
+    <BaseClass>com.livevtt.wowza.LiveVTTCaptionHTTPProvider</BaseClass>
+    <RequestFilters>livevtt*</RequestFilters>
+    <AuthenticationMethod>digest</AuthenticationMethod>
+</HTTPProvider>
+-->
+
+<!-- Note: Ensure this HTTPProvider is configured under a HostPort that matches -->
+<!-- the port LiveVTT will send captions to (default: 8086) -->
+
+<!-- Example HostPort configuration: -->
+<!--
+<HostPort>
+    <Name>Default SSL Streaming</Name>
+    <Type>Streaming</Type>
+    <ProcessorCount>${com.wowza.wms.TuningHeapSSLProcessorCount}</ProcessorCount>
+    <IpAddress>*</IpAddress>
+    <Port>8086</Port>
+    <HTTPProviders>
+        <HTTPProvider>
+            <BaseClass>com.livevtt.wowza.LiveVTTCaptionHTTPProvider</BaseClass>
+            <RequestFilters>livevtt*</RequestFilters>
+            <AuthenticationMethod>none</AuthenticationMethod>
+        </HTTPProvider>
+    </HTTPProviders>
+</HostPort>
+--> 
