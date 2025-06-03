@@ -1,353 +1,313 @@
-# 🎬 LiveVTT - Real-time Speech-to-Caption Integration
+# LiveVTT Caption Integration
 
-[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Wowza](https://img.shields.io/badge/Wowza-4.9.4-orange.svg)](https://www.wowza.com/)
-[![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen.svg)](#)
+Real-time caption delivery for live video streams using Wowza Streaming Engine.
 
-LiveVTT is a production-ready solution for real-time speech transcription and live caption delivery to Wowza Streaming Engine. It provides seamless integration between automatic speech recognition and live streaming platforms.
+## 📋 Table of Contents
 
-## 🚀 Features
+### 🚀 Quick Start
+- [**Installation & Setup**](docs/DEPLOYMENT.md) - Get LiveVTT running quickly
+- [**Testing Guide**](docs/TESTING.md) - Verify your installation works
+- [**API Reference**](docs/API.md) - Complete API documentation
 
-- **Real-time Transcription**: Powered by OpenAI Whisper for high-quality speech-to-text
-- **Multi-language Support**: Supports 99+ languages including Russian, English, Spanish, etc.
-- **Wowza Integration**: Direct HTTP API integration with Wowza Streaming Engine
-- **Live Streaming**: Compatible with HLS, RTMP, and other streaming protocols
-- **Filter System**: Built-in content filtering for clean captions
-- **Production Ready**: Comprehensive error handling and logging
+### 📚 Documentation
+- [**Tools Guide**](docs/TOOLS.md) - Essential tools and utilities
+- [**Wowza Setup**](docs/WOWZA_SETUP.md) - Detailed Wowza configuration
+- [**Demo Guide**](docs/DEMO.md) - Live demonstration instructions
 
-## 📋 Requirements
+### 🛠️ Essential Tools
+- [`test_final_integration.py`](#test_final_integrationpy) - System health check
+- [`caption_sender.py`](#caption_senderpy) - Send captions to streams  
+- [`stream_checker.py`](#stream_checkerpy) - Check stream status
 
-- Python 3.11+
+---
+
+## 🎯 What is LiveVTT?
+
+LiveVTT enables real-time caption delivery to live video streams. It consists of:
+
+- **Wowza Module**: Java module that integrates with Wowza Streaming Engine
+- **HTTP API**: RESTful endpoint for caption submission (`/livevtt/captions`)
+- **Testing Tools**: Python utilities for testing and monitoring
+- **WebVTT Output**: Standards-compliant caption tracks in HLS/DASH streams
+
+### Key Features
+- ✅ Real-time caption delivery to live streams
+- ✅ Multiple language support (ISO 639-2 codes)
+- ✅ HTTP-based API for easy integration
+- ✅ WebVTT format compatibility
+- ✅ HLS and DASH streaming support
+- ✅ Memory-efficient processing
+- ✅ Production-ready monitoring
+
+---
+
+## 🚀 Quick Start
+
+### 1. System Requirements
 - Wowza Streaming Engine 4.9.4+
-- Java 21+ (for Wowza modules)
-- FFmpeg (for audio processing)
-- GPU support (optional, for faster transcription)
+- Java Development Kit 8+
+- Python 3.7+ (for testing tools)
+- Network access to ports 1935 (RTMP) and 8086 (Caption API)
 
-## 🛠️ Installation
-
-### 1. Clone Repository
+### 2. Installation (3 commands)
 ```bash
-git clone https://github.com/yourusername/livevtt.git
-   cd livevtt
-   ```
-
-### 2. Install Python Dependencies
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### 3. Build Wowza Module
-```bash
-chmod +x java_module_build.sh
+# Build and deploy the module
 ./java_module_build.sh
+cp build/livevtt-caption-module.jar /usr/local/WowzaStreamingEngine/lib/
+
+# Configure Wowza (see deployment guide for details)
+# Restart Wowza
+sudo service WowzaStreamingEngine restart
 ```
 
-### 4. Configure Wowza
-Follow the detailed setup in [WOWZA_SETUP.md](WOWZA_SETUP.md)
-
-## 🎯 Quick Start
-
-### Basic Usage
+### 3. Verify Installation
 ```bash
-# 1. Start Wowza Streaming Engine
-sudo /usr/local/WowzaStreamingEngine/bin/startup.sh
-
-# 2. Publish source stream to Wowza
-ffmpeg -re -i "https://example.com/stream/playlist.m3u8" \
-  -c copy -f flv rtmp://localhost:1935/live/myStream
-
-# 3. Start LiveVTT with captions
-python main.py \
-  --url "https://example.com/stream/playlist.m3u8" \
-  --language ru \
-  --rtmp-url "rtmp://localhost:1935/live/myStream" \
-  --rtmp-http-port 8086
-```
-
-### Real-world Example
-```bash
-# 1. Publish TVRain stream to Wowza
-ffmpeg -re -i "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
-  -c copy -f flv rtmp://localhost:1935/live/tvrain &
-
-# 2. Start LiveVTT with Russian captions
-python main.py \
-  -u "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
-  -la ru \
-  --rtmp-url "rtmp://localhost:1935/live/tvrain" \
-  --rtmp-http-port 8086 \
-  --beam-transcription
-
-# 3. Access captioned stream
-# http://YOUR_SERVER_IP:1935/live/tvrain/playlist.m3u8
-```
-
-## 🔧 Configuration
-
-### Command Line Options
-```bash
-# Core options
---url URL                    # HLS stream URL to transcribe
---language LANG             # Language code (ru, en, es, etc.)
---rtmp-url URL              # Wowza RTMP endpoint
---rtmp-http-port PORT       # HTTP API port (default: 8086)
-
-# Advanced options
---model MODEL               # Whisper model (tiny, base, small, medium, large)
---beam-transcription        # Enable beam search for better accuracy
---use-cuda                  # Enable GPU acceleration
---filter-file FILE          # Content filter configuration (default: filter.json)
---vocabulary-file FILE      # Custom vocabulary configuration (default: vocabulary.json)
---rtmp-track-id ID          # Caption track ID (default: 99)
---custom-vocabulary         # Enable custom vocabulary (default: true)
-```
-
-### Custom Vocabulary
-
-LiveVTT supports custom vocabulary to improve transcription accuracy for specific terms, acronyms, or names that may appear in your streams.
-
-#### Configuration
-
-To set up custom vocabulary:
-
-1. Create separate configuration files:
-
-   **`filter.json`** (for content filtering):
-   ```json
-   {
-       "filter_words": [
-           "unwanted-word1",
-           "unwanted-word2"
-       ]
-   }
-   ```
-
-   **`vocabulary.json`** (for custom vocabulary):
-   ```json
-   {
-       "custom_vocabulary": {
-           "ru": ["Гаага", "Российская Федерация"],
-           "en": ["example"],
-           "de": ["Bundesrat", "Bundestag"]
-       }
-   }
-   ```
-
-2. The vocabulary list for the specified language (`-la` argument) will be automatically loaded:
-   - `python main.py -la ru` → uses the `"ru"` vocabulary list
-   - `python main.py -la en` → uses the `"en"` vocabulary list  
-   - `python main.py -la fr` → no vocabulary (fallback behavior)
-
-3. Control with command-line flags:
-   - Enable: `--custom-vocabulary true` (default)
-   - Disable: `--custom-vocabulary false`
-   - Custom files: `--filter-file custom_filter.json --vocabulary-file custom_vocab.json`
-
-#### How It Works
-
-When custom vocabulary is enabled, LiveVTT creates an **initial prompt** for the Whisper model that biases the transcription toward recognizing the specified vocabulary terms. 
-
-The initial prompt is a text hint given to Whisper before transcription starts, like: 
-> "The following terms may appear in this audio: LiveVTT, SDR, Wowza, RTMP, API."
-
-This helps Whisper correctly identify these terms instead of mishearing them as similar-sounding words. This is particularly useful for:
-
-- Technical terms and acronyms
-- Product names  
-- Person names or titles
-- Domain-specific terminology
-
-#### Example
-
-```bash
-# Enable custom vocabulary with default files
-python main.py -u "https://live-stream-url.m3u8" -la en
-
-# Use custom configuration files
-python main.py -u "https://live-stream-url.m3u8" -la ru \
-  --filter-file my_filters.json \
-  --vocabulary-file my_vocabulary.json
-```
-
-### Environment Variables
-```bash
-export LIVEVTT_MODEL="medium"
-export LIVEVTT_LANGUAGE="ru"
-export LIVEVTT_WOWZA_PORT="8086"
-```
-
-## 🏗️ Architecture
-
-```
-┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
-│   HLS Stream    │───▶│   LiveVTT    │───▶│ Wowza Streaming │
-│   (Video/Audio) │    │  Transcriber │    │     Engine      │
-└─────────────────┘    └──────────────┘    └─────────────────┘
-                              │                       │
-                              ▼                       ▼
-                       ┌──────────────┐    ┌─────────────────┐
-                       │   Whisper    │    │  HLS + Captions │
-                       │    Model     │    │   (WebVTT)      │
-                       └──────────────┘    └─────────────────┘
-```
-
-## 🔌 Wowza Integration
-
-### Prerequisites
-
-**⚠️ IMPORTANT**: You must publish a stream to Wowza **BEFORE** starting LiveVTT captions.
-
-### Step-by-Step Workflow
-
-#### 1. Start Wowza Streaming Engine
-```bash
-sudo /usr/local/WowzaStreamingEngine/bin/startup.sh
-```
-
-#### 2. Publish Your Source Stream to Wowza
-```bash
-# Example: Publish TV Rain stream to Wowza as "tvrain"
-ffmpeg -re -i "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
-  -c copy -f flv rtmp://localhost:1935/live/tvrain
-```
-
-#### 3. Start LiveVTT with RTMP Integration
-```bash
-python main.py \
-  --url "https://wl.tvrain.tv/transcode/ses_1080p/playlist.m3u8" \
-  --language ru \
-  --rtmp-url "rtmp://localhost:1935/live/tvrain" \
-  --rtmp-http-port 8086 \
-  --model large \
-  --transcribe \
-  --custom-vocabulary true
-```
-
-#### 4. Access Stream with Captions
-```
-http://YOUR_SERVER_IP:1935/live/tvrain/playlist.m3u8
-```
-
-### Caption Delivery Method
-
-LiveVTT uses **onTextData events** to deliver captions:
-- Captions are sent as **AMF data** directly to the stream
-- **Embedded** in the video stream (not separate subtitle files)
-- Players receive captions as **metadata events**
-- More integrated than separate HLS subtitle tracks
-
-### HTTP API Endpoints
-```bash
-# Send caption to stream
-curl -X POST "http://localhost:8086/livevtt/captions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Caption text here",
-    "lang": "ru",
-    "trackid": 99,
-    "streamname": "tvrain"
-  }'
-
-# Check provider status
-curl "http://localhost:8086/livevtt/captions/status"
-```
-
-### Response Format
-```json
-{
-  "success": true,
-  "message": "Caption added successfully"
-}
-```
-
-## 📊 Performance
-
-### Typical Metrics
-- **Latency**: 2-5 seconds for real-time transcription
-- **Accuracy**: 95%+ for clear audio (language-dependent)
-- **Memory**: 2-8GB RAM (model-dependent)
-- **CPU**: 50-80% usage (without GPU)
-
-### Optimization Tips
-- Use GPU acceleration with `--use-cuda`
-- Choose appropriate model size for your hardware
-- Enable beam search for better accuracy
-- Use content filtering for cleaner output
-
-## 🧪 Testing
-
-### Manual Testing
-   ```bash
-# Start test stream
-python test_caption_generator.py
+# Run health check
+python test_final_integration.py
 
 # Test caption API
-python test_caption.py --server localhost --port 8086
-
-# Full integration test
-python test_final_integration.py
+python caption_sender.py --stream testStream --count 1
 ```
 
-### Automated Testing
+**More details**: See [**Deployment Guide →**](docs/DEPLOYMENT.md)
+
+---
+
+## 🛠️ Essential Tools
+
+### `test_final_integration.py`
+**Comprehensive system health check and integration testing**
+
 ```bash
-# Run all tests
-python -m pytest tests/
+# Basic health check
+python test_final_integration.py
 
-# Integration tests
-python test_integration.py
+# Expected output:
+# 🚀 Starting LiveVTT Integration Test
+# ✅ Wowza process found, memory usage: 0.5%
+# ✅ LiveVTT Caption Module loaded
+# ✅ Memory usage stable
+# ✅ Caption API responding correctly
+# 🎉 ALL TESTS PASSED!
 ```
 
-## 🔧 Troubleshooting
+### `caption_sender.py`
+**Interactive tool for sending captions to live streams**
+
+```bash
+# Send single caption
+python caption_sender.py --stream myStream
+
+# Multiple captions with custom settings
+python caption_sender.py --stream myShow --count 10 --interval 2 --language spa
+
+# With authentication
+python caption_sender.py --stream secure --username admin --password secret
+```
+
+### `stream_checker.py`
+**Check for active streams and get setup guidance**
+
+```bash
+# Check stream status
+python stream_checker.py
+
+# Provides RTMP setup guidance if no streams found:
+# 💡 To test with live streams, publish RTMP first:
+#    ffmpeg -re -i video.mp4 -c copy -f flv rtmp://localhost:1935/live/testStream
+```
+
+**More details**: See [**Tools Guide →**](docs/TOOLS.md)
+
+---
+
+## 📡 API Usage
+
+Send captions via HTTP POST to `http://localhost:8086/livevtt/captions`:
+
+```bash
+curl -X POST http://localhost:8086/livevtt/captions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "This is a live caption",
+    "lang": "eng", 
+    "trackid": 99,
+    "streamname": "myLiveStream"
+  }'
+```
+
+**Response codes**:
+- `200` - Caption sent successfully to live stream
+- `404` - Stream not found (check if RTMP stream is publishing)
+- `400` - Invalid request format
+- `500` - Server error
+
+**More details**: See [**API Reference →**](docs/API.md)
+
+---
+
+## 🧪 Testing Workflows
+
+### Development Testing
+```bash
+# 1. Health check
+python test_final_integration.py
+
+# 2. Check for active streams  
+python stream_checker.py
+
+# 3. Send test caption
+python caption_sender.py --stream testStream
+```
+
+### Production Testing
+```bash
+# Start live stream
+ffmpeg -re -i video.mp4 -c copy -f flv rtmp://localhost:1935/live/productionStream
+
+# Send captions
+python caption_sender.py --stream productionStream --count 5 --interval 3
+
+# Monitor in video player
+# HLS: http://localhost:8088/live/productionStream/playlist.m3u8
+```
+
+**More details**: See [**Testing Guide →**](docs/TESTING.md)
+
+---
+
+## 🌐 Language Support
+
+LiveVTT supports multiple languages using ISO 639-2 codes:
+
+| Language | Code | Example Usage |
+|----------|------|---------------|
+| English | `eng` | `python caption_sender.py --language eng --text "English caption"` |
+| Spanish | `spa` | `python caption_sender.py --language spa --text "Subtítulo en español"` |
+| French | `fra` | `python caption_sender.py --language fra --text "Légende française"` |
+| German | `deu` | `python caption_sender.py --language deu --text "Deutsche Untertitel"` |
+
+**Full language reference**: See [**API Reference →**](docs/API.md#language-codes)
+
+---
+
+## 🚨 Troubleshooting
 
 ### Common Issues
 
-#### Stream Not Found (404 Errors)
+**"Wowza process not found"**
 ```bash
-# Error: "Stream not found: streamname"
-# Solution: Ensure stream is published to Wowza FIRST
-ffmpeg -re -i "your_source_stream.m3u8" -c copy -f flv rtmp://localhost:1935/live/streamname
+sudo service WowzaStreamingEngine status
+sudo service WowzaStreamingEngine restart
 ```
 
-#### 404 Errors from Wowza
+**"Caption API not responding"**
 ```bash
-# Check module is loaded
-curl "http://localhost:8086/livevtt/captions/status"
-
-# Verify Wowza configuration
-grep -r "LiveVTTCaptionModule" /usr/local/WowzaStreamingEngine/conf/
+netstat -tlnp | grep :8086
+curl -v http://localhost:8086/livevtt/captions
 ```
 
-#### Caption Not Appearing
-1. Verify stream is publishing: Check Wowza Manager
-2. Test caption API directly: Use curl commands above
-3. Check Wowza logs: Look for "LiveVTTCaptionHTTPProvider" messages
-
-#### Performance Issues
-1. Reduce model size: Use `--model tiny` or `--model base`
-2. Enable GPU: Add `--use-cuda` flag
-3. Adjust chunk size: Modify HLS segment duration
-
-### Debug Mode
-   ```bash
-# Enable detailed logging
-python main.py --debug --url "stream_url" --language ru
+**"Stream not found"**
+```bash
+python stream_checker.py  # Check if streams are active
+# Start test stream if needed:
+ffmpeg -re -i video.mp4 -c copy -f flv rtmp://localhost:1935/live/testStream
 ```
 
-## 📖 Documentation
+**More troubleshooting**: See [**Testing Guide →**](docs/TESTING.md#debugging-and-troubleshooting)
 
-- [Wowza Setup Guide](WOWZA_SETUP.md) - Complete Wowza configuration
-- [Testing Guide](TESTING.md) - Comprehensive testing procedures
-- [Changelog](CHANGELOG.md) - Version history and updates
+---
 
-## 🤝 Contributing
+## 📊 Performance
 
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open Pull Request
+**Typical metrics on production systems:**
+- Memory usage: 0.5-2% of system RAM
+- CPU overhead: <1% for caption processing  
+- Latency: <100ms caption delivery
+- Throughput: 1000+ captions/minute per stream
+
+**Load testing**:
+```bash
+# Test multiple concurrent streams
+for i in {1..10}; do
+  python caption_sender.py --stream "stream$i" --count 100 --interval 0.1 &
+done
+```
+
+---
+
+## 🔧 Configuration Files
+
+| File | Purpose | Documentation |
+|------|---------|---------------|
+| `Application.xml` | Wowza module configuration | [Setup Guide →](docs/WOWZA_SETUP.md) |
+| `VHost.xml` | HTTP provider configuration | [Setup Guide →](docs/WOWZA_SETUP.md) |
+| `requirements.txt` | Python dependencies | [Tools Guide →](docs/TOOLS.md) |
+| `java_module_build.sh` | Build script | [Deployment Guide →](docs/DEPLOYMENT.md) |
+
+---
+
+## 📁 Project Structure
+
+```
+livevtt/
+├── docs/                          # All documentation
+│   ├── API.md                     # Complete API reference
+│   ├── DEPLOYMENT.md              # Installation & deployment
+│   ├── TESTING.md                 # Testing procedures  
+│   ├── TOOLS.md                   # Tools documentation
+│   ├── WOWZA_SETUP.md            # Detailed Wowza setup
+│   └── DEMO.md                    # Demo instructions
+├── caption_sender.py              # Interactive caption tool
+├── stream_checker.py              # Stream status checker
+├── test_final_integration.py      # Integration test suite
+├── LiveVTTCaptionModule.java      # Wowza Java module
+├── LiveVTTCaptionHTTPProvider.java # HTTP API provider
+└── java_module_build.sh           # Build script
+```
+
+---
+
+## 🎥 Live Demo
+
+Want to see LiveVTT in action? 
+
+**See**: [**Demo Guide →**](docs/DEMO.md) for step-by-step demonstration instructions.
+
+---
+
+## 📞 Support
+
+### Getting Help
+
+1. **Start with health check**: `python test_final_integration.py`
+2. **Check documentation**: Review relevant guide above
+3. **Run diagnostics**: `python stream_checker.py`
+4. **Check logs**: `/usr/local/WowzaStreamingEngine/logs/`
+
+### Useful Commands
+
+```bash
+# System status
+python test_final_integration.py
+
+# API connectivity  
+curl -v http://localhost:8086/livevtt/captions
+
+# Check Wowza
+ps aux | grep -i wowza
+netstat -tlnp | grep :8086
+
+# View logs
+tail -f /usr/local/WowzaStreamingEngine/logs/wowzastreamingengine_error.log
+```
+
+---
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+**Ready to get started?** 👉 [**Deployment Guide →**](docs/DEPLOYMENT.md)

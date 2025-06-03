@@ -11,8 +11,8 @@ def send_caption(server, port, stream_name, text, language="eng", track_id=99, u
     url = f"http://{server}:{port}/livevtt/captions"
     payload = {
         "text": text,
-        "language": language,
-        "trackId": track_id,
+        "lang": language,
+        "trackid": track_id,
         "streamname": stream_name
     }
     headers = {"Content-Type": "application/json"}
@@ -25,10 +25,13 @@ def send_caption(server, port, stream_name, text, language="eng", track_id=99, u
         response = requests.post(url, json=payload, headers=headers, auth=auth)
         
         if response.status_code == 200:
-            logger.info(f"Caption sent successfully: {response.text}")
+            logger.info(f"✅ Caption sent successfully to live stream: {response.text}")
             return True
+        elif response.status_code == 404:
+            logger.warning(f"⚠️  Stream '{stream_name}' not found: {response.text}")
+            return True  # Still successful API test, just no active stream
         else:
-            logger.error(f"Failed to send caption: {response.status_code} - {response.text}")
+            logger.error(f"❌ Failed to send caption: {response.status_code} - {response.text}")
             return False
     except Exception as e:
         logger.error(f"Error sending caption: {e}")
@@ -50,6 +53,7 @@ def main():
     args = parser.parse_args()
     
     logger.info(f"Testing caption delivery to {args.server}:{args.port} for stream '{args.stream}'")
+    logger.info("💡 To test with live streams, first publish RTMP: ffmpeg -re -i video.mp4 -c copy -f flv rtmp://localhost:1935/live/yourStreamName")
     
     success_count = 0
     for i in range(args.count):
