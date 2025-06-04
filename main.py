@@ -77,7 +77,15 @@ def segments_to_webvtt(segments: Iterable[faster_whisper.transcribe.Segment], ts
 
 
 class HTTPHandler(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        # Handle HEAD requests by calling GET but without sending body
+        self._handle_request(send_body=False)
+    
     def do_GET(self):
+        # Handle GET requests normally
+        self._handle_request(send_body=True)
+    
+    def _handle_request(self, send_body=True):
         response_content = None
         if self.path == '/playlist.m3u8':
             response_content = BASE_PLAYLIST_SER
@@ -112,15 +120,15 @@ class HTTPHandler(BaseHTTPRequestHandler):
         self.send_response(200 if response_content else 404)
 
         if self.path.endswith('.m3u8'):
-            self.send_header('Content-Type', 'application/vnd.apple.mpegurl')
+            self.send_header('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8')
         elif self.path.endswith('.vtt'):
-            self.send_header('Content-Type', 'text/vtt')
+            self.send_header('Content-Type', 'text/vtt; charset=utf-8')
 
         if response_content:
             self.send_header('Content-Length', str(len(response_content)))
 
         self.end_headers()
-        if response_content:
+        if response_content and send_body:
             self.wfile.write(response_content)
 
 
