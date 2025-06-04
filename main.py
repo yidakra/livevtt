@@ -83,12 +83,14 @@ class HTTPHandler(BaseHTTPRequestHandler):
             response_content = BASE_PLAYLIST_SER
         elif self.path == '/chunklist.m3u8':
             response_content = CHUNK_LIST_SER
-        elif self.path == '/subs.m3u8':
-            response_content = SUB_LIST_SER
-        elif self.path == '/subs.trans.m3u8':
-            response_content = SUB_LIST_TRANS_SER
-        elif self.path == '/subs.orig.m3u8':
-            response_content = SUB_LIST_ORIG_SER
+        elif self.path == '/subs.m3u8' or self.path.startswith('/subs_') and self.path.endswith('.m3u8'):
+            # Handle both old and new subtitle playlist naming
+            if self.path == '/subs_en.m3u8' or self.path == '/subs.trans.m3u8':
+                response_content = SUB_LIST_TRANS_SER or SUB_LIST_SER
+            elif self.path.startswith('/subs_') or self.path == '/subs.orig.m3u8':
+                response_content = SUB_LIST_ORIG_SER or SUB_LIST_SER
+            else:
+                response_content = SUB_LIST_SER
         elif self.path in translated_chunk_paths:
             self.send_response(200)
             self.send_header('Content-Type', 'video/mp2t')
@@ -462,6 +464,61 @@ def get_local_ip():
         return '127.0.0.1'
 
 
+def generate_custom_playlist(base_playlist, args):
+    """
+    Generate HLS playlist with EXT-X-VERSION:5 and proper attribute ordering
+    """
+    lines = ['#EXTM3U', '#EXT-X-VERSION:5']
+    
+    # Add subtitle tracks if not hard subs and has playlists
+    if not args.hard_subs and base_playlist.playlists:
+        if args.both_tracks:
+            # English (translated) track
+            lines.append('#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="Subtitle",LANGUAGE="en",NAME="English",AUTOSELECT=NO,URI="subs_en.m3u8"')
+            
+            # Original language track
+            orig_lang = args.language or 'ru'
+            orig_lang_name = {'en': 'English', 'ru': 'Russian', 'nl': 'Dutch'}.get(orig_lang.lower(), orig_lang.capitalize())
+            lines.append(f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="Subtitle",LANGUAGE="{orig_lang}",NAME="{orig_lang_name}",AUTOSELECT=NO,URI="subs_{orig_lang}.m3u8"')
+        else:
+            # Single subtitle track
+            if not args.transcribe:
+                subtitle_lang = 'en'
+                subtitle_name = 'English'
+                subtitle_uri = 'subs_en.m3u8'
+            else:
+                subtitle_lang = args.language or 'en'
+                subtitle_name = {
+                    'en': 'English',
+                    'ru': 'Russian', 
+                    'nl': 'Dutch',
+                }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
+                subtitle_uri = f'subs_{subtitle_lang}.m3u8'
+            
+            lines.append(f'#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="Subtitle",LANGUAGE="{subtitle_lang}",NAME="{subtitle_name}",AUTOSELECT=NO,URI="{subtitle_uri}"')
+    
+    # Add stream info
+    if base_playlist.playlists:
+        stream = base_playlist.playlists[0]
+        stream_info = stream.stream_info
+        
+        # Build EXT-X-STREAM-INF line
+        stream_inf_parts = []
+        if stream_info.bandwidth:
+            stream_inf_parts.append(f'BANDWIDTH={stream_info.bandwidth}')
+        if stream_info.resolution:
+            stream_inf_parts.append(f'RESOLUTION={stream_info.resolution[0]}x{stream_info.resolution[1]}')
+        if stream_info.codecs:
+            stream_inf_parts.append(f'CODECS="{",".join(stream_info.codecs)}"')
+        if not args.hard_subs:
+            stream_inf_parts.append('SUBTITLES="Subtitle"')
+        
+        lines.append(f'#EXT-X-STREAM-INF:{",".join(stream_inf_parts)}')
+        lines.append('chunklist.m3u8')
+    
+    return '\n'.join(lines) + '\n'
+
+
 async def main():
     check_bindeps_present()
     load_filter_dict()  # Load filter dictionary at startup
@@ -574,46 +631,10 @@ async def main():
     if modified_base_playlist.playlists:
         modified_base_playlist.playlists[0].uri = 'chunklist.m3u8' # Removed path join
 
-    if not args.hard_subs and modified_base_playlist.playlists:
-        # Only add subtitle tracks for master playlists
-        if args.both_tracks:
-            # Add both subtitle tracks
-            subtitle_trans = m3u8.Media(uri='subs.trans.m3u8',
-                                      type='SUBTITLES', group_id='Subtitle',
-                                      language='en', name='English',
-                                      autoselect='NO')
-            
-            subtitle_orig = m3u8.Media(uri='subs.orig.m3u8',
-                                     type='SUBTITLES', group_id='Subtitle',
-                                     language=args.language or 'ru', 
-                                     name={'en': 'English', 'ru': 'Russian'}.get(args.language or 'ru', 'Original'),
-                                     autoselect='NO')
-            
-            modified_base_playlist.add_media(subtitle_trans)
-            modified_base_playlist.add_media(subtitle_orig)
-            modified_base_playlist.playlists[0].media += [subtitle_trans, subtitle_orig]
-        else:
-            # Original single subtitle track logic
-            if not args.transcribe:
-                subtitle_lang = 'en'
-                subtitle_name = 'English'
-            else:
-                subtitle_lang = args.language or 'en'
-            subtitle_name = {
-                'en': 'English',
-                'ru': 'Russian',
-                'nl': 'Dutch',
-            }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
-
-            subtitle_list = m3u8.Media(uri='subs.m3u8',
-                                     type='SUBTITLES', group_id='Subtitle',
-                                     language=subtitle_lang, name=subtitle_name,
-                                     autoselect='NO')
-            modified_base_playlist.add_media(subtitle_list)
-            modified_base_playlist.playlists[0].media += [subtitle_list]
-
+    # Generate custom playlist with proper HLS v5 formatting and attribute ordering
     global BASE_PLAYLIST_SER
-    BASE_PLAYLIST_SER = bytes(modified_base_playlist.dumps(), 'ascii')
+    custom_playlist = generate_custom_playlist(modified_base_playlist, args)
+    BASE_PLAYLIST_SER = bytes(custom_playlist, 'ascii')
 
     # Set up signal handlers
     for sig in (signal.SIGINT, signal.SIGTERM):
