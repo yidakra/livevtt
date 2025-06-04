@@ -85,6 +85,12 @@ class HTTPHandler(BaseHTTPRequestHandler):
             response_content = CHUNK_LIST_SER
         elif self.path == '/subs.m3u8':
             response_content = SUB_LIST_SER
+        elif self.path.startswith('/subs_') and self.path.endswith('.m3u8'):
+            # Handle language-specific subtitle playlists like /subs_en.m3u8, /subs_ru.m3u8
+            if self.path == '/subs_en.m3u8':
+                response_content = SUB_LIST_TRANS_SER
+            else:
+                response_content = SUB_LIST_ORIG_SER
         elif self.path == '/subs.trans.m3u8':
             response_content = SUB_LIST_TRANS_SER
         elif self.path == '/subs.orig.m3u8':
@@ -570,6 +576,9 @@ async def main():
 
     modified_base_playlist = copy.deepcopy(base_playlist)
     
+    # Set HLS version to 5 for subtitle support
+    modified_base_playlist.version = 5
+    
     # Only modify playlist URI if it's a master playlist
     if modified_base_playlist.playlists:
         modified_base_playlist.playlists[0].uri = 'chunklist.m3u8' # Removed path join
@@ -577,23 +586,24 @@ async def main():
     if not args.hard_subs and modified_base_playlist.playlists:
         # Only add subtitle tracks for master playlists
         if args.both_tracks:
-            # Add both subtitle tracks
-            subtitle_trans = m3u8.Media(uri='subs.trans.m3u8',
+            # Add both subtitle tracks with language-specific URI naming
+            subtitle_trans = m3u8.Media(uri='subs_en.m3u8',
                                       type='SUBTITLES', group_id='Subtitle',
                                       language='en', name='English',
                                       autoselect='NO')
             
-            subtitle_orig = m3u8.Media(uri='subs.orig.m3u8',
+            orig_lang = args.language or 'ru'
+            subtitle_orig = m3u8.Media(uri=f'subs_{orig_lang}.m3u8',
                                      type='SUBTITLES', group_id='Subtitle',
-                                     language=args.language or 'ru', 
-                                     name={'en': 'English', 'ru': 'Russian'}.get(args.language or 'ru', 'Original'),
+                                     language=orig_lang, 
+                                     name={'en': 'English', 'ru': 'Russian'}.get(orig_lang, 'Original'),
                                      autoselect='NO')
             
             modified_base_playlist.add_media(subtitle_trans)
             modified_base_playlist.add_media(subtitle_orig)
             modified_base_playlist.playlists[0].media += [subtitle_trans, subtitle_orig]
         else:
-            # Original single subtitle track logic
+            # Original single subtitle track logic with language-specific URI naming
             if not args.transcribe:
                 subtitle_lang = 'en'
                 subtitle_name = 'English'
@@ -605,7 +615,7 @@ async def main():
                 'nl': 'Dutch',
             }.get(subtitle_lang.lower(), subtitle_lang.capitalize())
 
-            subtitle_list = m3u8.Media(uri='subs.m3u8',
+            subtitle_list = m3u8.Media(uri=f'subs_{subtitle_lang}.m3u8',
                                      type='SUBTITLES', group_id='Subtitle',
                                      language=subtitle_lang, name=subtitle_name,
                                      autoselect='NO')
