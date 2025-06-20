@@ -174,8 +174,10 @@ async def download_chunk(session: aiohttp.ClientSession, base_uri: str, segment:
             raise e
         else:
             logger.info(f'Downloaded segment {chunk_uri}')
-
-    return chunk_fp.name
+            return chunk_fp.name
+    else:
+        # Chunk already exists, return the existing path
+        return translated_chunk_paths[chunk_uri]
 
 
 def load_filter_dict():
@@ -450,32 +452,58 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                     ffmpeg_cmd.extend(['-map', f'{subtitle_input_idx}:0'])
                 
                 # Add encoding options
-                ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'webvtt'])
+                ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'cea_608'])
                 
-                # Add language metadata
+                # Add language metadata and subtitle disposition
                 if segments_orig:
                     orig_lang = args.language or 'rus'
                     ffmpeg_cmd.extend(['-metadata:s:s:' + str(subtitle_stream_idx), f'language={orig_lang}'])
+                    ffmpeg_cmd.extend(['-metadata:s:s:' + str(subtitle_stream_idx), f'title=Original ({orig_lang.upper()})'])
                     subtitle_stream_idx += 1
                 if segments_trans:
                     ffmpeg_cmd.extend(['-metadata:s:s:' + str(subtitle_stream_idx), 'language=eng'])
+                    ffmpeg_cmd.extend(['-metadata:s:s:' + str(subtitle_stream_idx), 'title=English'])
                 
-                # Output options
+                # Output options with TS-specific parameters for live streaming
                 chunk_fp_name_split = os.path.splitext(chunk_name)
                 embedded_chunk_name = chunk_fp_name_split[0] + '_embedded' + chunk_fp_name_split[1]
-                ffmpeg_cmd.extend(['-f', 'mpegts', '-copyts', '-muxpreload', '0', '-muxdelay', '0', '-loglevel', 'quiet', embedded_chunk_name])
+                ffmpeg_cmd.extend([
+                    '-f', 'mpegts', 
+                    '-copyts', 
+                    '-muxpreload', '0', 
+                    '-muxdelay', '0',
+                    '-mpegts_service_type', 'digital_tv',  # Help Wowza recognize service type
+                    '-mpegts_pmt_start_pid', '0x1000',     # Explicit PMT PID
+                    '-loglevel', 'quiet', 
+                    embedded_chunk_name
+                ])
                 
                 # Execute FFmpeg command
                 if args.debug:
                     logger.debug(f"Full FFmpeg command: {' '.join(ffmpeg_cmd)}")
                 else:
                     logger.info(f"Executing FFmpeg for embedded subtitles: {' '.join(ffmpeg_cmd[:10])}...")
-                ffmpeg_proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd)
-                returncode = await ffmpeg_proc.wait()
-                if returncode != 0:
-                    logger.error(f"FFmpeg failed for {segment_uri} with return code {returncode}")
+                ffmpeg_proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd, stderr=asyncio.subprocess.PIPE)
+                _, stderr = await ffmpeg_proc.communicate()
+                if ffmpeg_proc.returncode != 0:
+                    logger.error(f"FFmpeg failed for {segment_uri} with return code {ffmpeg_proc.returncode}")
+                    if stderr:
+                        logger.error(f"FFmpeg stderr: {stderr.decode()}")
                 else:
                     logger.info(f"FFmpeg completed for {segment_uri}")
+                    # Verify the output file has subtitle streams
+                    if args.debug:
+                        verify_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', embedded_chunk_name]
+                        try:
+                            verify_proc = await asyncio.create_subprocess_exec(*verify_cmd, stdout=asyncio.subprocess.PIPE)
+                            stdout, _ = await verify_proc.communicate()
+                            if verify_proc.returncode == 0:
+                                import json
+                                probe_data = json.loads(stdout.decode())
+                                subtitle_streams = [s for s in probe_data.get('streams', []) if s.get('codec_type') == 'subtitle']
+                                logger.debug(f"Embedded file has {len(subtitle_streams)} subtitle streams: {[s.get('tags', {}).get('language', 'unknown') for s in subtitle_streams]}")
+                        except Exception as e:
+                            logger.debug(f"Failed to verify embedded subtitles: {e}")
                 
                 # Cleanup SRT files
                 for srt_file in srt_files:
@@ -505,9 +533,12 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                         'ffmpeg', '-hwaccel', 'auto', '-i', chunk_name,
                         '-f', 'srt', '-i', srt_file.name,
                         '-map', '0:v:0', '-map', '0:a:0', '-map', '1:0',
-                        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'webvtt',
+                        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'cea_608',
                         '-metadata:s:s:0', f'language={lang_code}',
+                        '-metadata:s:s:0', f'title=Subtitles ({lang_code.upper()})',
                         '-f', 'mpegts', '-copyts', '-muxpreload', '0', '-muxdelay', '0',
+                        '-mpegts_service_type', 'digital_tv',  # Help Wowza recognize service type
+                        '-mpegts_pmt_start_pid', '0x1000',     # Explicit PMT PID
                         '-loglevel', 'quiet', embedded_chunk_name
                     ]
                     
@@ -515,12 +546,27 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                         logger.debug(f"🔧 Full single track FFmpeg command: {' '.join(ffmpeg_cmd)}")
                     else:
                         logger.info(f"🔧 Executing single track FFmpeg: {' '.join(ffmpeg_cmd[:8])}...")
-                    ffmpeg_proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd)
-                    returncode = await ffmpeg_proc.wait()
-                    if returncode != 0:
-                        logger.error(f"Single track FFmpeg failed for {segment_uri} with return code {returncode}")
+                    ffmpeg_proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd, stderr=asyncio.subprocess.PIPE)
+                    _, stderr = await ffmpeg_proc.communicate()
+                    if ffmpeg_proc.returncode != 0:
+                        logger.error(f"Single track FFmpeg failed for {segment_uri} with return code {ffmpeg_proc.returncode}")
+                        if stderr:
+                            logger.error(f"Single track FFmpeg stderr: {stderr.decode()}")
                     else:
                         logger.info(f"Single track FFmpeg completed for {segment_uri}")
+                        # Verify the output file has subtitle streams
+                        if args.debug:
+                            verify_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', embedded_chunk_name]
+                            try:
+                                verify_proc = await asyncio.create_subprocess_exec(*verify_cmd, stdout=asyncio.subprocess.PIPE)
+                                stdout, _ = await verify_proc.communicate()
+                                if verify_proc.returncode == 0:
+                                    import json
+                                    probe_data = json.loads(stdout.decode())
+                                    subtitle_streams = [s for s in probe_data.get('streams', []) if s.get('codec_type') == 'subtitle']
+                                    logger.debug(f"Single track embedded file has {len(subtitle_streams)} subtitle streams: {[s.get('tags', {}).get('language', 'unknown') for s in subtitle_streams]}")
+                            except Exception as e:
+                                logger.debug(f"Failed to verify single track embedded subtitles: {e}")
                     
                     # Cleanup
                     try:
