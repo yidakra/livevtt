@@ -371,7 +371,7 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                                          username=args.rtmp_username if args.rtmp_username else "admin",
                                          password=args.rtmp_password if args.rtmp_password else "password")
         
-        if not args.hard_subs:
+        if not args.hard_subs and not args.embedded_subs:
             vtt_uri = os.path.splitext(segment_uri)[0]
             if segments_orig:  # Only add if there are segments after filtering
                 chunk_to_vtt_orig[vtt_uri + '.orig.vtt'] = segments_to_webvtt(segments_orig, start_ts)
@@ -401,11 +401,137 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                                          username=args.rtmp_username if args.rtmp_username else "admin",
                                          password=args.rtmp_password if args.rtmp_password else "password")
         
-        if not args.hard_subs:
+        if not args.hard_subs and not args.embedded_subs:
             vtt_uri = os.path.splitext(segment_uri)[0] + '.vtt'
             if segments:  # Only add if there are segments after filtering
                 chunk_to_vtt[vtt_uri] = segments_to_webvtt(segments, start_ts)
             return segment_uri, chunk_name
+
+    if args.embedded_subs:
+        logger.info(f"Starting embedded subtitles processing for {segment_uri}")
+        # Embedded subtitles logic
+        if args.both_tracks:
+            logger.info(f"Both tracks mode: orig={len(segments_orig) if 'segments_orig' in locals() else 0}, trans={len(segments_trans) if 'segments_trans' in locals() else 0}")
+            # Both tracks mode: embed both original and translated subtitles
+            if segments_orig or segments_trans:
+                srt_files = []
+                ffmpeg_cmd = ['ffmpeg', '-hwaccel', 'auto', '-i', chunk_name]
+                
+                # Add SRT inputs and prepare temp files
+                if segments_orig:
+                    async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix='.orig.srt') as srt_orig_file:
+                        srt_content_orig = segments_to_srt(segments_orig, start_ts)
+                        await srt_orig_file.write(bytes(srt_content_orig, 'utf-8'))
+                        await srt_orig_file.close()
+                        srt_files.append(srt_orig_file.name)
+                        ffmpeg_cmd.extend(['-f', 'srt', '-i', srt_orig_file.name])
+                
+                if segments_trans:
+                    async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix='.trans.srt') as srt_trans_file:
+                        srt_content_trans = segments_to_srt(segments_trans, start_ts)
+                        await srt_trans_file.write(bytes(srt_content_trans, 'utf-8'))
+                        await srt_trans_file.close()
+                        srt_files.append(srt_trans_file.name)
+                        ffmpeg_cmd.extend(['-f', 'srt', '-i', srt_trans_file.name])
+                
+                # Build mapping - map video and audio from input 0
+                ffmpeg_cmd.extend(['-map', '0:v:0'])  # Video stream
+                ffmpeg_cmd.extend(['-map', '0:a:0'])  # Audio stream
+                
+                # Map subtitle streams from SRT inputs
+                subtitle_input_idx = 1  # Start from input 1 (first SRT file)
+                subtitle_stream_idx = 0  # For metadata indexing
+                
+                if segments_orig:
+                    ffmpeg_cmd.extend(['-map', f'{subtitle_input_idx}:0'])
+                    subtitle_input_idx += 1
+                    
+                if segments_trans:
+                    ffmpeg_cmd.extend(['-map', f'{subtitle_input_idx}:0'])
+                
+                # Add encoding options
+                ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'webvtt'])
+                
+                # Add language metadata
+                if segments_orig:
+                    orig_lang = args.language or 'rus'
+                    ffmpeg_cmd.extend(['-metadata:s:s:' + str(subtitle_stream_idx), f'language={orig_lang}'])
+                    subtitle_stream_idx += 1
+                if segments_trans:
+                    ffmpeg_cmd.extend(['-metadata:s:s:' + str(subtitle_stream_idx), 'language=eng'])
+                
+                # Output options
+                chunk_fp_name_split = os.path.splitext(chunk_name)
+                embedded_chunk_name = chunk_fp_name_split[0] + '_embedded' + chunk_fp_name_split[1]
+                ffmpeg_cmd.extend(['-f', 'mpegts', '-copyts', '-muxpreload', '0', '-muxdelay', '0', '-loglevel', 'quiet', embedded_chunk_name])
+                
+                # Execute FFmpeg command
+                if args.debug:
+                    logger.debug(f"Full FFmpeg command: {' '.join(ffmpeg_cmd)}")
+                else:
+                    logger.info(f"Executing FFmpeg for embedded subtitles: {' '.join(ffmpeg_cmd[:10])}...")
+                ffmpeg_proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd)
+                returncode = await ffmpeg_proc.wait()
+                if returncode != 0:
+                    logger.error(f"FFmpeg failed for {segment_uri} with return code {returncode}")
+                else:
+                    logger.info(f"FFmpeg completed for {segment_uri}")
+                
+                # Cleanup SRT files
+                for srt_file in srt_files:
+                    try:
+                        os.unlink(srt_file)
+                    except OSError:
+                        pass
+                
+                os.unlink(chunk_name)
+                return segment_uri, embedded_chunk_name
+        else:
+            logger.info(f"Single track mode: segments={len(segments) if 'segments' in locals() else 0}")
+            # Single track mode: embed one subtitle track
+            if segments:
+                async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix='.srt') as srt_file:
+                    srt_content = segments_to_srt(segments, start_ts)
+                    await srt_file.write(bytes(srt_content, 'utf-8'))
+                    await srt_file.close()
+                    
+                    chunk_fp_name_split = os.path.splitext(chunk_name)
+                    embedded_chunk_name = chunk_fp_name_split[0] + '_embedded' + chunk_fp_name_split[1]
+                    
+                    # Determine language for metadata
+                    lang_code = 'eng' if not args.transcribe else (args.language or 'eng')
+                    
+                    ffmpeg_cmd = [
+                        'ffmpeg', '-hwaccel', 'auto', '-i', chunk_name,
+                        '-f', 'srt', '-i', srt_file.name,
+                        '-map', '0:v:0', '-map', '0:a:0', '-map', '1:0',
+                        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'webvtt',
+                        '-metadata:s:s:0', f'language={lang_code}',
+                        '-f', 'mpegts', '-copyts', '-muxpreload', '0', '-muxdelay', '0',
+                        '-loglevel', 'quiet', embedded_chunk_name
+                    ]
+                    
+                    if args.debug:
+                        logger.debug(f"🔧 Full single track FFmpeg command: {' '.join(ffmpeg_cmd)}")
+                    else:
+                        logger.info(f"🔧 Executing single track FFmpeg: {' '.join(ffmpeg_cmd[:8])}...")
+                    ffmpeg_proc = await asyncio.create_subprocess_exec(*ffmpeg_cmd)
+                    returncode = await ffmpeg_proc.wait()
+                    if returncode != 0:
+                        logger.error(f"Single track FFmpeg failed for {segment_uri} with return code {returncode}")
+                    else:
+                        logger.info(f"Single track FFmpeg completed for {segment_uri}")
+                    
+                    # Cleanup
+                    try:
+                        os.unlink(srt_file.name)
+                    except OSError:
+                        pass
+                    
+                    os.unlink(chunk_name)
+                    return segment_uri, embedded_chunk_name
+        
+        return segment_uri, chunk_name
 
     if args.hard_subs:
         # Original hard subs logic with filtering
@@ -485,6 +611,8 @@ async def main():
                         help='URL of the HLS stream (defaults to TVRain stream)')
     parser.add_argument('-s', '--hard-subs', action='store_true',
                         help='Set if you want the subtitles to be baked into the stream itself')
+    parser.add_argument('-e', '--embedded-subs', action='store_true',
+                        help='Embed subtitles as metadata streams within TS segments (experimental)')
     parser.add_argument('-l', '--bind-address', type=str, help='The IP address to bind to '
                                                                '(defaults to 127.0.0.1)', default='127.0.0.1')
     parser.add_argument('-p', '--bind-port', type=int, help='The port to bind to (defaults to 8000)',
@@ -530,10 +658,24 @@ async def main():
 
     args = parser.parse_args()
 
+    # Validate subtitle mode options
+    subtitle_modes = sum([args.hard_subs, args.embedded_subs])
+    if subtitle_modes > 1:
+        logger.error("Cannot use multiple subtitle modes simultaneously. Choose only one of: --hard-subs, --embedded-subs, or default (WebVTT sidecar)")
+        sys.exit(1)
+
     # Set logging level based on debug flag
     if args.debug:
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug logging enabled")
+
+    # Log subtitle mode
+    if args.hard_subs:
+        logger.info("Using hard-burned subtitles mode")
+    elif args.embedded_subs:
+        logger.info("Using embedded subtitles mode (experimental)")
+    else:
+        logger.info("Using WebVTT sidecar subtitles mode (default)")
 
     # If custom vocabulary is disabled, clear the initial prompt
     if not args.custom_vocabulary:
@@ -591,8 +733,8 @@ async def main():
     if modified_base_playlist.playlists:
         modified_base_playlist.playlists[0].uri = 'chunklist.m3u8' # Removed path join
 
-    if not args.hard_subs and modified_base_playlist.playlists:
-        # Only add subtitle tracks for master playlists
+    if not args.hard_subs and not args.embedded_subs and modified_base_playlist.playlists:
+        # Only add subtitle tracks for master playlists when using WebVTT sidecar mode
         if args.both_tracks:
             # Add both subtitle tracks with language-specific URI naming
             subtitle_trans = m3u8.Media(uri='subs_en.m3u8',
@@ -696,7 +838,8 @@ async def main():
                 global CHUNK_LIST_SER
                 CHUNK_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
 
-                if not args.hard_subs:
+                if not args.hard_subs and not args.embedded_subs:
+                    # Only create WebVTT playlists when using sidecar subtitle mode
                     if args.both_tracks:
                         # Create two separate subtitle playlists
                         trans_chunk_list = copy.deepcopy(chunk_list)
