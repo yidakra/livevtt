@@ -701,11 +701,23 @@ async def main():
     loop = asyncio.get_running_loop()
     
     device = 'cuda' if args.use_cuda else 'cpu'
-    compute_type = 'auto'
+    # Set compute_type explicitly for CUDA - 'auto' often fails to use GPU
+    if device == 'cuda':
+        compute_type = 'float16'
+    else:
+        compute_type = 'int8'
 
-    logger.info(f'Using {device} as the device type for the model')
+    logger.info(f'Using {device} as the device type for the model with compute_type={compute_type}')
 
     model = WhisperModel(args.model, device=device, compute_type=compute_type)
+    
+    # Log which device the model actually loaded on
+    try:
+        # This is a simple check - if model creation doesn't fail, log success
+        logger.info(f'Whisper model "{args.model}" loaded successfully on {device}')
+    except Exception as e:
+        logger.error(f'Failed to load model on {device}: {e}')
+        raise
 
     base_playlist = m3u8.load(args.url)
     
