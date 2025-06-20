@@ -471,7 +471,7 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                     ffmpeg_cmd.extend(['-map', f'{subtitle_input_idx}:0'])
                 
                 # Add encoding options
-                ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'cea_608'])
+                ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'srt'])
                 
                 # Add language metadata and subtitle disposition
                 if segments_orig:
@@ -508,6 +508,8 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                     logger.error(f"FFmpeg failed for {segment_uri} with return code {ffmpeg_proc.returncode}")
                     if stderr:
                         logger.error(f"FFmpeg stderr: {stderr.decode()}")
+                    # Return original chunk on failure
+                    return segment_uri, chunk_name
                 else:
                     logger.info(f"FFmpeg completed for {segment_uri}")
                     # Verify the output file has subtitle streams
@@ -552,7 +554,7 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                         'ffmpeg', '-hwaccel', 'auto', '-i', chunk_name,
                         '-f', 'srt', '-i', srt_file.name,
                         '-map', '0:v:0', '-map', '0:a:0', '-map', '1:0',
-                        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'cea_608',
+                        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'srt',
                         '-metadata:s:s:0', f'language={lang_code}',
                         '-metadata:s:s:0', f'title=Subtitles ({lang_code.upper()})',
                         '-f', 'mpegts', '-copyts', '-muxpreload', '0', '-muxdelay', '0',
@@ -571,6 +573,8 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                         logger.error(f"Single track FFmpeg failed for {segment_uri} with return code {ffmpeg_proc.returncode}")
                         if stderr:
                             logger.error(f"Single track FFmpeg stderr: {stderr.decode()}")
+                        # Return original chunk on failure  
+                        return segment_uri, chunk_name
                     else:
                         logger.info(f"Single track FFmpeg completed for {segment_uri}")
                         # Verify the output file has subtitle streams
@@ -885,7 +889,11 @@ async def main():
 
                 for translated_chunk_name, translated_chunk_path in dict(translated_chunk_paths).items():
                     if translated_chunk_name not in current_segments:
-                        os.unlink(translated_chunk_path)
+                        try:
+                            if os.path.exists(translated_chunk_path):
+                                os.unlink(translated_chunk_path)
+                        except OSError as e:
+                            logger.warning(f"Failed to cleanup old chunk {translated_chunk_path}: {e}")
                         del translated_chunk_paths[translated_chunk_name]
 
                 if not args.hard_subs:
