@@ -104,14 +104,33 @@ class HTTPHandler(BaseHTTPRequestHandler):
         elif self.path == '/subs.orig.m3u8':
             response_content = SUB_LIST_ORIG_SER
         elif self.path in translated_chunk_paths:
-            self.send_response(200)
-            self.send_header('Content-Type', 'video/mp2t')
-            self.send_header('Content-Length', str(os.path.getsize(translated_chunk_paths[self.path])))
-            self.end_headers()
+            try:
+                chunk_path = translated_chunk_paths[self.path]
+                if os.path.exists(chunk_path):
+                    try:
+                        # Get file size first to avoid race condition
+                        file_size = os.path.getsize(chunk_path)
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'video/mp2t')
+                        self.send_header('Content-Length', str(file_size))
+                        self.end_headers()
 
-            with open(translated_chunk_paths[self.path], 'rb') as f:
-                shutil.copyfileobj(f, self.wfile)
-
+                        if send_body:
+                            with open(chunk_path, 'rb') as f:
+                                shutil.copyfileobj(f, self.wfile)
+                    except (IOError, OSError, FileNotFoundError) as e:
+                        # File was deleted between existence check and access
+                        logger.warning(f"Chunk file disappeared during access {chunk_path}: {e}")
+                        self.send_response(404)
+                        self.end_headers()
+                else:
+                    logger.warning(f"Chunk file not found: {chunk_path}")
+                    self.send_response(404)
+                    self.end_headers()
+            except (IOError, OSError) as e:
+                logger.error(f"Error serving chunk {self.path}: {e}")
+                self.send_response(500)
+                self.end_headers()
             return
         elif self.path in chunk_to_vtt or self.path in chunk_to_vtt_trans or self.path in chunk_to_vtt_orig:
             vtt_content = chunk_to_vtt.get(self.path) or chunk_to_vtt_trans.get(self.path) or chunk_to_vtt_orig.get(self.path)
@@ -833,16 +852,19 @@ async def main():
     global BASE_PLAYLIST_SER
     BASE_PLAYLIST_SER = bytes(modified_base_playlist.dumps(), 'ascii')
 
-    # Set up signal handlers
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(cleanup(session, chunk_dir, prev_cwd, stop_event)))
-
     http_thread = threading.Thread(target=http_listener, daemon=True, args=((args.bind_address, args.bind_port), stop_event))
     http_thread.start()
 
     async with aiofiles.tempfile.TemporaryDirectory() as chunk_dir:
         prev_cwd = os.getcwd()
         os.chdir(chunk_dir)
+        
+        # Set up signal handlers with proper scope
+        def signal_handler():
+            asyncio.create_task(cleanup(session, chunk_dir, prev_cwd, stop_event))
+        
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, signal_handler)
 
         try:
             while not stop_event.is_set():
@@ -867,9 +889,20 @@ async def main():
                         del translated_chunk_paths[translated_chunk_name]
 
                 if not args.hard_subs:
+                    # Clean up WebVTT files for segments no longer in playlist
                     for translated_uri, translated_chunk_path in dict(chunk_to_vtt).items():
                         if os.path.splitext(translated_uri)[0] + '.ts' not in current_segments:
                             del chunk_to_vtt[translated_uri]
+                    
+                    # Clean up dual-track VTT dictionaries
+                    if args.both_tracks:
+                        for translated_uri in list(chunk_to_vtt_trans.keys()):
+                            if os.path.splitext(translated_uri)[0].replace('.trans', '') + '.ts' not in current_segments:
+                                del chunk_to_vtt_trans[translated_uri]
+                        
+                        for translated_uri in list(chunk_to_vtt_orig.keys()):
+                            if os.path.splitext(translated_uri)[0].replace('.orig', '') + '.ts' not in current_segments:
+                                del chunk_to_vtt_orig[translated_uri]
 
                 chunks_to_translate = {}
 
@@ -883,10 +916,19 @@ async def main():
                     if normalised_segment_uri not in translated_chunk_paths:
                         chunks_to_translate[normalised_segment_uri] = chunk_name
 
-                for segment_uri, chunk_name in await asyncio.gather(*[transcribe_chunk(args, model, chunk_dir,
-                                                                                       segment_uri, chunk_name)
-                                                                      for segment_uri, chunk_name in
-                                                                      chunks_to_translate.items()]):
+                # Process transcription with proper error handling
+                transcription_results = await asyncio.gather(*[transcribe_chunk(args, model, chunk_dir,
+                                                                               segment_uri, chunk_name)
+                                                              for segment_uri, chunk_name in
+                                                              chunks_to_translate.items()], return_exceptions=True)
+                
+                for i, result in enumerate(transcription_results):
+                    if isinstance(result, Exception):
+                        segment_uri = list(chunks_to_translate.keys())[i]
+                        logger.error(f"Transcription failed for {segment_uri}: {result}")
+                        continue
+                    
+                    segment_uri, chunk_name = result
                     chunks_to_translate[segment_uri] = chunk_name
 
                 for segment in chunk_list.segments:
