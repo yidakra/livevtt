@@ -985,6 +985,9 @@ async def main():
                 # Ensure media playlist version supports EXT-X-MAP when using fMP4
                 if args.mp4_container:
                     chunk_list.version = max(7, chunk_list.version or 0)
+                else:
+                    # HLS with WebVTT requires at least version 4
+                    chunk_list.version = max(4, chunk_list.version or 0)
 
                 playlist_str = chunk_list.dumps()
                 # Inject EXT-X-MAP for mp4 container
