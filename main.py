@@ -51,6 +51,14 @@ RTMP_ENABLED = False
 RTMP_URL = None
 RTMP_QUEUE = None
 
+# New global variable for container extension
+CONTAINER_EXT = '.ts'
+
+# Globals for MP4 init segment
+INIT_SEGMENT_PATH = None  # Filesystem path of generated init.mp4
+INIT_SEGMENT_URI = '/init.mp4'
+INIT_SEGMENT_CREATED = False
+
 if sys.version_info < (3, 10):
     print(f'This script needs to be ran under Python 3.10 at minimum.')
     sys.exit(1)
@@ -103,9 +111,18 @@ class HTTPHandler(BaseHTTPRequestHandler):
             response_content = SUB_LIST_TRANS_SER
         elif self.path == '/subs.orig.m3u8':
             response_content = SUB_LIST_ORIG_SER
-        elif self.path in translated_chunk_paths:
+        elif self.path == INIT_SEGMENT_URI and INIT_SEGMENT_CREATED and INIT_SEGMENT_PATH and os.path.exists(INIT_SEGMENT_PATH):
             self.send_response(200)
-            self.send_header('Content-Type', 'video/mp2t')
+            self.send_header('Content-Type', 'video/mp4')
+            self.send_header('Content-Length', str(os.path.getsize(INIT_SEGMENT_PATH)))
+            self.end_headers()
+            with open(INIT_SEGMENT_PATH, 'rb') as f:
+                shutil.copyfileobj(f, self.wfile)
+            return
+        elif self.path in translated_chunk_paths:
+            content_type = 'video/mp4' if self.path.endswith('.mp4') else 'video/mp2t'
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(os.path.getsize(translated_chunk_paths[self.path])))
             self.end_headers()
 
@@ -143,7 +160,8 @@ def http_listener(server_address: Tuple[str, int], stop_event: threading.Event):
 
 
 def normalise_chunk_uri(chunk_uri: str) -> str:
-    chunk_uri = os.path.splitext(chunk_uri)[0] + '.ts'
+    # Use dynamic extension (.ts by default, .mp4 when mp4_container is enabled)
+    chunk_uri = os.path.splitext(chunk_uri)[0] + CONTAINER_EXT
     chunk_uri = chunk_uri.replace('../', '').replace('./', '')
     return '/' + chunk_uri
 
@@ -451,8 +469,11 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                 if segments_trans:
                     ffmpeg_cmd.extend(['-map', f'{subtitle_input_idx}:0'])
                 
-                # Add encoding options
-                ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'cea_608'])
+                # Encoding options for subtitle stream
+                if args.mp4_container:
+                    ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'mov_text'])
+                else:
+                    ffmpeg_cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:s', 'dvb_subtitle'])
                 
                 # Add language metadata and subtitle disposition
                 if segments_orig:
@@ -466,17 +487,31 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                 
                 # Output options with TS-specific parameters for live streaming
                 chunk_fp_name_split = os.path.splitext(chunk_name)
-                embedded_chunk_name = chunk_fp_name_split[0] + '_embedded' + chunk_fp_name_split[1]
-                ffmpeg_cmd.extend([
-                    '-f', 'mpegts', 
-                    '-copyts', 
-                    '-muxpreload', '0', 
-                    '-muxdelay', '0',
-                    '-mpegts_service_type', 'digital_tv',  # Help Wowza recognize service type
-                    '-mpegts_pmt_start_pid', '0x1000',     # Explicit PMT PID
-                    '-loglevel', 'quiet', 
-                    embedded_chunk_name
-                ])
+                if args.mp4_container:
+                    embedded_chunk_name = chunk_fp_name_split[0] + '_embedded.mp4'
+                    ffmpeg_cmd.extend([
+                        '-bsf:a', 'aac_adtstoasc',
+                        '-copyts', '-muxpreload', '0', '-muxdelay', '0',
+                        '-movflags', '+faststart+frag_keyframe+empty_moov+omit_tfhd_offset',
+                        '-f', 'mp4',
+                        '-loglevel', 'quiet',
+                        embedded_chunk_name
+                    ])
+                else:
+                    embedded_chunk_name = chunk_fp_name_split[0] + '_embedded' + chunk_fp_name_split[1]
+                    ffmpeg_cmd.extend([
+                        '-bsf:a', 'aac_adtstoasc',
+                        '-copyts', '-muxpreload', '0', '-muxdelay', '0',
+                        '-movflags', '+faststart+frag_keyframe+empty_moov+omit_tfhd_offset',
+                        '-f', 'mpegts', 
+                        '-copyts', 
+                        '-muxpreload', '0', 
+                        '-muxdelay', '0',
+                        '-mpegts_service_type', 'digital_tv',  # Help Wowza recognize service type
+                        '-mpegts_pmt_start_pid', '0x1000',     # Explicit PMT PID
+                        '-loglevel', 'quiet', 
+                        embedded_chunk_name
+                    ])
                 
                 # Execute FFmpeg command
                 if args.debug:
@@ -491,6 +526,28 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                         logger.error(f"FFmpeg stderr: {stderr.decode()}")
                 else:
                     logger.info(f"FFmpeg completed for {segment_uri}")
+                    # Generate init.mp4 only once when using fragmented MP4 segments
+                    if args.mp4_container:
+                        global INIT_SEGMENT_CREATED, INIT_SEGMENT_PATH
+                        if not INIT_SEGMENT_CREATED:
+                            try:
+                                INIT_SEGMENT_PATH = os.path.join(chunk_dir, 'init.mp4')
+                                init_cmd = [
+                                    'ffmpeg', '-i', embedded_chunk_name,
+                                    '-c', 'copy', '-map', '0',
+                                    '-movflags', '+faststart+empty_moov',
+                                    '-f', 'mp4', '-t', '0', INIT_SEGMENT_PATH,
+                                    '-y', '-loglevel', 'quiet'
+                                ]
+                                if args.debug:
+                                    logger.debug(f"Generating init.mp4: {' '.join(init_cmd)}")
+                                init_proc = await asyncio.create_subprocess_exec(*init_cmd)
+                                await init_proc.communicate()
+                                if init_proc.returncode == 0 and os.path.exists(INIT_SEGMENT_PATH):
+                                    INIT_SEGMENT_CREATED = True
+                                    logger.info("init.mp4 generated and ready to serve")
+                            except Exception as e:
+                                logger.error(f"Failed to generate init.mp4: {e}")
                     # Verify the output file has subtitle streams
                     if args.debug:
                         verify_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', embedded_chunk_name]
@@ -533,13 +590,12 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                         'ffmpeg', '-hwaccel', 'auto', '-i', chunk_name,
                         '-f', 'srt', '-i', srt_file.name,
                         '-map', '0:v:0', '-map', '0:a:0', '-map', '1:0',
-                        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'cea_608',
+                        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'mov_text' if args.mp4_container else 'dvb_subtitle',
                         '-metadata:s:s:0', f'language={lang_code}',
                         '-metadata:s:s:0', f'title=Subtitles ({lang_code.upper()})',
-                        '-f', 'mpegts', '-copyts', '-muxpreload', '0', '-muxdelay', '0',
-                        '-mpegts_service_type', 'digital_tv',  # Help Wowza recognize service type
-                        '-mpegts_pmt_start_pid', '0x1000',     # Explicit PMT PID
-                        '-loglevel', 'quiet', embedded_chunk_name
+                        # Container/flags depending on mp4_container
+                        *(['-bsf:a', 'aac_adtstoasc', '-copyts', '-muxpreload', '0', '-muxdelay', '0', '-movflags', '+faststart+frag_keyframe+empty_moov+omit_tfhd_offset', '-f', 'mp4', '-loglevel', 'quiet'] if args.mp4_container else ['-f', 'mpegts', '-copyts', '-muxpreload', '0', '-muxdelay', '0', '-mpegts_service_type', 'digital_tv', '-mpegts_pmt_start_pid', '0x1000', '-loglevel', 'quiet']),
+                        embedded_chunk_name
                     ]
                     
                     if args.debug:
@@ -554,19 +610,27 @@ async def transcribe_chunk(args: argparse.Namespace, model: WhisperModel, chunk_
                             logger.error(f"Single track FFmpeg stderr: {stderr.decode()}")
                     else:
                         logger.info(f"Single track FFmpeg completed for {segment_uri}")
-                        # Verify the output file has subtitle streams
-                        if args.debug:
-                            verify_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', embedded_chunk_name]
-                            try:
-                                verify_proc = await asyncio.create_subprocess_exec(*verify_cmd, stdout=asyncio.subprocess.PIPE)
-                                stdout, _ = await verify_proc.communicate()
-                                if verify_proc.returncode == 0:
-                                    import json
-                                    probe_data = json.loads(stdout.decode())
-                                    subtitle_streams = [s for s in probe_data.get('streams', []) if s.get('codec_type') == 'subtitle']
-                                    logger.debug(f"Single track embedded file has {len(subtitle_streams)} subtitle streams: {[s.get('tags', {}).get('language', 'unknown') for s in subtitle_streams]}")
-                            except Exception as e:
-                                logger.debug(f"Failed to verify single track embedded subtitles: {e}")
+                        # Generate init.mp4 only once when using fragmented MP4 segments
+                        if args.mp4_container:
+                            if not INIT_SEGMENT_CREATED:
+                                try:
+                                    INIT_SEGMENT_PATH = os.path.join(chunk_dir, 'init.mp4')
+                                    init_cmd = [
+                                        'ffmpeg', '-i', embedded_chunk_name,
+                                        '-c', 'copy', '-map', '0',
+                                        '-movflags', '+faststart+empty_moov',
+                                        '-f', 'mp4', '-t', '0', INIT_SEGMENT_PATH,
+                                        '-y', '-loglevel', 'quiet'
+                                    ]
+                                    if args.debug:
+                                        logger.debug(f"Generating init.mp4: {' '.join(init_cmd)}")
+                                    init_proc = await asyncio.create_subprocess_exec(*init_cmd)
+                                    await init_proc.communicate()
+                                    if init_proc.returncode == 0 and os.path.exists(INIT_SEGMENT_PATH):
+                                        INIT_SEGMENT_CREATED = True
+                                        logger.info("init.mp4 generated and ready to serve")
+                                except Exception as e:
+                                    logger.error(f"Failed to generate init.mp4: {e}")
                     
                     # Cleanup
                     try:
@@ -702,12 +766,21 @@ async def main():
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug logging')
 
+    # New: option to embed subtitles in fragmented MP4 with mov_text codec
+    parser.add_argument('--mp4-container', action='store_true',
+                        help='(experimental, with --embedded-subs) Output each processed segment as fragmented MP4 containing mov_text subtitles instead of MPEG-TS.')
+
     args = parser.parse_args()
 
     # Validate subtitle mode options
     subtitle_modes = sum([args.hard_subs, args.embedded_subs])
     if subtitle_modes > 1:
         logger.error("Cannot use multiple subtitle modes simultaneously. Choose only one of: --hard-subs, --embedded-subs, or default (WebVTT sidecar)")
+        sys.exit(1)
+
+    # Validate mp4 container usage
+    if args.mp4_container and not args.embedded_subs:
+        logger.error("--mp4-container can only be used together with --embedded-subs mode")
         sys.exit(1)
 
     # Set logging level based on debug flag
@@ -741,6 +814,10 @@ async def main():
         # Keep compatibility with old code by starting the queue consumer
         asyncio.create_task(rtmp_publisher(RTMP_URL, RTMP_QUEUE))
         logger.info(f"RTMP caption publishing enabled to {RTMP_URL}")
+
+    # Determine container extension for segment files
+    global CONTAINER_EXT
+    CONTAINER_EXT = '.mp4' if args.mp4_container else '.ts'
 
     stop_event = threading.Event()
     session = aiohttp.ClientSession(headers={'User-Agent': args.user_agent})
@@ -778,18 +855,28 @@ async def main():
         logger.info("Direct media playlist detected, using stream directly")
         stream_uri = args.url
 
-    # Use actual IP if binding to all interfaces
-    public_address = get_local_ip() if args.bind_address == '0.0.0.0' else args.bind_address
-    http_base_url = '' # Changed from absolute to relative path
+
 
     modified_base_playlist = copy.deepcopy(base_playlist)
     
-    # Set HLS version to 5 for subtitle support
-    modified_base_playlist.version = 5
+    # Ensure HLS version is high enough for fMP4 / EXT-X-MAP when mp4 container is used
+    if args.mp4_container:
+        modified_base_playlist.version = max(7, modified_base_playlist.version or 0)
+    else:
+        # Keep at least version 5 for subtitle support in TS mode
+        modified_base_playlist.version = max(5, modified_base_playlist.version or 0)
     
     # Only modify playlist URI if it's a master playlist
     if modified_base_playlist.playlists:
         modified_base_playlist.playlists[0].uri = 'chunklist.m3u8' # Removed path join
+
+    # If mp4 container, append tx3g to CODECS attribute of variant
+    if args.mp4_container and modified_base_playlist.playlists:
+        variant = modified_base_playlist.playlists[0]
+        codecs_value = variant.stream_info.codecs or ''
+        # Only append tx3g if codecs are already specified
+        if codecs_value and 'tx3g' not in codecs_value:
+            variant.stream_info.codecs = f'{codecs_value},tx3g'
 
     if not args.hard_subs and not args.embedded_subs and modified_base_playlist.playlists:
         # Only add subtitle tracks for master playlists when using WebVTT sidecar mode
@@ -868,7 +955,7 @@ async def main():
 
                 if not args.hard_subs:
                     for translated_uri, translated_chunk_path in dict(chunk_to_vtt).items():
-                        if os.path.splitext(translated_uri)[0] + '.ts' not in current_segments:
+                        if os.path.splitext(translated_uri)[0] + CONTAINER_EXT not in current_segments:
                             del chunk_to_vtt[translated_uri]
 
                 chunks_to_translate = {}
@@ -894,7 +981,35 @@ async def main():
                     segment.uri = segment_name.lstrip('/') # Remove leading slash for relative path
 
                 global CHUNK_LIST_SER
-                CHUNK_LIST_SER = bytes(chunk_list.dumps(), 'ascii')
+
+                # Ensure media playlist version supports EXT-X-MAP when using fMP4
+                if args.mp4_container:
+                    chunk_list.version = max(7, chunk_list.version or 0)
+
+                playlist_str = chunk_list.dumps()
+                # Inject EXT-X-MAP for mp4 container
+                if args.mp4_container and INIT_SEGMENT_CREATED:
+                    lines = playlist_str.split('\n')
+                    # HLS spec requires EXT-X-MAP to appear before any media segments
+                    insert_idx = -1
+                    for idx, line in enumerate(lines):
+                        if line.startswith('#EXTINF'):
+                            insert_idx = idx
+                            break
+                    
+                    if insert_idx != -1:
+                        map_uri = INIT_SEGMENT_URI.lstrip('/')
+                        lines.insert(insert_idx, f'#EXT-X-MAP:URI="{map_uri}"')
+                        # Also ensure version is at least 7 for EXT-X-MAP
+                        for idx, line in enumerate(lines):
+                            if line.startswith('#EXT-X-VERSION'):
+                                current_ver = int(line.split(':')[1])
+                                if current_ver < 7:
+                                    lines[idx] = '#EXT-X-VERSION:7'
+                                break
+                        playlist_str = '\n'.join(lines)
+
+                CHUNK_LIST_SER = bytes(playlist_str, 'ascii')
 
                 if not args.hard_subs and not args.embedded_subs:
                     # Only create WebVTT playlists when using sidecar subtitle mode
