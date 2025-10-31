@@ -1,7 +1,8 @@
 faster-whisper
 m3u8
 aiohttp[speedups]
-numpy~=1.24.0
+# Python 3.12 requires numpy 1.26+ (wheels available). Keep upper bound below 2.0 for compatibility.
+numpy>=1.26,<2.0
 aiofiles
 hf_xet
 tqdm

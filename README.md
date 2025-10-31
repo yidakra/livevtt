@@ -66,6 +66,26 @@ sudo service WowzaStreamingEngine restart
 
 ## 🛠️ Essential Tools
 
+### `archive_transcriber`
+**Batch transcription of archived broadcast chunks with bilingual WebVTT output**
+
+```bash
+# Activate virtual environment (recommended)
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+
+# Install system dependencies (Ubuntu example)
+sudo apt-get install -y ffmpeg
+# Optional GPU acceleration
+sudo apt-get install -y nvidia-driver-535 nvidia-cuda-toolkit libcudnn9-cuda-13 libcudnn9-dev-cuda-13
+
+# Transcribe a single unprocessed video
+python src/python/tools/archive_transcriber.py --max-files 1 --progress
+```
+
+Generates `.ru.vtt` and `.en.vtt` files alongside the source (or under `--output-root`). Uses `/mnt/vod/srv/storage/transcoded/` as the default archive root; pass a path to override.
+
 ### `test_integration`
 **Comprehensive system health check and integration testing**
 

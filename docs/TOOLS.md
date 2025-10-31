@@ -86,7 +86,76 @@ python stream_checker.py --host wowza.example.com --port 8088
    python caption_sender.py --stream testStream
 ```
 
-### 3. Integration Test (`test_final_integration.py`)
+### 3. Archive Transcriber (`archive_transcriber.py`)
+
+**Purpose**: Batch transcribe archived broadcast chunks into Russian and English WebVTT files for search and downstream analysis.
+
+#### Prerequisites
+
+1. **Virtual environment & Python dependencies**
+   ```bash
+   cd /root/livevtt
+   python3 -m venv .venv
+   . .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+
+2. **System packages**
+   ```bash
+   sudo apt-get install -y ffmpeg
+   ```
+
+3. **GPU acceleration (optional but recommended for throughput)**
+   ```bash
+   # Install or update NVIDIA driver (example version shown; adjust as needed)
+   sudo apt-get install -y nvidia-driver-535
+   sudo reboot
+
+   # After reboot, install CUDA runtime + cuDNN 9 for CUDA 13
+   sudo apt-get install -y nvidia-cuda-toolkit libcudnn9-cuda-13 libcudnn9-dev-cuda-13
+   sudo ldconfig
+   ```
+   Verify availability with `nvidia-smi`. If CUDA initialisation still fails, the tool automatically falls back to CPU and logs a warning.
+
+#### Defaults & Outputs
+
+- **Archive root**: `/mnt/vod/srv/storage/transcoded/` (override by passing a different path as the positional argument).
+- **Outputs**: `<chunk>.ru.vtt` and `<chunk>.en.vtt` beside the video or under `--output-root`.
+- **Manifest**: `logs/archive_transcriber_manifest.jsonl` appends one entry per attempt (success or error) for resumable processing.
+
+#### Usage Examples
+
+```bash
+# Process everything pending (long-running)
+python src/python/tools/archive_transcriber.py --progress
+
+# Process a single new file and stop
+python src/python/tools/archive_transcriber.py --max-files 1 --progress
+
+# Re-run and mirror outputs to a new tree
+python src/python/tools/archive_transcriber.py /mnt/vod/srv/storage/transcoded/ \
+  --output-root /mnt/vod/vtt_archive --force --progress
+```
+
+#### Key CLI Flags
+
+- `--max-files`: Limit how many videos to handle in the current run.
+- `--output-root`: Write VTT files to a mirrored directory tree.
+- `--manifest`: Alternate manifest path for resumable runs.
+- `--model`: Whisper model name (default `large-v3`).
+- `--compute-type`: Precision mode (`float16` for CUDA, `float32` for CPU fallback).
+- `--workers`: Thread count for parallel processing.
+- `--use-cuda`: Force CUDA on/off (defaults to on; falls back automatically on error).
+- `--progress`: Show a progress bar (requires `tqdm`).
+
+#### Operational Notes
+
+- The first invocation downloads the Faster-Whisper model (~3 GB); cached under `~/.cache/huggingface` thereafter.
+- `ffmpeg` must be available on `PATH` for audio extraction; install system-wide or set `PATH` accordingly.
+- Manifest entries let you audit processing history. Failed runs retain their `status: "error"` entry until reprocessed.
+- For large archives consider using `--workers` and ensuring the GPU has sufficient memory.
+
+### 4. Integration Test (`test_final_integration.py`)
 
 **Purpose**: Comprehensive system health check and integration testing.
 
