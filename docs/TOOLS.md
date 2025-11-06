@@ -88,7 +88,7 @@ python stream_checker.py --host wowza.example.com --port 8088
 
 ### 3. Archive Transcriber (`archive_transcriber.py`)
 
-**Purpose**: Batch transcribe archived broadcast chunks into Russian and English WebVTT files for search and downstream analysis.
+**Purpose**: Batch transcribe archived broadcast chunks into caption files (original + English) and generate SMIL manifests for Wowza playback.
 
 #### Prerequisites
 
@@ -120,7 +120,7 @@ python stream_checker.py --host wowza.example.com --port 8088
 #### Defaults & Outputs
 
 - **Archive root**: `/mnt/vod/srv/storage/transcoded/` (override by passing a different path as the positional argument).
-- **Outputs**: `<chunk>.ru.vtt` and `<chunk>.en.vtt` beside the video or under `--output-root`.
+- **Outputs**: `<chunk>.vtt` (source language), `<chunk>.en.vtt`, and `<chunk>.smil` beside the video or under `--output-root`.
 - **Manifest**: `logs/archive_transcriber_manifest.jsonl` appends one entry per attempt (success or error) for resumable processing.
 
 #### Usage Examples
@@ -135,6 +135,9 @@ python src/python/tools/archive_transcriber.py --max-files 1 --progress
 # Re-run and mirror outputs to a new tree
 python src/python/tools/archive_transcriber.py /mnt/vod/srv/storage/transcoded/ \
   --output-root /mnt/vod/vtt_archive --force --progress
+
+# Refresh SMIL manifests only (no re-transcription)
+python src/python/tools/archive_transcriber.py --smil-only --max-files 20 --progress
 ```
 
 #### Key CLI Flags
@@ -153,9 +156,27 @@ python src/python/tools/archive_transcriber.py /mnt/vod/srv/storage/transcoded/ 
 - The first invocation downloads the Faster-Whisper model (~3 GB); cached under `~/.cache/huggingface` thereafter.
 - `ffmpeg` must be available on `PATH` for audio extraction; install system-wide or set `PATH` accordingly.
 - Manifest entries let you audit processing history. Failed runs retain their `status: "error"` entry until reprocessed.
+- The tool automatically regenerates `.smil` manifests without repeating transcription if VTT files already exist (or when `--smil-only` is specified).
 - For large archives consider using `--workers` and ensuring the GPU has sufficient memory.
 
-### 4. Integration Test (`test_final_integration.py`)
+### 4. Subtitle Autogen Service (`subtitle_autogen.py`)
+
+**Purpose**: Poll the archive directory and automatically invoke `archive_transcriber` to keep captions and SMIL files current.
+
+```bash
+# Run continuous service (5 files per cycle, every 5 minutes)
+python src/python/services/subtitle_autogen.py /mnt/vod/srv/storage/transcoded/ --batch-size 5 --interval 300
+
+# SMIL-only reconciliation daemon
+python src/python/services/subtitle_autogen.py /mnt/vod/srv/storage/transcoded/ --smil-only --batch-size 20 --interval 900
+```
+
+**Deployment tips**:
+- Wrap with `systemd`, `supervisord`, or Docker for persistent operation.
+- Use `--log-file` to capture service output; share the same manifest path as manual runs for unified history.
+- Combine with `--force` for scheduled reprocessing windows when required.
+
+### 5. Integration Test (`test_final_integration.py`)
 
 **Purpose**: Comprehensive system health check and integration testing.
 

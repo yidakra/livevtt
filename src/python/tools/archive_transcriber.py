@@ -14,13 +14,15 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -56,7 +58,7 @@ def ensure_python_version() -> None:
 
 
 def human_time() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
@@ -104,12 +106,12 @@ def normalise_variant_name(path: Path) -> str:
     return RESOLUTION_TOKEN_PATTERN.sub("", path.name)
 
 
-def build_output_paths(
+def build_output_artifacts(
     video_path: Path,
     normalized_name: str,
     input_root: Path,
     output_root: Optional[Path],
-) -> Tuple[Path, Path]:
+) -> Tuple[Path, Path, Path, Path]:
     if output_root:
         relative = video_path.relative_to(input_root)
         target_dir = output_root.joinpath(*relative.parts[:-1])
@@ -118,17 +120,21 @@ def build_output_paths(
 
     target_dir.mkdir(parents=True, exist_ok=True)
     base_stem = Path(normalized_name).stem
+    base_vtt = target_dir / f"{base_stem}.vtt"
     ru_vtt = target_dir / f"{base_stem}.ru.vtt"
     en_vtt = target_dir / f"{base_stem}.en.vtt"
-    return ru_vtt, en_vtt
+    smil = target_dir / f"{base_stem}.smil"
+    return base_vtt, ru_vtt, en_vtt, smil
 
 
 @dataclass
 class VideoJob:
     video_path: Path
     normalized_name: str
+    base_vtt: Path
     ru_vtt: Path
     en_vtt: Path
+    smil: Path
 
 
 class Manifest:
@@ -207,6 +213,191 @@ def get_model(args: argparse.Namespace) -> WhisperModel:
             return MODEL_HOLDER.model
         raise
 
+@dataclass
+class VideoMetadata:
+    duration: Optional[float]
+    width: Optional[int]
+    height: Optional[int]
+    video_codec_id: Optional[str]
+    audio_codec_id: Optional[str]
+    bitrate: Optional[int]
+
+
+def probe_video_metadata(video_path: Path) -> VideoMetadata:
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(video_path),
+    ]
+
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        data = json.loads(result.stdout or "{}")
+    except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Failed to probe metadata for %s: %s", video_path, exc)
+        return VideoMetadata(duration=None, width=None, height=None, video_codec_id=None, audio_codec_id=None, bitrate=None)
+
+    streams = data.get("streams", [])
+    video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
+    audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+    format_data = data.get("format", {})
+
+    def _get_int(value: Optional[str]) -> Optional[int]:
+        if value in (None, "", "N/A"):
+            return None
+        try:
+            return int(float(value))
+        except (ValueError, TypeError):
+            return None
+
+    def _get_float(value: Optional[str]) -> Optional[float]:
+        if value in (None, "", "N/A"):
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    duration = _get_float(format_data.get("duration"))
+    width = _get_int(video_stream.get("width"))
+    height = _get_int(video_stream.get("height"))
+    video_codec_id = video_stream.get("codec_tag_string") or video_stream.get("codec_name")
+    audio_codec_id = audio_stream.get("codec_tag_string") or audio_stream.get("codec_name")
+    bitrate = _get_int(video_stream.get("bit_rate")) or _get_int(format_data.get("bit_rate"))
+
+    return VideoMetadata(
+        duration=duration,
+        width=width,
+        height=height,
+        video_codec_id=video_codec_id,
+        audio_codec_id=audio_codec_id,
+        bitrate=bitrate,
+    )
+
+
+def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> None:
+    job.smil.parent.mkdir(parents=True, exist_ok=True)
+
+    tree: Optional[ET.ElementTree] = None
+    root: Optional[ET.Element] = None
+
+    backup_path = job.smil.with_suffix(job.smil.suffix + ".bak")
+    if job.smil.exists() and not backup_path.exists():
+        try:
+            shutil.copy2(job.smil, backup_path)
+            LOGGER.debug("Backed up SMIL %s to %s", job.smil, backup_path)
+        except OSError as exc:
+            LOGGER.warning("Failed to back up %s to %s: %s", job.smil, backup_path, exc)
+
+    if job.smil.exists():
+        try:
+            tree = ET.parse(job.smil)
+            root = tree.getroot()
+        except ET.ParseError as exc:
+            LOGGER.warning("SMIL parse error for %s (%s); regenerating", job.smil, exc)
+
+    if root is None:
+        root = ET.Element("smil")
+        ET.SubElement(root, "head")
+        tree = ET.ElementTree(root)
+
+    body = root.find("body")
+    if body is None:
+        body = ET.SubElement(root, "body")
+
+    switch = body.find("switch")
+    if switch is None:
+        switch = ET.SubElement(body, "switch")
+
+    def ensure_video_node() -> None:
+        if any(child.tag == "video" for child in switch):
+            return
+        video_attrs = {"src": f"mp4:{job.video_path.name}"}
+        if metadata.bitrate:
+            video_attrs["system-bitrate"] = str(metadata.bitrate)
+        if metadata.width:
+            video_attrs["width"] = str(metadata.width)
+        if metadata.height:
+            video_attrs["height"] = str(metadata.height)
+        video_elem = ET.SubElement(switch, "video", video_attrs)
+        if metadata.video_codec_id:
+            ET.SubElement(
+                video_elem,
+                "param",
+                {
+                    "name": "videoCodecId",
+                    "value": metadata.video_codec_id,
+                    "valuetype": "data",
+                },
+            )
+        if metadata.audio_codec_id:
+            ET.SubElement(
+                video_elem,
+                "param",
+                {
+                    "name": "audioCodecId",
+                    "value": metadata.audio_codec_id,
+                    "valuetype": "data",
+                },
+            )
+
+    ensure_video_node()
+
+    # Remove existing LiveVTT-managed textstreams
+    for node in list(switch.findall("textstream")):
+        if any(child.tag == "param" and child.get("name") == "isWowzaCaptionStream" for child in list(node)):
+            switch.remove(node)
+
+    def ensure_textstream(src: str, language: str) -> None:
+        target_src = f"mp4:{src}"
+
+        def _normalize(value: Optional[str]) -> str:
+            if not value:
+                return ""
+            value = value.strip()
+            if value.lower().startswith("mp4:"):
+                return value[4:]
+            return value
+
+        for node in list(switch.findall("textstream")):
+            if _normalize(node.get("src")) == src:
+                switch.remove(node)
+
+        if not Path(job.smil.parent, src).exists():
+            LOGGER.warning("Expected VTT missing for %s when writing SMIL", src)
+            return
+        ts = ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
+        ET.SubElement(
+            ts,
+            "param",
+            {
+                "name": "isWowzaCaptionStream",
+                "value": "true",
+                "valuetype": "data",
+            },
+        )
+
+    if job.base_vtt.exists():
+        ensure_textstream(job.base_vtt.name, "rus")
+    elif job.ru_vtt.exists():
+        ensure_textstream(job.ru_vtt.name, "rus")
+    elif not args.smil_only:
+        LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.base_vtt)
+
+    if job.en_vtt.exists():
+        ensure_textstream(job.en_vtt.name, "eng")
+    elif not args.smil_only:
+        LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
+
+    if hasattr(ET, "indent"):
+        ET.indent(tree, space="  ")  # type: ignore[arg-type]
+
+    tree.write(job.smil, encoding="utf-8", xml_declaration=True)
 
 
 def discover_video_jobs(
@@ -238,9 +429,9 @@ def discover_video_jobs(
         if not best_path:
             continue
         normalized_name = normalise_variant_name(best_path)
-        ru_vtt, en_vtt = build_output_paths(best_path, normalized_name, input_root, output_root)
+        base_vtt, ru_vtt, en_vtt, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
 
-        if should_skip(best_path, ru_vtt, en_vtt, manifest, force):
+        if should_skip(best_path, base_vtt, ru_vtt, en_vtt, smil_path, force):
             LOGGER.debug("Skipping already processed %s", best_path)
             continue
 
@@ -248,8 +439,10 @@ def discover_video_jobs(
             VideoJob(
                 video_path=best_path,
                 normalized_name=normalized_name,
+                base_vtt=base_vtt,
                 ru_vtt=ru_vtt,
                 en_vtt=en_vtt,
+                smil=smil_path,
             )
         )
 
@@ -278,28 +471,25 @@ def select_best_variant(candidates: List[Path]) -> Optional[Path]:
 
 def should_skip(
     video_path: Path,
+    base_vtt: Path,
     ru_vtt: Path,
     en_vtt: Path,
-    manifest: Manifest,
+    smil_path: Path,
     force: bool,
 ) -> bool:
     if force:
         return False
 
+    if not (base_vtt.exists() and ru_vtt.exists() and en_vtt.exists() and smil_path.exists()):
+        return False
+
     video_mtime = video_path.stat().st_mtime
-    record = manifest.get(video_path)
-    if record and record.get("status") == "success":
-        ru_path = Path(record.get("ru_vtt", ru_vtt))
-        en_path = Path(record.get("en_vtt", en_vtt))
-        if ru_path.exists() and en_path.exists():
-            if ru_path.stat().st_mtime >= video_mtime and en_path.stat().st_mtime >= video_mtime:
-                return True
-
-    if ru_vtt.exists() and en_vtt.exists():
-        if ru_vtt.stat().st_mtime >= video_mtime and en_vtt.stat().st_mtime >= video_mtime:
-            return True
-
-    return False
+    return (
+        base_vtt.stat().st_mtime >= video_mtime
+        and ru_vtt.stat().st_mtime >= video_mtime
+        and en_vtt.stat().st_mtime >= video_mtime
+        and smil_path.stat().st_mtime >= video_mtime
+    )
 
 
 def extract_audio(video_path: Path, sample_rate: int) -> Path:
@@ -346,44 +536,55 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
 
-    audio_path = None
-    ru_segments = None
-    en_segments = None
+    metadata = probe_video_metadata(job.video_path)
+    duration = metadata.duration or 0.0
+    need_transcription = not args.smil_only and not (job.base_vtt.exists() and job.ru_vtt.exists() and job.en_vtt.exists())
+
+    audio_path: Optional[Path] = None
 
     try:
-        audio_path = extract_audio(job.video_path, args.sample_rate)
-        model = get_model(args)
+        if need_transcription:
+            audio_path = extract_audio(job.video_path, args.sample_rate)
+            model = get_model(args)
 
-        ru_iter, ru_info = model.transcribe(
-            str(audio_path),
-            beam_size=args.beam_size,
-            language=args.source_language,
-            vad_filter=args.vad_filter,
-            task="transcribe",
-        )
-        ru_segments = list(ru_iter)
+            ru_iter, ru_info = model.transcribe(
+                str(audio_path),
+                beam_size=args.beam_size,
+                language=args.source_language,
+                vad_filter=args.vad_filter,
+                task="transcribe",
+            )
+            ru_segments = list(ru_iter)
 
-        en_iter, en_info = model.transcribe(
-            str(audio_path),
-            beam_size=args.beam_size,
-            language=args.source_language,
-            vad_filter=args.vad_filter,
-            task="translate",
-        )
-        en_segments = list(en_iter)
+            en_iter, en_info = model.transcribe(
+                str(audio_path),
+                beam_size=args.beam_size,
+                language=args.source_language,
+                vad_filter=args.vad_filter,
+                task="translate",
+            )
+            en_segments = list(en_iter)
 
-        ru_content = segments_to_webvtt(ru_segments)
-        en_content = segments_to_webvtt(en_segments)
+            atomic_write(job.base_vtt, segments_to_webvtt(ru_segments))
+            atomic_write(job.ru_vtt, segments_to_webvtt(ru_segments))
+            atomic_write(job.en_vtt, segments_to_webvtt(en_segments))
 
-        atomic_write(job.ru_vtt, ru_content)
-        atomic_write(job.en_vtt, en_content)
+            duration_from_model = max(ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0)
+            if duration_from_model:
+                duration = duration_from_model
+        else:
+            if not job.base_vtt.exists():
+                LOGGER.warning("Base VTT missing for %s; SMIL-only run skipped caption references", job.base_vtt)
+            LOGGER.info("VTT already present for %s; generating SMIL only.", job.video_path)
 
-        duration = max(ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0)
+        write_smil(job, metadata, args)
 
         record = {
             "video_path": str(job.video_path),
+            "base_vtt": str(job.base_vtt),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
+            "smil": str(job.smil),
             "status": "success",
             "duration": duration,
             "processed_at": human_time(),
@@ -396,8 +597,10 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
         LOGGER.error("Failed to process %s: %s", job.video_path, exc)
         record = {
             "video_path": str(job.video_path),
+            "base_vtt": str(job.base_vtt),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
+            "smil": str(job.smil),
             "status": "error",
             "error": str(exc),
             "processed_at": human_time(),
@@ -446,6 +649,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--extensions", type=str, default=",".join(sorted(VIDEO_EXTENSIONS)), help="Comma-separated list of video extensions to include")
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument("--max-files", type=int, help="Limit the number of videos processed in this run")
+    parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL manifests without creating or updating VTT files")
     parser.add_argument("--log-file", type=Path, help="Optional log file path")
     parser.add_argument("--progress", action="store_true", help="Display progress bar (requires tqdm)")
     parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
@@ -467,7 +671,7 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     manifest = Manifest(args.manifest.resolve())
     extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
-    jobs = discover_video_jobs(input_root, output_root, manifest, args.force, extensions)
+    jobs = discover_video_jobs(input_root, output_root, manifest, args.force or args.smil_only, extensions)
 
     if args.max_files is not None:
         if args.max_files <= 0:
@@ -492,27 +696,39 @@ def run(argv: Optional[List[str]] = None) -> int:
     elif args.progress and tqdm is None:
         LOGGER.warning("tqdm is not installed; progress bar disabled")
 
-    if args.workers > 1:
-        LOGGER.info("Using %d worker threads", args.workers)
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = [executor.submit(process_job, job, args, manifest) for job in jobs]
-            for future in as_completed(futures):
-                record = future.result()
+    try:
+        if args.workers > 1:
+            LOGGER.info("Using %d worker threads", args.workers)
+            with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                futures = [executor.submit(process_job, job, args, manifest) for job in jobs]
+                try:
+                    for future in as_completed(futures):
+                        record = future.result()
+                        if record.get("status") == "success":
+                            successes += 1
+                        else:
+                            failures += 1
+                        if progress_bar is not None:
+                            progress_bar.update(1)
+                except KeyboardInterrupt:
+                    LOGGER.warning("Interrupted by user. Cancelling remaining jobs...")
+                    for future in futures:
+                        future.cancel()
+                    raise
+        else:
+            for job in jobs:
+                record = process_job(job, args, manifest)
                 if record.get("status") == "success":
                     successes += 1
                 else:
                     failures += 1
                 if progress_bar is not None:
                     progress_bar.update(1)
-    else:
-        for job in jobs:
-            record = process_job(job, args, manifest)
-            if record.get("status") == "success":
-                successes += 1
-            else:
-                failures += 1
-            if progress_bar is not None:
-                progress_bar.update(1)
+    except KeyboardInterrupt:
+        if progress_bar is not None:
+            progress_bar.close()
+        LOGGER.warning("Processing aborted via Ctrl+C")
+        return 130
 
     if progress_bar is not None:
         progress_bar.close()
