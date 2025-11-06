@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xml:lang="ru">
+  <body>
+    <div>
+      <p begin="00:00:05.000" end="00:00:08.500">
+        <span xml:lang="ru">Добро пожаловать в нашу программу.</span>
+        <span xml:lang="en">Welcome to our program.</span>
+      </p>
+      <p begin="00:00:09.000" end="00:00:12.300">
+        <span xml:lang="ru">Сегодня мы обсудим важные новости.</span>
+        <span xml:lang="en">Today we will discuss important news.</span>
+      </p>
+      <p begin="00:00:13.000" end="00:00:16.800">
+        <span xml:lang="ru">Погода на следующей неделе будет теплой.</span>
+        <span xml:lang="en">The weather next week will be warm.</span>
+      </p>
+      <p begin="00:00:17.500" end="00:00:21.200">
+        <span xml:lang="ru">Спасибо за внимание!</span>
+        <span xml:lang="en">Thank you for your attention!</span>
+      </p>
+    </div>
+  </body>
+</tt>

@@ -5,6 +5,9 @@ Recursively scans an archive of broadcast chunks, selects the highest
 resolution variant of each chunk, extracts audio with FFmpeg, and generates
 parallel Russian (transcription) and English (translation) WebVTT files using
 Faster-Whisper.
+
+Optionally generates TTML (Timed Text Markup Language) files with bilingual
+subtitles aligned by timestamp when --ttml flag is provided.
 """
 
 from __future__ import annotations
@@ -34,6 +37,9 @@ except ImportError:  # pragma: no cover - optional dependency
     tqdm = None
 
 from faster_whisper import WhisperModel  # type: ignore
+
+# Import TTML utilities
+from ttml_utils import segments_to_ttml
 
 
 VIDEO_EXTENSIONS = {
@@ -111,7 +117,7 @@ def build_output_artifacts(
     normalized_name: str,
     input_root: Path,
     output_root: Optional[Path],
-) -> Tuple[Path, Path, Path]:
+) -> Tuple[Path, Path, Path, Path]:
     if output_root:
         relative = video_path.relative_to(input_root)
         target_dir = output_root.joinpath(*relative.parts[:-1])
@@ -122,8 +128,9 @@ def build_output_artifacts(
     base_stem = Path(normalized_name).stem
     ru_vtt = target_dir / f"{base_stem}.ru.vtt"
     en_vtt = target_dir / f"{base_stem}.en.vtt"
+    ttml = target_dir / f"{base_stem}.ttml"
     smil = target_dir / f"{base_stem}.smil"
-    return ru_vtt, en_vtt, smil
+    return ru_vtt, en_vtt, ttml, smil
 
 
 @dataclass
@@ -132,6 +139,7 @@ class VideoJob:
     normalized_name: str
     ru_vtt: Path
     en_vtt: Path
+    ttml: Path
     smil: Path
 
 
@@ -425,7 +433,7 @@ def discover_video_jobs(
         if not best_path:
             continue
         normalized_name = normalise_variant_name(best_path)
-        ru_vtt, en_vtt, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
+        ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
 
         if should_skip(best_path, ru_vtt, en_vtt, smil_path, force):
             LOGGER.debug("Skipping already processed %s", best_path)
@@ -437,6 +445,7 @@ def discover_video_jobs(
                 normalized_name=normalized_name,
                 ru_vtt=ru_vtt,
                 en_vtt=en_vtt,
+                ttml=ttml_path,
                 smil=smil_path,
             )
         )
@@ -562,6 +571,12 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, segments_to_webvtt(en_segments))
 
+            # Generate TTML file if requested
+            if args.ttml:
+                ttml_content = segments_to_ttml(ru_segments, en_segments, lang1="ru", lang2="en")
+                atomic_write(job.ttml, ttml_content)
+                LOGGER.debug("Generated TTML file: %s", job.ttml)
+
             duration_from_model = max(ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0)
             if duration_from_model:
                 duration = duration_from_model
@@ -572,6 +587,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                     "video_path": str(job.video_path),
                     "ru_vtt": str(job.ru_vtt),
                     "en_vtt": str(job.en_vtt),
+                    "ttml": str(job.ttml) if args.ttml else None,
                     "smil": str(job.smil),
                     "status": "error",
                     "error": "Missing caption files for SMIL-only run",
@@ -585,6 +601,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
+            "ttml": str(job.ttml) if args.ttml else None,
             "smil": str(job.smil),
             "status": "success",
             "duration": duration,
@@ -600,6 +617,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
+            "ttml": str(job.ttml) if args.ttml else None,
             "smil": str(job.smil),
             "status": "error",
             "error": str(exc),
@@ -650,6 +668,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument("--max-files", type=int, help="Limit the number of videos processed in this run")
     parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL manifests without creating or updating VTT files")
+    parser.add_argument("--ttml", action="store_true", help="Generate TTML files with bilingual subtitles (Russian + English)")
     parser.add_argument("--log-file", type=Path, help="Optional log file path")
     parser.add_argument("--progress", action="store_true", help="Display progress bar (requires tqdm)")
     parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
