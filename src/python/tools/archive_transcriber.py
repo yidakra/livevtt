@@ -111,7 +111,7 @@ def build_output_artifacts(
     normalized_name: str,
     input_root: Path,
     output_root: Optional[Path],
-) -> Tuple[Path, Path, Path, Path]:
+) -> Tuple[Path, Path, Path]:
     if output_root:
         relative = video_path.relative_to(input_root)
         target_dir = output_root.joinpath(*relative.parts[:-1])
@@ -120,18 +120,16 @@ def build_output_artifacts(
 
     target_dir.mkdir(parents=True, exist_ok=True)
     base_stem = Path(normalized_name).stem
-    base_vtt = target_dir / f"{base_stem}.vtt"
     ru_vtt = target_dir / f"{base_stem}.ru.vtt"
     en_vtt = target_dir / f"{base_stem}.en.vtt"
     smil = target_dir / f"{base_stem}.smil"
-    return base_vtt, ru_vtt, en_vtt, smil
+    return ru_vtt, en_vtt, smil
 
 
 @dataclass
 class VideoJob:
     video_path: Path
     normalized_name: str
-    base_vtt: Path
     ru_vtt: Path
     en_vtt: Path
     smil: Path
@@ -382,12 +380,10 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             },
         )
 
-    if job.base_vtt.exists():
-        ensure_textstream(job.base_vtt.name, "rus")
-    elif job.ru_vtt.exists():
+    if job.ru_vtt.exists():
         ensure_textstream(job.ru_vtt.name, "rus")
     elif not args.smil_only:
-        LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.base_vtt)
+        LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
 
     if job.en_vtt.exists():
         ensure_textstream(job.en_vtt.name, "eng")
@@ -429,9 +425,9 @@ def discover_video_jobs(
         if not best_path:
             continue
         normalized_name = normalise_variant_name(best_path)
-        base_vtt, ru_vtt, en_vtt, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
+        ru_vtt, en_vtt, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
 
-        if should_skip(best_path, base_vtt, ru_vtt, en_vtt, smil_path, force):
+        if should_skip(best_path, ru_vtt, en_vtt, smil_path, force):
             LOGGER.debug("Skipping already processed %s", best_path)
             continue
 
@@ -439,7 +435,6 @@ def discover_video_jobs(
             VideoJob(
                 video_path=best_path,
                 normalized_name=normalized_name,
-                base_vtt=base_vtt,
                 ru_vtt=ru_vtt,
                 en_vtt=en_vtt,
                 smil=smil_path,
@@ -471,7 +466,6 @@ def select_best_variant(candidates: List[Path]) -> Optional[Path]:
 
 def should_skip(
     video_path: Path,
-    base_vtt: Path,
     ru_vtt: Path,
     en_vtt: Path,
     smil_path: Path,
@@ -480,13 +474,12 @@ def should_skip(
     if force:
         return False
 
-    if not (base_vtt.exists() and ru_vtt.exists() and en_vtt.exists() and smil_path.exists()):
+    if not (ru_vtt.exists() and en_vtt.exists() and smil_path.exists()):
         return False
 
     video_mtime = video_path.stat().st_mtime
     return (
-        base_vtt.stat().st_mtime >= video_mtime
-        and ru_vtt.stat().st_mtime >= video_mtime
+        ru_vtt.stat().st_mtime >= video_mtime
         and en_vtt.stat().st_mtime >= video_mtime
         and smil_path.stat().st_mtime >= video_mtime
     )
@@ -538,7 +531,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
-    need_transcription = not args.smil_only and not (job.base_vtt.exists() and job.ru_vtt.exists() and job.en_vtt.exists())
+    need_transcription = not args.smil_only and not (job.ru_vtt.exists() and job.en_vtt.exists())
 
     audio_path: Optional[Path] = None
 
@@ -565,23 +558,31 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             )
             en_segments = list(en_iter)
 
-            atomic_write(job.base_vtt, segments_to_webvtt(ru_segments))
-            atomic_write(job.ru_vtt, segments_to_webvtt(ru_segments))
+            ru_content = segments_to_webvtt(ru_segments)
+            atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, segments_to_webvtt(en_segments))
 
             duration_from_model = max(ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0)
             if duration_from_model:
                 duration = duration_from_model
         else:
-            if not job.base_vtt.exists():
-                LOGGER.warning("Base VTT missing for %s; SMIL-only run skipped caption references", job.base_vtt)
+            if not job.ru_vtt.exists() or not job.en_vtt.exists():
+                LOGGER.warning("Expected caption files missing for %s; skipping SMIL update", job.video_path)
+                return {
+                    "video_path": str(job.video_path),
+                    "ru_vtt": str(job.ru_vtt),
+                    "en_vtt": str(job.en_vtt),
+                    "smil": str(job.smil),
+                    "status": "error",
+                    "error": "Missing caption files for SMIL-only run",
+                    "processed_at": human_time(),
+                }
             LOGGER.info("VTT already present for %s; generating SMIL only.", job.video_path)
 
         write_smil(job, metadata, args)
 
         record = {
             "video_path": str(job.video_path),
-            "base_vtt": str(job.base_vtt),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
             "smil": str(job.smil),
@@ -597,7 +598,6 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
         LOGGER.error("Failed to process %s: %s", job.video_path, exc)
         record = {
             "video_path": str(job.video_path),
-            "base_vtt": str(job.base_vtt),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
             "smil": str(job.smil),

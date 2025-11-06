@@ -120,7 +120,7 @@ python stream_checker.py --host wowza.example.com --port 8088
 #### Defaults & Outputs
 
 - **Archive root**: `/mnt/vod/srv/storage/transcoded/` (override by passing a different path as the positional argument).
-- **Outputs**: `<chunk>.vtt` (source language), `<chunk>.en.vtt`, and `<chunk>.smil` beside the video or under `--output-root`.
+- **Outputs**: `<chunk>.ru.vtt`, `<chunk>.en.vtt`, and `<chunk>.smil` beside the video or under `--output-root`.
 - **Manifest**: `logs/archive_transcriber_manifest.jsonl` appends one entry per attempt (success or error) for resumable processing.
 
 #### Usage Examples

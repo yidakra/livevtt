@@ -84,7 +84,7 @@ sudo apt-get install -y nvidia-driver-535 nvidia-cuda-toolkit libcudnn9-cuda-13 
 python src/python/tools/archive_transcriber.py --max-files 1 --progress
 ```
 
-Generates `<hash>.vtt` (original language transcript), `<hash>.en.vtt` (English translation), and `<hash>.smil` manifests alongside the source (or under `--output-root`). Uses `/mnt/vod/srv/storage/transcoded/` as the default archive root; pass a path to override.
+Generates `<hash>.ru.vtt` (source-language transcript), `<hash>.en.vtt` (English translation), and `<hash>.smil` manifest files alongside the source (or under `--output-root`). Uses `/mnt/vod/srv/storage/transcoded/` as the default archive root; pass a path to override.
 
 ### `subtitle_autogen`
 **Polling service for automated transcription + SMIL regeneration**
