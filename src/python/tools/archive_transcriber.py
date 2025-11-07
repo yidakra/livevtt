@@ -6,8 +6,9 @@ resolution variant of each chunk, extracts audio with FFmpeg, and generates
 parallel Russian (transcription) and English (translation) WebVTT files using
 Faster-Whisper.
 
-Optionally generates TTML (Timed Text Markup Language) files with bilingual
-subtitles aligned by timestamp when --ttml flag is provided.
+Also generates TTML (Timed Text Markup Language) files with bilingual subtitles
+aligned by timestamp. SMIL manifests include TTML by default; use --vtt-in-smil
+to include individual VTT files instead.
 """
 
 from __future__ import annotations
@@ -375,7 +376,7 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
                 switch.remove(node)
 
         if not Path(job.smil.parent, src).exists():
-            LOGGER.warning("Expected VTT missing for %s when writing SMIL", src)
+            LOGGER.warning("Expected subtitle file missing for %s when writing SMIL", src)
             return
         ts = ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
         ET.SubElement(
@@ -388,15 +389,27 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             },
         )
 
-    if job.ru_vtt.exists():
-        ensure_textstream(job.ru_vtt.name, "rus")
-    elif not args.smil_only:
-        LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
+    # By default, use TTML in SMIL (contains both languages)
+    # Use --vtt-in-smil flag to include individual VTT files instead
+    if args.vtt_in_smil:
+        # Include individual VTT files in SMIL
+        if job.ru_vtt.exists():
+            ensure_textstream(job.ru_vtt.name, "rus")
+        elif not args.smil_only:
+            LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
 
-    if job.en_vtt.exists():
-        ensure_textstream(job.en_vtt.name, "eng")
-    elif not args.smil_only:
-        LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
+        if job.en_vtt.exists():
+            ensure_textstream(job.en_vtt.name, "eng")
+        elif not args.smil_only:
+            LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
+    else:
+        # Use TTML by default (bilingual subtitle file)
+        if job.ttml.exists():
+            # TTML is bilingual, so we use the primary language (Russian) as system-language
+            ensure_textstream(job.ttml.name, "rus")
+            LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
+        elif not args.smil_only:
+            LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
 
     if hasattr(ET, "indent"):
         ET.indent(tree, space="  ")  # type: ignore[arg-type]
@@ -571,8 +584,8 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, segments_to_webvtt(en_segments))
 
-            # Generate TTML file if requested
-            if args.ttml:
+            # Generate TTML file by default (unless --no-ttml is specified)
+            if not args.no_ttml:
                 ttml_content = segments_to_ttml(ru_segments, en_segments, lang1="ru", lang2="en")
                 atomic_write(job.ttml, ttml_content)
                 LOGGER.debug("Generated TTML file: %s", job.ttml)
@@ -587,7 +600,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                     "video_path": str(job.video_path),
                     "ru_vtt": str(job.ru_vtt),
                     "en_vtt": str(job.en_vtt),
-                    "ttml": str(job.ttml) if args.ttml else None,
+                    "ttml": str(job.ttml) if not args.no_ttml else None,
                     "smil": str(job.smil),
                     "status": "error",
                     "error": "Missing caption files for SMIL-only run",
@@ -601,7 +614,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
-            "ttml": str(job.ttml) if args.ttml else None,
+            "ttml": str(job.ttml) if not args.no_ttml else None,
             "smil": str(job.smil),
             "status": "success",
             "duration": duration,
@@ -617,7 +630,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
-            "ttml": str(job.ttml) if args.ttml else None,
+            "ttml": str(job.ttml) if not args.no_ttml else None,
             "smil": str(job.smil),
             "status": "error",
             "error": str(exc),
@@ -668,7 +681,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument("--max-files", type=int, help="Limit the number of videos processed in this run")
     parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL manifests without creating or updating VTT files")
-    parser.add_argument("--ttml", action="store_true", help="Generate TTML files with bilingual subtitles (Russian + English)")
+    parser.add_argument("--no-ttml", action="store_true", help="Skip TTML file generation (generate only VTT files)")
+    parser.add_argument("--vtt-in-smil", action="store_true", help="Include individual VTT files in SMIL manifest instead of TTML")
     parser.add_argument("--log-file", type=Path, help="Optional log file path")
     parser.add_argument("--progress", action="store_true", help="Display progress bar (requires tqdm)")
     parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
