@@ -1,0 +1,254 @@
+# LiveVTT Test Suite
+
+Comprehensive unit tests for the LiveVTT subtitle generation system.
+
+## Test Coverage
+
+### Core Functionality Tests
+
+#### `test_archive_transcriber.py` (31 tests)
+Tests for archive transcription core utilities:
+- **WebVTT Generation**: Converting Whisper segments to WebVTT format
+- **Resolution Extraction**: Parsing resolution from filenames (480p, 720p, 1080p, etc.)
+- **Variant Selection**: Choosing best quality video variant
+- **File Path Management**: Building output artifact paths
+- **Atomic Writes**: Thread-safe file writing
+- **Manifest Management**: JSONL manifest tracking
+- **Data Classes**: VideoJob and VideoMetadata structures
+
+**Run**: `pytest tests/test_archive_transcriber.py -v`
+
+#### `test_ttml_simple.py` (5 tests)
+Standalone tests for TTML utilities (no external dependencies):
+- Timestamp formatting and parsing
+- VTT file parsing
+- Bilingual cue alignment
+- TTML generation from VTT files
+
+**Run**: `python tests/test_ttml_simple.py`
+
+#### `test_ttml_utils.py` (11 test classes)
+Comprehensive pytest-based tests for TTML functionality:
+- Timestamp conversion (VTT ↔ TTML)
+- VTT parsing with multiline text
+- Bilingual alignment with tolerance
+- TTML document creation
+- Segment-to-TTML conversion
+- Full integration tests
+
+**Requires**: pytest
+**Run**: `pytest tests/test_ttml_utils.py -v` (when pytest is installed)
+
+#### `test_smil_generation.py` (7 tests)
+Tests for Wowza SMIL manifest generation:
+- Basic SMIL structure creation
+- Video element with metadata
+- Textstream elements for subtitles
+- Wowza caption parameters
+- Update logic (no duplication)
+- Missing VTT file handling
+- Codec parameter inclusion
+
+**Run**: `python tests/test_smil_generation.py`
+
+#### `test_vtt_to_ttml_cli.py` (14 tests)
+Tests for the standalone VTT-to-TTML converter CLI:
+- VTT file validation
+- Conversion success/failure cases
+- Output directory creation
+- Custom tolerance handling
+- Argument parsing
+- Language code customization
+
+**Run**: `python tests/test_vtt_to_ttml_cli.py`
+
+## Running Tests
+
+### Run All Tests
+```bash
+python tests/run_all_tests.py
+```
+
+### Run Individual Test Files
+```bash
+pytest tests/test_archive_transcriber.py -v
+python tests/test_ttml_simple.py
+python tests/test_smil_generation.py
+python tests/test_vtt_to_ttml_cli.py
+```
+
+### Run with pytest (when available)
+```bash
+pytest tests/ -v
+pytest tests/test_ttml_utils.py -v
+```
+
+## Test Results Summary
+
+As of last run:
+- **Total tests**: 57+
+- **Passing**: 57
+- **Failing**: 0 (1 requires pytest installation)
+- **Coverage**: Core functionality, TTML generation, SMIL manifests, CLI tools
+
+## Test Structure
+
+Tests are organized by functionality:
+- **Unit tests**: Test individual functions in isolation
+- **Integration tests**: Test complete workflows (VTT → TTML conversion)
+- **CLI tests**: Test command-line interface and argument parsing
+- **Data validation tests**: Test error handling and edge cases
+
+## Mocking Strategy
+
+Tests mock external dependencies to avoid requiring:
+- `faster-whisper` (Whisper model)
+- `ttml_utils` (when testing archive_transcriber)
+- Video files and FFmpeg (use temp files)
+- Wowza server (test SMIL generation only)
+
+## Adding New Tests
+
+When adding new functionality:
+
+1. **Create test file**: `tests/test_new_feature.py`
+2. **Follow naming convention**:
+   - Test file: `test_*.py`
+   - Test class: `Test*`
+   - Test method: `test_*`
+3. **Use standard assertions**: `assert`, not `self.assertEqual()`
+4. **Mock dependencies**: Mock external libraries at module level
+5. **Clean up**: Use `tempfile` for temporary files
+6. **Document**: Add docstrings explaining what each test validates
+
+### Example Test Template
+
+```python
+#!/usr/bin/env python3
+"""Tests for new_feature.py"""
+
+import sys
+from pathlib import Path
+from unittest import mock
+
+# Mock dependencies
+sys.modules['external_dep'] = mock.MagicMock()
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
+
+from new_feature import some_function
+
+
+class TestNewFeature:
+    """Tests for new feature functionality."""
+
+    def test_basic_case(self):
+        """Test basic functionality."""
+        result = some_function("input")
+        assert result == "expected"
+        print("✓ test_basic_case passed")
+
+
+def run_all_tests():
+    """Run all tests."""
+    test_class = TestNewFeature
+
+    test_methods = [
+        method for method in dir(test_class)
+        if method.startswith("test_")
+    ]
+
+    passed = 0
+    failed = 0
+
+    for method_name in test_methods:
+        try:
+            instance = test_class()
+            method = getattr(instance, method_name)
+            method()
+            passed += 1
+        except Exception as e:
+            print(f"✗ {method_name} failed: {e}")
+            failed += 1
+
+    print(f"Results: {passed} passed, {failed} failed")
+    return failed == 0
+
+
+if __name__ == "__main__":
+    import sys
+    success = run_all_tests()
+    sys.exit(0 if success else 1)
+```
+
+## Continuous Testing
+
+Recommended workflow:
+1. Run tests before committing: `python tests/run_all_tests.py`
+2. Add tests for new features
+3. Update tests when changing functionality
+4. Keep test coverage above 80%
+
+## Dependencies
+
+### Required (always available)
+- Python 3.10+
+- Standard library modules
+
+### Optional (for full test suite)
+- `pytest` - For advanced test features
+- `pytest-cov` - For coverage reporting
+- `pytest-asyncio` - For async tests (future)
+
+Install with Poetry:
+```bash
+poetry install --with dev
+```
+
+Or with pip:
+```bash
+pip install pytest pytest-cov
+```
+
+## Integration Tests
+
+Integration tests for Wowza are in:
+- `src/python/tools/test_final_integration.py`
+
+These test the live server and require:
+- Running Wowza server
+- LiveVTT Caption Module loaded
+- Network access to localhost:8086
+
+## Test Data
+
+Example test data is in:
+- `examples/sample.ru.vtt` - Russian WebVTT
+- `examples/sample.en.vtt` - English WebVTT
+- `examples/sample.ttml` - Bilingual TTML
+
+Tests create temporary files in system temp directory and clean up automatically.
+
+## Troubleshooting
+
+### Tests fail with import errors
+- Ensure you're running from repo root
+- Check that `sys.path` modifications are correct
+- Verify mocks are set up before imports
+
+### Tests fail with file permission errors
+- Check that temp directory is writable
+- On Linux: ensure `/tmp` has proper permissions
+
+### Tests timeout
+- Increase timeout in `run_all_tests.py`
+- Check for infinite loops in test logic
+
+## Future Improvements
+
+- [ ] Add coverage reporting with pytest-cov
+- [ ] Add performance benchmarks
+- [ ] Add end-to-end tests with real video files
+- [ ] Add async tests for main.py live service
+- [ ] Add CI/CD integration (GitHub Actions)
+- [ ] Add test fixtures for common data

@@ -145,7 +145,7 @@ python src/python/tools/archive_transcriber.py --smil-only --max-files 20 --prog
 - `--max-files`: Limit how many videos to handle in the current run.
 - `--output-root`: Write VTT files to a mirrored directory tree.
 - `--manifest`: Alternate manifest path for resumable runs.
-- `--model`: Whisper model name (default `large-v3`).
+- `--model`: Whisper model name (default `large-v3-turbo` - faster than large-v3).
 - `--compute-type`: Precision mode (`float16` for CUDA, `float32` for CPU fallback).
 - `--workers`: Thread count for parallel processing.
 - `--use-cuda`: Force CUDA on/off (defaults to on; falls back automatically on error).

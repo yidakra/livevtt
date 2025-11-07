@@ -5,6 +5,10 @@ Recursively scans an archive of broadcast chunks, selects the highest
 resolution variant of each chunk, extracts audio with FFmpeg, and generates
 parallel Russian (transcription) and English (translation) WebVTT files using
 Faster-Whisper.
+
+Also generates TTML (Timed Text Markup Language) files with bilingual subtitles
+aligned by timestamp. SMIL manifests include TTML by default; use --vtt-in-smil
+to include individual VTT files instead.
 """
 
 from __future__ import annotations
@@ -34,6 +38,9 @@ except ImportError:  # pragma: no cover - optional dependency
     tqdm = None
 
 from faster_whisper import WhisperModel  # type: ignore
+
+# Import TTML utilities
+from ttml_utils import cues_to_ttml, parse_vtt_content
 
 
 VIDEO_EXTENSIONS = {
@@ -91,6 +98,71 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _normalise_language_code(language: Optional[str]) -> Optional[str]:
+    """Normalise language labels to simplified codes for downstream checks."""
+    if not language:
+        return None
+
+    token = language.strip().lower()
+    if not token:
+        return None
+
+    if token in {"en", "eng", "english"}:
+        return "en"
+
+    normalized = token.replace("_", "-")
+    for part in re.split(r"[\s,;]+", normalized):
+        part = part.strip("()")
+        if not part:
+            continue
+        if part in {"en", "eng", "english"}:
+            return "en"
+        if part.startswith("en-"):
+            return "en"
+        if part.startswith("en") and len(part) > 2:
+            return "en"
+
+    if normalized.startswith("en-"):
+        return "en"
+    if normalized.startswith("en") and len(normalized) > 2:
+        return "en"
+
+    return None
+
+
+def translation_output_suspect(
+    source_segments: List,
+    translated_segments: List,
+    target_language: str,
+) -> bool:
+    if not translated_segments:
+        return True
+
+    target = _normalise_language_code(target_language)
+
+    if target == "en":
+        total_chars = 0
+        cyrillic_chars = 0
+        for seg in translated_segments:
+            text = (seg.text or "")
+            total_chars += len(text)
+            cyrillic_chars += sum("\u0400" <= ch <= "\u04FF" for ch in text)
+
+        if total_chars == 0:
+            return True
+
+        if cyrillic_chars / total_chars > 0.2:
+            return True
+
+    source_count = len(source_segments)
+    translated_count = len(translated_segments)
+
+    if source_count and translated_count < max(1, source_count // 3):
+        return True
+
+    return False
+
+
 def extract_resolution(value: str) -> Optional[int]:
     match = RESOLUTION_TOKEN_PATTERN.search(value)
     if not match:
@@ -111,7 +183,7 @@ def build_output_artifacts(
     normalized_name: str,
     input_root: Path,
     output_root: Optional[Path],
-) -> Tuple[Path, Path, Path]:
+) -> Tuple[Path, Path, Path, Path]:
     if output_root:
         relative = video_path.relative_to(input_root)
         target_dir = output_root.joinpath(*relative.parts[:-1])
@@ -122,8 +194,9 @@ def build_output_artifacts(
     base_stem = Path(normalized_name).stem
     ru_vtt = target_dir / f"{base_stem}.ru.vtt"
     en_vtt = target_dir / f"{base_stem}.en.vtt"
+    ttml = target_dir / f"{base_stem}.ttml"
     smil = target_dir / f"{base_stem}.smil"
-    return ru_vtt, en_vtt, smil
+    return ru_vtt, en_vtt, ttml, smil
 
 
 @dataclass
@@ -132,6 +205,7 @@ class VideoJob:
     normalized_name: str
     ru_vtt: Path
     en_vtt: Path
+    ttml: Path
     smil: Path
 
 
@@ -172,44 +246,52 @@ class Manifest:
 class WhisperModelHolder(threading.local):
     def __init__(self) -> None:
         super().__init__()
-        self.model: Optional[WhisperModel] = None
+        self.models: Dict[str, WhisperModel] = {}
 
 
 MODEL_HOLDER = WhisperModelHolder()
 
 
-def get_model(args: argparse.Namespace) -> WhisperModel:
-    if MODEL_HOLDER.model is not None:
-        return MODEL_HOLDER.model
+def get_model(
+    args: argparse.Namespace,
+    model_name: Optional[str] = None,
+    compute_type: Optional[str] = None,
+) -> WhisperModel:
+    name = model_name or args.model
+
+    if name in MODEL_HOLDER.models:
+        return MODEL_HOLDER.models[name]
 
     device = "cuda" if args.use_cuda else "cpu"
-    compute_type = args.compute_type
+    selected_compute_type = compute_type or args.compute_type
 
     def instantiate(target_device: str, target_compute_type: str) -> WhisperModel:
         LOGGER.debug(
             "Loading Whisper model %s (device=%s, compute_type=%s)",
-            args.model,
+            name,
             target_device,
             target_compute_type,
         )
         return WhisperModel(
-            args.model,
+            name,
             device=target_device,
             compute_type=target_compute_type,
         )
 
     try:
-        MODEL_HOLDER.model = instantiate(device, compute_type)
-        return MODEL_HOLDER.model
+        MODEL_HOLDER.models[name] = instantiate(device, selected_compute_type)
     except RuntimeError as exc:
         if args.use_cuda:
             LOGGER.warning(
-                "CUDA initialisation failed (%s). Falling back to CPU with float32 compute type.",
+                "CUDA initialisation failed for %s (%s). Falling back to CPU with float32 compute type.",
+                name,
                 exc,
             )
-            MODEL_HOLDER.model = instantiate("cpu", "float32")
-            return MODEL_HOLDER.model
-        raise
+            MODEL_HOLDER.models[name] = instantiate("cpu", "float32")
+        else:
+            raise
+
+    return MODEL_HOLDER.models[name]
 
 @dataclass
 class VideoMetadata:
@@ -367,7 +449,7 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
                 switch.remove(node)
 
         if not Path(job.smil.parent, src).exists():
-            LOGGER.warning("Expected VTT missing for %s when writing SMIL", src)
+            LOGGER.warning("Expected subtitle file missing for %s when writing SMIL", src)
             return
         ts = ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
         ET.SubElement(
@@ -380,15 +462,27 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             },
         )
 
-    if job.ru_vtt.exists():
-        ensure_textstream(job.ru_vtt.name, "rus")
-    elif not args.smil_only:
-        LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
+    # By default, use TTML in SMIL (contains both languages)
+    # Use --vtt-in-smil flag to include individual VTT files instead
+    if args.vtt_in_smil:
+        # Include individual VTT files in SMIL
+        if job.ru_vtt.exists():
+            ensure_textstream(job.ru_vtt.name, "rus")
+        elif not args.smil_only:
+            LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
 
-    if job.en_vtt.exists():
-        ensure_textstream(job.en_vtt.name, "eng")
-    elif not args.smil_only:
-        LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
+        if job.en_vtt.exists():
+            ensure_textstream(job.en_vtt.name, "eng")
+        elif not args.smil_only:
+            LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
+    else:
+        # Use TTML by default (bilingual subtitle file)
+        if job.ttml.exists():
+            # TTML is bilingual, so we use the primary language (Russian) as system-language
+            ensure_textstream(job.ttml.name, "rus")
+            LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
+        elif not args.smil_only:
+            LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
 
     if hasattr(ET, "indent"):
         ET.indent(tree, space="  ")  # type: ignore[arg-type]
@@ -402,6 +496,7 @@ def discover_video_jobs(
     manifest: Manifest,
     force: bool,
     extensions: Iterable[str],
+    ttml_enabled: bool,
 ) -> List[VideoJob]:
     extensions = {ext.lower() for ext in extensions}
     grouped: Dict[Tuple[str, str], List[Path]] = {}
@@ -425,9 +520,9 @@ def discover_video_jobs(
         if not best_path:
             continue
         normalized_name = normalise_variant_name(best_path)
-        ru_vtt, en_vtt, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
+        ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
 
-        if should_skip(best_path, ru_vtt, en_vtt, smil_path, force):
+        if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
             LOGGER.debug("Skipping already processed %s", best_path)
             continue
 
@@ -437,6 +532,7 @@ def discover_video_jobs(
                 normalized_name=normalized_name,
                 ru_vtt=ru_vtt,
                 en_vtt=en_vtt,
+                ttml=ttml_path,
                 smil=smil_path,
             )
         )
@@ -468,21 +564,23 @@ def should_skip(
     video_path: Path,
     ru_vtt: Path,
     en_vtt: Path,
+    ttml_path: Path,
     smil_path: Path,
     force: bool,
+    ttml_enabled: bool,
 ) -> bool:
     if force:
         return False
 
-    if not (ru_vtt.exists() and en_vtt.exists() and smil_path.exists()):
+    required_outputs = [ru_vtt, en_vtt, smil_path]
+    if ttml_enabled:
+        required_outputs.append(ttml_path)
+
+    if not all(path.exists() for path in required_outputs):
         return False
 
     video_mtime = video_path.stat().st_mtime
-    return (
-        ru_vtt.stat().st_mtime >= video_mtime
-        and en_vtt.stat().st_mtime >= video_mtime
-        and smil_path.stat().st_mtime >= video_mtime
-    )
+    return all(path.stat().st_mtime >= video_mtime for path in required_outputs)
 
 
 def extract_audio(video_path: Path, sample_rate: int) -> Path:
@@ -531,7 +629,9 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
-    need_transcription = not args.smil_only and not (job.ru_vtt.exists() and job.en_vtt.exists())
+    need_transcription = not args.smil_only and (
+        args.force or not (job.ru_vtt.exists() and job.en_vtt.exists())
+    )
 
     audio_path: Optional[Path] = None
 
@@ -549,7 +649,10 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             )
             ru_segments = list(ru_iter)
 
-            en_iter, en_info = model.transcribe(
+            translation_model_name = args.translation_model or args.model
+            translation_model = get_model(args, model_name=translation_model_name)
+
+            en_iter, en_info = translation_model.transcribe(
                 str(audio_path),
                 beam_size=args.beam_size,
                 language=args.source_language,
@@ -558,9 +661,49 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             )
             en_segments = list(en_iter)
 
+            fallback_name = (args.translation_fallback_model or "").strip()
+            if fallback_name.lower() == "none":
+                fallback_name = ""
+
+            if (
+                fallback_name
+                and fallback_name != translation_model_name
+                and translation_output_suspect(ru_segments, en_segments, args.translation_language)
+            ):
+                LOGGER.warning(
+                    "Translation model %s produced unexpected output; retrying with %s",
+                    translation_model_name,
+                    fallback_name,
+                )
+                translation_model = get_model(args, model_name=fallback_name)
+                en_iter, en_info = translation_model.transcribe(
+                    str(audio_path),
+                    beam_size=args.beam_size,
+                    language=args.source_language,
+                    vad_filter=args.vad_filter,
+                    task="translate",
+                )
+                en_segments = list(en_iter)
+                translation_model_name = fallback_name
+
             ru_content = segments_to_webvtt(ru_segments)
+            en_content = segments_to_webvtt(en_segments)
+
             atomic_write(job.ru_vtt, ru_content)
-            atomic_write(job.en_vtt, segments_to_webvtt(en_segments))
+            atomic_write(job.en_vtt, en_content)
+
+            # Generate TTML file by default (unless --no-ttml is specified)
+            if not args.no_ttml:
+                ru_cues = parse_vtt_content(ru_content)
+                en_cues = parse_vtt_content(en_content)
+                ttml_content = cues_to_ttml(
+                    ru_cues,
+                    en_cues,
+                    lang1=args.source_language,
+                    lang2=args.translation_language,
+                )
+                atomic_write(job.ttml, ttml_content)
+                LOGGER.debug("Generated TTML file: %s", job.ttml)
 
             duration_from_model = max(ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0)
             if duration_from_model:
@@ -572,6 +715,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                     "video_path": str(job.video_path),
                     "ru_vtt": str(job.ru_vtt),
                     "en_vtt": str(job.en_vtt),
+                    "ttml": str(job.ttml) if not args.no_ttml else None,
                     "smil": str(job.smil),
                     "status": "error",
                     "error": "Missing caption files for SMIL-only run",
@@ -585,6 +729,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
+            "ttml": str(job.ttml) if not args.no_ttml else None,
             "smil": str(job.smil),
             "status": "success",
             "duration": duration,
@@ -600,6 +745,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
+            "ttml": str(job.ttml) if not args.no_ttml else None,
             "smil": str(job.smil),
             "status": "error",
             "error": str(exc),
@@ -639,10 +785,23 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--output-root", type=Path, help="Optional output root for VTT files")
     parser.add_argument("--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl"), help="Path to manifest file (JSONL)")
-    parser.add_argument("--model", type=str, default="large-v3", help="Faster-Whisper model to load")
+    parser.add_argument("--model", type=str, default="large-v3-turbo", help="Faster-Whisper model to load (default: large-v3-turbo)")
     parser.add_argument("--compute-type", type=str, default="float16", help="Faster-Whisper compute type (e.g., float16, int8_float16)")
     parser.add_argument("--use-cuda", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=True, help="Use CUDA if available (default: true)")
     parser.add_argument("--source-language", type=str, default="ru", help="Source language code for transcription")
+    parser.add_argument("--translation-language", type=str, default="en", help="Target language code for translation output")
+    parser.add_argument(
+        "--translation-model",
+        type=str,
+        default="large-v3",
+        help="Model name to use for translation (default: large-v3; use --model for transcription)",
+    )
+    parser.add_argument(
+        "--translation-fallback-model",
+        type=str,
+        default="large-v3",
+        help="Fallback model for translation if the primary output appears incorrect (set to 'none' to disable)",
+    )
     parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
     parser.add_argument("--sample-rate", type=int, default=16000, help="Audio sample rate for extraction")
     parser.add_argument("--vad-filter", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=False, help="Enable Silero VAD filtering")
@@ -650,6 +809,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument("--max-files", type=int, help="Limit the number of videos processed in this run")
     parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL manifests without creating or updating VTT files")
+    parser.add_argument("--no-ttml", action="store_true", help="Skip TTML file generation (generate only VTT files)")
+    parser.add_argument("--vtt-in-smil", action="store_true", help="Include individual VTT files in SMIL manifest instead of TTML")
     parser.add_argument("--log-file", type=Path, help="Optional log file path")
     parser.add_argument("--progress", action="store_true", help="Display progress bar (requires tqdm)")
     parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
@@ -671,7 +832,14 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     manifest = Manifest(args.manifest.resolve())
     extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
-    jobs = discover_video_jobs(input_root, output_root, manifest, args.force or args.smil_only, extensions)
+    jobs = discover_video_jobs(
+        input_root,
+        output_root,
+        manifest,
+        args.force or args.smil_only,
+        extensions,
+        not args.no_ttml,
+    )
 
     if args.max_files is not None:
         if args.max_files <= 0:

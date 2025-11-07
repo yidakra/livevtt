@@ -1,0 +1,62 @@
+[tool.poetry]
+name = "livevtt"
+version = "0.1.0"
+description = "Live and archived subtitle generation system with WebVTT and TTML support"
+authors = ["LiveVTT Team"]
+readme = "README.md"
+license = "MIT"
+packages = [
+    { include = "python", from = "src" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+faster-whisper = "*"
+m3u8 = "*"
+aiohttp = {extras = ["speedups"], version = "*"}
+numpy = ">=1.26,<2.0"
+aiofiles = "*"
+hf_xet = "*"
+tqdm = "*"
+
+websockets = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-asyncio = "^0.21.0"
+pytest-cov = "^4.1.0"
+black = "^23.7.0"
+isort = "^5.12.0"
+mypy = "^1.4.0"
+flake8 = "^6.0.0"
+
+[tool.poetry.scripts]
+archive_transcriber = "python.tools.archive_transcriber:main"
+vtt_to_ttml = "python.tools.vtt_to_ttml:main"
+caption_sender = "python.tools.caption_sender:main"
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=src --cov-report=term-missing"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
