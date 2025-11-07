@@ -670,7 +670,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--output-root", type=Path, help="Optional output root for VTT files")
     parser.add_argument("--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl"), help="Path to manifest file (JSONL)")
-    parser.add_argument("--model", type=str, default="large-v3", help="Faster-Whisper model to load")
+    parser.add_argument("--model", type=str, default="large-v3-turbo", help="Faster-Whisper model to load (default: large-v3-turbo)")
     parser.add_argument("--compute-type", type=str, default="float16", help="Faster-Whisper compute type (e.g., float16, int8_float16)")
     parser.add_argument("--use-cuda", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=True, help="Use CUDA if available (default: true)")
     parser.add_argument("--source-language", type=str, default="ru", help="Source language code for transcription")
