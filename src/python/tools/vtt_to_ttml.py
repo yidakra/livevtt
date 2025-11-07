@@ -51,9 +51,7 @@ def validate_vtt_file(path: Path) -> bool:
         with open(path, "r", encoding="utf-8") as f:
             first_line = f.readline().strip()
             if not first_line.startswith("WEBVTT"):
-                message = f"VTT file is missing WEBVTT header: {path}"
-                LOGGER.warning(message)
-                logging.warning(message)
+                LOGGER.warning("VTT file is missing WEBVTT header: %s", path)
     except OSError as exc:
         LOGGER.error("Cannot read VTT file %s: %s", path, exc)
         return False
