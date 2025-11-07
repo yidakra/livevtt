@@ -7,7 +7,9 @@ import traceback
 from pathlib import Path
 from unittest import mock
 
-from src.python.tools.vtt_to_ttml import (
+sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
+
+from vtt_to_ttml import (
     validate_vtt_file,
     convert_vtt_to_ttml,
     parse_args,
@@ -50,7 +52,7 @@ class TestVTTValidation:
 
         try:
             # Should still validate (warning is logged)
-            with mock.patch("src.python.tools.vtt_to_ttml.logging.warning") as mock_warning:
+            with mock.patch("vtt_to_ttml.LOGGER.warning") as mock_warning:
                 result = validate_vtt_file(vtt_path)
             assert result  # File is readable even without WEBVTT header
             mock_warning.assert_called_once()

@@ -6,7 +6,7 @@ authors = ["LiveVTT Team"]
 readme = "README.md"
 license = "MIT"
 packages = [
-    { include = "src/python" }
+    { include = "python", from = "src" }
 ]
 
 [tool.poetry.dependencies]
@@ -31,9 +31,9 @@ mypy = "^1.4.0"
 flake8 = "^6.0.0"
 
 [tool.poetry.scripts]
-archive_transcriber = "src.python.tools.archive_transcriber:main"
-vtt_to_ttml = "src.python.tools.vtt_to_ttml:main"
-caption_sender = "src.python.tools.caption_sender:main"
+archive_transcriber = "python.tools.archive_transcriber:main"
+vtt_to_ttml = "python.tools.vtt_to_ttml:main"
+caption_sender = "python.tools.caption_sender:main"
 
 [tool.black]
 line-length = 120
