@@ -65,14 +65,15 @@ def run_test_file(test_file: Path) -> tuple[int, int]:
         if passed is not None or failed is not None:
             return (passed or 0, failed or 0)
 
-        # If we can't parse, return (0, 0) to reflect no parsed tests
-        # Don't inflate counts with guesses
+        # If we can't parse, handle based on exit code
+        # Exit code 0: no parsed tests but process succeeded
+        # Non-zero: treat as failure
         if result.returncode == 0:
             print(f"WARNING: Could not parse test results from {test_file.name} (exit code 0, but no test output parsed)")
             return (0, 0)  # No parsed tests
         else:
             print(f"WARNING: Could not parse test results from {test_file.name} (exit code {result.returncode})")
-            return (0, 0)  # No parsed tests
+            return (0, 1)  # Treat as failure
 
     except subprocess.TimeoutExpired:
         print(f"ERROR: {test_file.name} timed out!")
