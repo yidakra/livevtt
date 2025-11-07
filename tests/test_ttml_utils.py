@@ -175,9 +175,11 @@ class TestBilingualCueAlignment:
 
         assert len(aligned) == 2
         assert aligned[0][0].text == "Привет"
-        assert aligned[0][1].text == "Hello"
+        assert len(aligned[0][1]) == 1
+        assert aligned[0][1][0].text == "Hello"
         assert aligned[1][0].text == "Мир"
-        assert aligned[1][1].text == "World"
+        assert len(aligned[1][1]) == 1
+        assert aligned[1][1][0].text == "World"
 
     def test_align_with_tolerance(self):
         """Test alignment with slight timestamp differences."""
@@ -192,7 +194,8 @@ class TestBilingualCueAlignment:
 
         assert len(aligned) == 1
         assert aligned[0][0].text == "Привет"
-        assert aligned[0][1].text == "Hello"
+        assert len(aligned[0][1]) == 1
+        assert aligned[0][1][0].text == "Hello"
 
     def test_align_unmatched_cues(self):
         """Test alignment with unmatched cues."""
@@ -208,9 +211,10 @@ class TestBilingualCueAlignment:
 
         assert len(aligned) == 2
         assert aligned[0][0].text == "Привет"
-        assert aligned[0][1].text == "Hello"
+        assert len(aligned[0][1]) == 1
+        assert aligned[0][1][0].text == "Hello"
         assert aligned[1][0].text == "Пока"
-        assert aligned[1][1] is None
+        assert aligned[1][1] == []
 
     def test_align_extra_lang2_cues(self):
         """Test alignment when lang2 has extra cues."""
@@ -226,9 +230,11 @@ class TestBilingualCueAlignment:
 
         assert len(aligned) == 2
         assert aligned[0][0].text == "Привет"
-        assert aligned[0][1].text == "Hello"
+        assert len(aligned[0][1]) == 1
+        assert aligned[0][1][0].text == "Hello"
         assert aligned[1][0] is None
-        assert aligned[1][1].text == "Extra"
+        assert len(aligned[1][1]) == 1
+        assert aligned[1][1][0].text == "Extra"
 
 
 class TestTTMLDocumentCreation:
@@ -239,7 +245,7 @@ class TestTTMLDocumentCreation:
         aligned_cues = [
             (
                 SubtitleCue(start=5.0, end=7.0, text="Привет"),
-                SubtitleCue(start=5.0, end=7.0, text="Hello"),
+                [SubtitleCue(start=5.0, end=7.0, text="Hello")],
             ),
         ]
 
@@ -256,29 +262,34 @@ class TestTTMLDocumentCreation:
         assert div is not None
 
         paragraphs = div.findall("p")
-        assert len(paragraphs) == 1
+        assert len(paragraphs) == 2
 
-        p = paragraphs[0]
-        assert p.get("begin") == "00:00:05.000"
-        assert p.get("end") == "00:00:07.000"
+        p_ru = paragraphs[0]
+        assert p_ru.get("begin") == "00:00:05.000"
+        assert p_ru.get("end") == "00:00:07.000"
+        spans_ru = p_ru.findall("span")
+        assert len(spans_ru) == 1
+        assert spans_ru[0].get("{http://www.w3.org/XML/1998/namespace}lang") == "ru"
+        assert spans_ru[0].text == "Привет"
 
-        spans = p.findall("span")
-        assert len(spans) == 2
-        assert spans[0].get("{http://www.w3.org/XML/1998/namespace}lang") == "ru"
-        assert spans[0].text == "Привет"
-        assert spans[1].get("{http://www.w3.org/XML/1998/namespace}lang") == "en"
-        assert spans[1].text == "Hello"
+        p_en = paragraphs[1]
+        assert p_en.get("begin") == "00:00:05.000"
+        assert p_en.get("end") == "00:00:07.000"
+        spans_en = p_en.findall("span")
+        assert len(spans_en) == 1
+        assert spans_en[0].get("{http://www.w3.org/XML/1998/namespace}lang") == "en"
+        assert spans_en[0].text == "Hello"
 
     def test_create_ttml_document_with_unmatched_cues(self):
         """Test creating TTML with unmatched cues."""
         aligned_cues = [
             (
                 SubtitleCue(start=5.0, end=7.0, text="Привет"),
-                None,
+                [],
             ),
             (
                 None,
-                SubtitleCue(start=10.0, end=12.0, text="Hello"),
+                [SubtitleCue(start=10.0, end=12.0, text="Hello")],
             ),
         ]
 
@@ -376,24 +387,59 @@ How are you?
             xml_content = ttml_content.split("\n", 1)[1]  # Skip XML declaration
             root = ET.fromstring(xml_content)
 
-            assert root.tag == "tt"
-            body = root.find("body")
-            div = body.find("div")
-            paragraphs = div.findall("p")
+            assert root.tag.endswith("tt")
+            ns = {"tt": "http://www.w3.org/ns/ttml"}
+            body = root.find("tt:body", ns)
+            div = body.find("tt:div", ns)
+            paragraphs = div.findall("tt:p", ns)
 
-            assert len(paragraphs) == 2
+            # Expect two languages per cue (overlapping paragraphs)
+            assert len(paragraphs) == 4
 
-            # Check first paragraph
-            assert paragraphs[0].get("begin") == "00:00:05.000"
-            assert paragraphs[0].get("end") == "00:00:07.000"
-            spans = paragraphs[0].findall("span")
-            assert len(spans) == 2
-            assert spans[0].text == "Привет, мир!"
-            assert spans[1].text == "Hello, world!"
+            lang_attr = "{http://www.w3.org/XML/1998/namespace}lang"
+            ru_paragraphs = []
+            en_paragraphs = []
+            for p in paragraphs:
+                spans = p.findall("tt:span", ns)
+                assert len(spans) == 1
+                lang = spans[0].get(lang_attr)
+                if lang == "ru":
+                    ru_paragraphs.append(p)
+                elif lang == "en":
+                    en_paragraphs.append(p)
+                else:
+                    raise AssertionError(f"Unexpected language span: {lang}")
+
+            assert len(ru_paragraphs) == 2
+            assert len(en_paragraphs) == 2
+
+            assert ru_paragraphs[0].get("begin") == "00:00:05.000"
+            assert en_paragraphs[0].get("begin") == "00:00:05.000"
+            first_en_span = en_paragraphs[0].findall("tt:span", ns)[0]
+            assert first_en_span.text == "Hello, world!"
 
         finally:
             Path(vtt_ru_path).unlink()
             Path(vtt_en_path).unlink()
+
+    def test_vtt_files_to_ttml_uses_pre_aligned_cues(self):
+        """Ensure pre-aligned cues are used without re-parsing files."""
+        cue_lang1 = SubtitleCue(start=5.0, end=7.0, text="Привет, мир!")
+        cue_lang2 = SubtitleCue(start=5.0, end=7.0, text="Hello, world!")
+        aligned = [(cue_lang1, [cue_lang2])]
+
+        with mock.patch("ttml_utils.parse_vtt_file") as mock_parse:
+            ttml_content = vtt_files_to_ttml(
+                "ignored.ru.vtt",
+                "ignored.en.vtt",
+                lang1="ru",
+                lang2="en",
+                aligned_cues=aligned,
+            )
+
+        mock_parse.assert_not_called()
+        assert "Привет, мир!" in ttml_content
+        assert "Hello, world!" in ttml_content
 
 
 if __name__ == "__main__":

@@ -98,6 +98,38 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _normalise_language_code(language: Optional[str]) -> Optional[str]:
+    """Normalise language labels to simplified codes for downstream checks."""
+    if not language:
+        return None
+
+    token = language.strip().lower()
+    if not token:
+        return None
+
+    if token in {"en", "eng", "english"}:
+        return "en"
+
+    normalized = token.replace("_", "-")
+    for part in re.split(r"[\s,;]+", normalized):
+        part = part.strip("()")
+        if not part:
+            continue
+        if part in {"en", "eng", "english"}:
+            return "en"
+        if part.startswith("en-"):
+            return "en"
+        if part.startswith("en") and len(part) > 2:
+            return "en"
+
+    if normalized.startswith("en-"):
+        return "en"
+    if normalized.startswith("en") and len(normalized) > 2:
+        return "en"
+
+    return None
+
+
 def translation_output_suspect(
     source_segments: List,
     translated_segments: List,
@@ -106,9 +138,9 @@ def translation_output_suspect(
     if not translated_segments:
         return True
 
-    target = (target_language or "").lower()
+    target = _normalise_language_code(target_language)
 
-    if target in {"en", "eng"}:
+    if target == "en":
         total_chars = 0
         cyrillic_chars = 0
         for seg in translated_segments:
@@ -464,6 +496,7 @@ def discover_video_jobs(
     manifest: Manifest,
     force: bool,
     extensions: Iterable[str],
+    ttml_enabled: bool,
 ) -> List[VideoJob]:
     extensions = {ext.lower() for ext in extensions}
     grouped: Dict[Tuple[str, str], List[Path]] = {}
@@ -489,7 +522,7 @@ def discover_video_jobs(
         normalized_name = normalise_variant_name(best_path)
         ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
 
-        if should_skip(best_path, ru_vtt, en_vtt, smil_path, force):
+        if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
             LOGGER.debug("Skipping already processed %s", best_path)
             continue
 
@@ -531,21 +564,23 @@ def should_skip(
     video_path: Path,
     ru_vtt: Path,
     en_vtt: Path,
+    ttml_path: Path,
     smil_path: Path,
     force: bool,
+    ttml_enabled: bool,
 ) -> bool:
     if force:
         return False
 
-    if not (ru_vtt.exists() and en_vtt.exists() and smil_path.exists()):
+    required_outputs = [ru_vtt, en_vtt, smil_path]
+    if ttml_enabled:
+        required_outputs.append(ttml_path)
+
+    if not all(path.exists() for path in required_outputs):
         return False
 
     video_mtime = video_path.stat().st_mtime
-    return (
-        ru_vtt.stat().st_mtime >= video_mtime
-        and en_vtt.stat().st_mtime >= video_mtime
-        and smil_path.stat().st_mtime >= video_mtime
-    )
+    return all(path.stat().st_mtime >= video_mtime for path in required_outputs)
 
 
 def extract_audio(video_path: Path, sample_rate: int) -> Path:
@@ -797,7 +832,14 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     manifest = Manifest(args.manifest.resolve())
     extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
-    jobs = discover_video_jobs(input_root, output_root, manifest, args.force or args.smil_only, extensions)
+    jobs = discover_video_jobs(
+        input_root,
+        output_root,
+        manifest,
+        args.force or args.smil_only,
+        extensions,
+        not args.no_ttml,
+    )
 
     if args.max_files is not None:
         if args.max_files <= 0:

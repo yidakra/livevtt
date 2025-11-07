@@ -18,7 +18,7 @@ numpy = ">=1.26,<2.0"
 aiofiles = "*"
 hf_xet = "*"
 tqdm = "*"
-asyncio = "*"
+
 websockets = "*"
 
 [tool.poetry.group.dev.dependencies]
@@ -37,7 +37,7 @@ caption_sender = "src.python.tools.caption_sender:main"
 
 [tool.black]
 line-length = 120
-target-version = ['py310']
+target-version = ["py310"]
 
 [tool.isort]
 profile = "black"

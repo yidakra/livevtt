@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Protocol, Tuple
 
 
 @dataclass
@@ -19,6 +19,14 @@ class SubtitleCue:
     start: float  # Start time in seconds
     end: float    # End time in seconds
     text: str
+
+
+class SegmentLike(Protocol):
+    """Structural typing for segment objects used in TTML conversion."""
+
+    start: float
+    end: float
+    text: Optional[str]
 
 
 def format_ttml_timestamp(seconds: float) -> str:
@@ -30,6 +38,8 @@ def format_ttml_timestamp(seconds: float) -> str:
     Returns:
         Formatted timestamp string (e.g., "00:01:23.456")
     """
+    if seconds < 0:
+        raise ValueError(f"Timestamp cannot be negative: {seconds}")
     total_ms = int(seconds * 1000)
     hours, remainder = divmod(total_ms, 3_600_000)
     minutes, remainder = divmod(remainder, 60_000)
@@ -59,12 +69,12 @@ def parse_vtt_timestamp(timestamp: str) -> float:
         seconds_str = parts[1]
     else:
         raise ValueError(f"Invalid VTT timestamp format: {timestamp}")
-
-    # Parse seconds and milliseconds
     if "." in seconds_str:
         secs, ms = seconds_str.split(".")
         seconds = int(secs)
-        milliseconds = int(ms)
+        # Normalize fractional part to milliseconds (pad or truncate to 3 digits)
+        ms_normalized = (ms + "000")[:3]
+        milliseconds = int(ms_normalized)
     else:
         seconds = int(seconds_str)
         milliseconds = 0
@@ -73,75 +83,11 @@ def parse_vtt_timestamp(timestamp: str) -> float:
     return total_seconds
 
 
-def parse_vtt_file(vtt_path: str) -> List[SubtitleCue]:
-    """Parse a WebVTT file and extract all cues.
+def _parse_vtt_lines(lines: List[str], start_index: int = 0) -> List[SubtitleCue]:
+    """Parse subtitle cues from a list of VTT lines starting at the given index."""
 
-    Args:
-        vtt_path: Path to the WebVTT file
-
-    Returns:
-        List of SubtitleCue objects
-    """
     cues: List[SubtitleCue] = []
-
-    with open(vtt_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    # Skip WEBVTT header and any metadata
-    i = 0
-    while i < len(lines) and not re.match(r"^\d+\s*$", lines[i].strip()):
-        i += 1
-
-    # Parse cues
-    while i < len(lines):
-        line = lines[i].strip()
-
-        # Skip empty lines
-        if not line:
-            i += 1
-            continue
-
-        # Skip cue identifier (optional number)
-        if re.match(r"^\d+\s*$", line):
-            i += 1
-            if i >= len(lines):
-                break
-            line = lines[i].strip()
-
-        # Parse timing line (e.g., "00:00:05.000 --> 00:00:07.000")
-        timing_match = re.match(r"([\d:\.]+)\s*-->\s*([\d:\.]+)", line)
-        if timing_match:
-            start_str = timing_match.group(1)
-            end_str = timing_match.group(2)
-            start = parse_vtt_timestamp(start_str)
-            end = parse_vtt_timestamp(end_str)
-
-            # Read text lines until empty line or end of file
-            i += 1
-            text_lines = []
-            while i < len(lines) and lines[i].strip():
-                text_lines.append(lines[i].rstrip())
-                i += 1
-
-            text = "\n".join(text_lines)
-            if text:
-                cues.append(SubtitleCue(start=start, end=end, text=text))
-        else:
-            i += 1
-
-    return cues
-
-
-def parse_vtt_content(vtt_content: str) -> List[SubtitleCue]:
-    """Parse WebVTT content (string) into cues."""
-
-    lines = vtt_content.splitlines()
-    cues: List[SubtitleCue] = []
-
-    i = 0
-    # Skip header lines until numeric identifier or timing line
-    while i < len(lines) and not re.match(r"^\d+\s*$", lines[i].strip()) and "-->" not in lines[i]:
-        i += 1
+    i = start_index
 
     while i < len(lines):
         line = lines[i].strip()
@@ -178,6 +124,38 @@ def parse_vtt_content(vtt_content: str) -> List[SubtitleCue]:
     return cues
 
 
+def parse_vtt_file(vtt_path: str) -> List[SubtitleCue]:
+    """Parse a WebVTT file and extract all cues.
+
+    Args:
+        vtt_path: Path to the WebVTT file
+
+    Returns:
+        List of SubtitleCue objects
+    """
+    with open(vtt_path, "r", encoding="utf-8") as vtt_file:
+        content = vtt_file.read()
+
+    return parse_vtt_content(content)
+
+
+def parse_vtt_content(vtt_content: str) -> List[SubtitleCue]:
+    """Parse WebVTT content (string) into cues."""
+
+    lines = vtt_content.splitlines()
+
+    start_index = 0
+    # Skip header lines until numeric identifier or timing line
+    while (
+        start_index < len(lines)
+        and not re.match(r"^\d+\s*$", lines[start_index].strip())
+        and "-->" not in lines[start_index]
+    ):
+        start_index += 1
+
+    return _parse_vtt_lines(lines, start_index)
+
+
 def align_bilingual_cues(
     cues_lang1: List[SubtitleCue],
     cues_lang2: List[SubtitleCue],
@@ -201,7 +179,7 @@ def align_bilingual_cues(
     total_en = len(cues_lang2)
 
     for idx, cue1 in enumerate(cues_lang1):
-        # emit English cues that finish well before this Russian cue
+        # emit lang2 cues that finish well before this lang1 cue
         while en_index < total_en and cues_lang2[en_index].end + tolerance < cue1.start:
             aligned.append((None, [cues_lang2[en_index]]))
             en_index += 1
@@ -220,7 +198,7 @@ def align_bilingual_cues(
                 aligned.append((None, [candidate]))
                 en_index += 1
                 continue
-            if candidate.start < limit:
+            if candidate.start <= cue1.end + tolerance:
                 matched.append(candidate)
                 en_index += 1
             else:
@@ -284,16 +262,14 @@ def create_ttml_document(
     return tt
 
 
-def cues_to_ttml(
-    cues_lang1: List[SubtitleCue],
-    cues_lang2: List[SubtitleCue],
+def aligned_cues_to_ttml(
+    aligned_cues: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]],
     lang1: str = "ru",
     lang2: str = "en"
 ) -> str:
-    """Convert two sets of cues to TTML content."""
+    """Convert aligned subtitle cues to TTML content."""
 
-    aligned = align_bilingual_cues(cues_lang1, cues_lang2)
-    tt = create_ttml_document(aligned, lang1=lang1, lang2=lang2)
+    tt = create_ttml_document(aligned_cues, lang1=lang1, lang2=lang2)
 
     if hasattr(ET, "indent"):
         ET.indent(tt, space="  ")
@@ -302,11 +278,30 @@ def cues_to_ttml(
     return f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_str}'
 
 
-def segments_to_ttml(
-    segments_lang1,
-    segments_lang2,
+def cues_to_ttml(
+    cues_lang1: List[SubtitleCue],
+    cues_lang2: List[SubtitleCue],
     lang1: str = "ru",
-    lang2: str = "en"
+    lang2: str = "en",
+    *,
+    tolerance: float = 2.5,
+    aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
+) -> str:
+    """Convert two sets of cues to TTML content."""
+
+    if aligned_cues is None:
+        aligned_cues = align_bilingual_cues(cues_lang1, cues_lang2, tolerance=tolerance)
+
+    return aligned_cues_to_ttml(aligned_cues, lang1=lang1, lang2=lang2)
+
+
+def segments_to_ttml(
+    segments_lang1: List[SegmentLike],
+    segments_lang2: List[SegmentLike],
+    lang1: str = "ru",
+    lang2: str = "en",
+    *,
+    tolerance: float = 2.5
 ) -> str:
     """Backward-compatible helper to convert segments to TTML."""
 
@@ -322,14 +317,25 @@ def segments_to_ttml(
         if (seg.text or "").strip()
     ]
 
-    return cues_to_ttml(cues_lang1, cues_lang2, lang1=lang1, lang2=lang2)
+    return cues_to_ttml(
+        cues_lang1,
+        cues_lang2,
+        lang1=lang1,
+        lang2=lang2,
+        tolerance=tolerance,
+    )
 
 
 def vtt_files_to_ttml(
     vtt_path_lang1: str,
     vtt_path_lang2: str,
     lang1: str = "ru",
-    lang2: str = "en"
+    lang2: str = "en",
+    *,
+    tolerance: float = 2.5,
+    cues_lang1: Optional[List[SubtitleCue]] = None,
+    cues_lang2: Optional[List[SubtitleCue]] = None,
+    aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
 ) -> str:
     """Convert two WebVTT files to a single TTML file with aligned content.
 
@@ -338,12 +344,28 @@ def vtt_files_to_ttml(
         vtt_path_lang2: Path to second language VTT file
         lang1: Language code for first language
         lang2: Language code for second language
+        tolerance: Maximum time difference (in seconds) for aligning cues
+        cues_lang1: Optional pre-parsed cues for the first language
+        cues_lang2: Optional pre-parsed cues for the second language
+        aligned_cues: Optional pre-aligned cue pairs to convert directly
 
     Returns:
         TTML XML content as a string
     """
-    # Parse both VTT files
-    cues_lang1 = parse_vtt_file(vtt_path_lang1)
-    cues_lang2 = parse_vtt_file(vtt_path_lang2)
 
-    return cues_to_ttml(cues_lang1, cues_lang2, lang1=lang1, lang2=lang2)
+    if aligned_cues is not None:
+        return aligned_cues_to_ttml(aligned_cues, lang1=lang1, lang2=lang2)
+
+    if cues_lang1 is None:
+        cues_lang1 = parse_vtt_file(str(vtt_path_lang1))
+
+    if cues_lang2 is None:
+        cues_lang2 = parse_vtt_file(str(vtt_path_lang2))
+
+    return cues_to_ttml(
+        cues_lang1,
+        cues_lang2,
+        lang1=lang1,
+        lang2=lang2,
+        tolerance=tolerance,
+    )

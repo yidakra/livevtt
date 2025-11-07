@@ -16,7 +16,7 @@ Tests for archive transcription core utilities:
 - **Manifest Management**: JSONL manifest tracking
 - **Data Classes**: VideoJob and VideoMetadata structures
 
-**Run**: `python tests/test_archive_transcriber.py`
+**Run**: `pytest tests/test_archive_transcriber.py -v`
 
 #### `test_ttml_simple.py` (5 tests)
 Standalone tests for TTML utilities (no external dependencies):
@@ -71,7 +71,7 @@ python tests/run_all_tests.py
 
 ### Run Individual Test Files
 ```bash
-python tests/test_archive_transcriber.py
+pytest tests/test_archive_transcriber.py -v
 python tests/test_ttml_simple.py
 python tests/test_smil_generation.py
 python tests/test_vtt_to_ttml_cli.py

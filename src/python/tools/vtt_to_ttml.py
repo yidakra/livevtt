@@ -5,14 +5,14 @@ Merges two WebVTT subtitle files (typically one Russian, one English) into a
 single TTML file with bilingual content aligned by timestamp.
 
 Example usage:
-    python vtt_to_ttml.py --vtt_ru video.ru.vtt --vtt_en video.en.vtt --output video.ttml
+    python vtt_to_ttml.py --vtt1 video.ru.vtt --vtt2 video.en.vtt --output video.ttml
 
     # With custom tolerance for timestamp matching
-    python vtt_to_ttml.py --vtt_ru video.ru.vtt --vtt_en video.en.vtt \
+    python vtt_to_ttml.py --vtt1 video.ru.vtt --vtt2 video.en.vtt \
         --output video.ttml --tolerance 1.5
 
     # Specify different language codes
-    python vtt_to_ttml.py --vtt_ru video.source.vtt --vtt_en video.trans.vtt \
+    python vtt_to_ttml.py --vtt1 video.source.vtt --vtt2 video.trans.vtt \
         --output video.ttml --lang1 es --lang2 en
 """
 
@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from ttml_utils import vtt_files_to_ttml, parse_vtt_file, align_bilingual_cues
+from ttml_utils import parse_vtt_file, align_bilingual_cues, vtt_files_to_ttml
 
 
 LOGGER = logging.getLogger("vtt_to_ttml")
@@ -51,8 +51,10 @@ def validate_vtt_file(path: Path) -> bool:
         with open(path, "r", encoding="utf-8") as f:
             first_line = f.readline().strip()
             if not first_line.startswith("WEBVTT"):
-                LOGGER.warning("VTT file may be invalid (no WEBVTT header): %s", path)
-    except Exception as exc:
+                message = f"VTT file is missing WEBVTT header: {path}"
+                LOGGER.warning(message)
+                logging.warning(message)
+    except OSError as exc:
         LOGGER.error("Cannot read VTT file %s: %s", path, exc)
         return False
 
@@ -60,8 +62,8 @@ def validate_vtt_file(path: Path) -> bool:
 
 
 def convert_vtt_to_ttml(
-    vtt_ru: Path,
-    vtt_en: Path,
+    vtt_file1: Path,
+    vtt_file2: Path,
     output: Path,
     lang1: str = "ru",
     lang2: str = "en",
@@ -70,8 +72,8 @@ def convert_vtt_to_ttml(
     """Convert two VTT files to a single TTML file.
 
     Args:
-        vtt_ru: Path to first language VTT file
-        vtt_en: Path to second language VTT file
+        vtt_file1: Path to first language VTT file
+        vtt_file2: Path to second language VTT file
         output: Path for output TTML file
         lang1: Language code for first language
         lang2: Language code for second language
@@ -81,27 +83,27 @@ def convert_vtt_to_ttml(
         True if successful, False otherwise
     """
     # Validate input files
-    if not validate_vtt_file(vtt_ru):
+    if not validate_vtt_file(vtt_file1):
         return False
-    if not validate_vtt_file(vtt_en):
+    if not validate_vtt_file(vtt_file2):
         return False
 
     try:
         # Parse VTT files
-        LOGGER.info("Parsing %s", vtt_ru)
-        cues_lang1 = parse_vtt_file(str(vtt_ru))
-        LOGGER.info("Found %d cues in %s", len(cues_lang1), vtt_ru)
+        LOGGER.info("Parsing %s", vtt_file1)
+        cues_lang1 = parse_vtt_file(str(vtt_file1))
+        LOGGER.info("Found %d cues in %s", len(cues_lang1), vtt_file1)
 
-        LOGGER.info("Parsing %s", vtt_en)
-        cues_lang2 = parse_vtt_file(str(vtt_en))
-        LOGGER.info("Found %d cues in %s", len(cues_lang2), vtt_en)
+        LOGGER.info("Parsing %s", vtt_file2)
+        cues_lang2 = parse_vtt_file(str(vtt_file2))
+        LOGGER.info("Found %d cues in %s", len(cues_lang2), vtt_file2)
 
         # Align cues
         LOGGER.info("Aligning cues with tolerance of %.1f seconds", tolerance)
         aligned = align_bilingual_cues(cues_lang1, cues_lang2, tolerance=tolerance)
 
         # Validate alignment
-        unaligned_count = sum(1 for c1, c2 in aligned if c1 is None or c2 is None)
+        unaligned_count = sum(1 for c1, c2_list in aligned if c1 is None or not c2_list)
         if unaligned_count > 0:
             LOGGER.warning(
                 "Warning: %d/%d cue pairs are unaligned (missing one language)",
@@ -112,13 +114,15 @@ def convert_vtt_to_ttml(
                 "Consider adjusting --tolerance if too many cues are unaligned"
             )
 
-        # Generate TTML
+        # Generate TTML without re-parsing or re-aligning the cues
         LOGGER.info("Generating TTML file")
         ttml_content = vtt_files_to_ttml(
-            str(vtt_ru),
-            str(vtt_en),
+            str(vtt_file1),
+            str(vtt_file2),
             lang1=lang1,
-            lang2=lang2
+            lang2=lang2,
+            tolerance=tolerance,
+            aligned_cues=aligned,
         )
 
         # Write output
@@ -130,9 +134,30 @@ def convert_vtt_to_ttml(
         LOGGER.info("Total aligned cue pairs: %d", len(aligned))
         return True
 
-    except Exception as exc:
-        LOGGER.error("Failed to convert VTT to TTML: %s", exc, exc_info=True)
+    except OSError as exc:
+        LOGGER.error(
+            "Failed to convert VTT to TTML due to file system error: %s",
+            exc,
+            exc_info=True,
+        )
         return False
+    except ValueError as exc:
+        LOGGER.error(
+            "Failed to convert VTT to TTML due to invalid data: %s",
+            exc,
+            exc_info=True,
+        )
+        return False
+    except (KeyError, AttributeError) as exc:
+        LOGGER.error(
+            "Failed to convert VTT to TTML due to missing attribute: %s",
+            exc,
+            exc_info=True,
+        )
+        return False
+    except Exception:
+        LOGGER.exception("Unexpected error while converting VTT to TTML")
+        raise
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -150,14 +175,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         epilog="""
 Examples:
   # Basic usage
-  %(prog)s --vtt_ru video.ru.vtt --vtt_en video.en.vtt --output video.ttml
+  %(prog)s --vtt1 video.ru.vtt --vtt2 video.en.vtt --output video.ttml
 
   # With custom tolerance
-  %(prog)s --vtt_ru video.ru.vtt --vtt_en video.en.vtt \\
+  %(prog)s --vtt1 video.ru.vtt --vtt2 video.en.vtt \\
       --output video.ttml --tolerance 1.5
 
   # Custom language codes
-  %(prog)s --vtt_ru video.es.vtt --vtt_en video.en.vtt \\
+  %(prog)s --vtt1 video.es.vtt --vtt2 video.en.vtt \\
       --output video.ttml --lang1 es --lang2 en
         """,
     )
@@ -165,19 +190,25 @@ Examples:
     parser.add_argument(
         "--vtt_ru",
         "--vtt-ru",
+        "--vtt1",
+        "--vtt-file1",
         type=Path,
         required=True,
         metavar="PATH",
-        help="Path to first language WebVTT file (e.g., Russian)",
+        dest="vtt_ru",
+        help="Path to first WebVTT file",
     )
 
     parser.add_argument(
         "--vtt_en",
         "--vtt-en",
+        "--vtt2",
+        "--vtt-file2",
         type=Path,
         required=True,
         metavar="PATH",
-        help="Path to second language WebVTT file (e.g., English)",
+        dest="vtt_en",
+        help="Path to second WebVTT file",
     )
 
     parser.add_argument(
@@ -220,7 +251,13 @@ Examples:
         help="Enable verbose logging",
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    # Provide attribute aliases for backward compatibility
+    args.vtt_file1 = args.vtt_ru
+    args.vtt_file2 = args.vtt_en
+
+    return args
 
 
 def configure_logging(verbose: bool) -> None:

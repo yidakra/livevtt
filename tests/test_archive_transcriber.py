@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Unit tests for archive_transcriber.py core functionality."""
 
+import re
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
@@ -11,9 +11,6 @@ from unittest import mock
 sys.modules['faster_whisper'] = mock.MagicMock()
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
-
-# Mock ttml_utils to avoid import issues
-sys.modules['ttml_utils'] = mock.MagicMock()
 
 from archive_transcriber import (
     segments_to_webvtt,
@@ -25,6 +22,7 @@ from archive_transcriber import (
     VideoJob,
     Manifest,
     VideoMetadata,
+    translation_output_suspect,
 )
 
 
@@ -84,8 +82,13 @@ class TestSegmentsToWebVTT:
 
         assert "Valid" in result
         assert "Also valid" in result
-        # Should not have 4 numbered segments, only 2
-        assert "3\n" not in result
+
+        timestamp_lines = re.findall(
+            r"^\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}$",
+            result,
+            flags=re.MULTILINE,
+        )
+        assert len(timestamp_lines) == 2
         print("✓ test_empty_text_segments_skipped passed")
 
     def test_timestamp_formatting(self):
@@ -105,6 +108,40 @@ class TestSegmentsToWebVTT:
         assert not result.startswith("WEBVTT")
         assert "Test" in result
         print("✓ test_no_header_option passed")
+
+
+class TestTranslationOutputSuspect:
+    """Tests for translation output sanity checks."""
+
+    def test_cyrillic_detected_for_english_label(self):
+        # Arrange
+        source_segments = [MockSegment(0.0, 1.0, "source")]
+        translated_segments = [
+            MockSegment(0.0, 1.0, "Привет"),
+            MockSegment(1.0, 2.0, "Hello"),
+        ]
+
+        # Act
+        result = translation_output_suspect(source_segments, translated_segments, "english")
+
+        # Assert
+        assert result is True
+        print("✓ test_cyrillic_detected_for_english_label passed")
+
+    def test_cyrillic_detected_for_en_us(self):
+        # Arrange
+        source_segments = [MockSegment(0.0, 1.0, "source")]
+        translated_segments = [
+            MockSegment(0.0, 1.0, "Здравствуйте"),
+            MockSegment(1.0, 2.0, "Good morning"),
+        ]
+
+        # Act
+        result = translation_output_suspect(source_segments, translated_segments, "en-US")
+
+        # Assert
+        assert result is True
+        print("✓ test_cyrillic_detected_for_en_us passed")
 
 
 class TestResolutionExtraction:
@@ -434,59 +471,3 @@ class TestVideoJob:
         assert job.normalized_name == "video.ts"
         assert job.ttml.name == "video.ttml"
         print("✓ test_video_job_creation passed")
-
-
-def run_all_tests():
-    """Run all test suites."""
-    print("\nRunning archive_transcriber.py unit tests...")
-    print("=" * 60)
-
-    test_classes = [
-        TestSegmentsToWebVTT,
-        TestResolutionExtraction,
-        TestVariantNameNormalization,
-        TestVariantSelection,
-        TestBuildOutputArtifacts,
-        TestAtomicWrite,
-        TestManifest,
-        TestVideoMetadata,
-        TestVideoJob,
-    ]
-
-    total_passed = 0
-    total_failed = 0
-
-    for test_class in test_classes:
-        print(f"\n{test_class.__name__}:")
-        print("-" * 60)
-
-        test_methods = [
-            method for method in dir(test_class)
-            if method.startswith("test_") and callable(getattr(test_class, method))
-        ]
-
-        for method_name in test_methods:
-            try:
-                instance = test_class()
-                method = getattr(instance, method_name)
-                method()
-                total_passed += 1
-            except AssertionError as e:
-                print(f"✗ {method_name} failed: {e}")
-                total_failed += 1
-            except Exception as e:
-                print(f"✗ {method_name} error: {e}")
-                import traceback
-                traceback.print_exc()
-                total_failed += 1
-
-    print("\n" + "=" * 60)
-    print(f"Results: {total_passed} passed, {total_failed} failed")
-    print("=" * 60)
-
-    return total_failed == 0
-
-
-if __name__ == "__main__":
-    success = run_all_tests()
-    sys.exit(0 if success else 1)

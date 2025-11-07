@@ -3,6 +3,7 @@
 
 import sys
 import tempfile
+import traceback
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -46,18 +47,20 @@ Hello, world!
 00:00:10.000 --> 00:00:12.500
 Second subtitle
 """
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".vtt", delete=False, encoding="utf-8") as f:
-        f.write(vtt_content)
-        vtt_path = f.name
-
+    vtt_path = None
     try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vtt", delete=False, encoding="utf-8") as f:
+            f.write(vtt_content)
+            vtt_path = f.name
+
         cues = parse_vtt_file(vtt_path)
         assert len(cues) == 2
         assert abs(cues[0].start - 5.0) < 0.001
         assert cues[0].text == "Hello, world!"
         print("✓ test_parse_vtt_file passed")
     finally:
-        Path(vtt_path).unlink()
+        if vtt_path:
+            Path(vtt_path).unlink()
 
 
 def test_align_cues():
@@ -74,7 +77,8 @@ def test_align_cues():
     aligned = align_bilingual_cues(cues_lang1, cues_lang2, tolerance=1.0)
     assert len(aligned) == 2
     assert aligned[0][0].text == "Привет"
-    assert aligned[0][1].text == "Hello"
+    assert len(aligned[0][1]) == 1
+    assert aligned[0][1][0].text == "Hello"
     print("✓ test_align_cues passed")
 
 
@@ -94,15 +98,15 @@ def test_vtt_to_ttml():
 Hello, world!
 """
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8") as f_ru:
-        f_ru.write(vtt_ru_content)
-        vtt_ru_path = f_ru.name
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".en.vtt", delete=False, encoding="utf-8") as f_en:
-        f_en.write(vtt_en_content)
-        vtt_en_path = f_en.name
-
     try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8") as f_ru:
+            f_ru.write(vtt_ru_content)
+            vtt_ru_path = f_ru.name
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".en.vtt", delete=False, encoding="utf-8") as f_en:
+            f_en.write(vtt_en_content)
+            vtt_en_path = f_en.name
+
         ttml_content = vtt_files_to_ttml(vtt_ru_path, vtt_en_path, lang1="ru", lang2="en")
 
         # Validate XML structure
@@ -145,12 +149,10 @@ def run_all_tests():
             test()
             passed += 1
         except AssertionError as e:
-            import traceback
             print(f"✗ {test.__name__} failed: {e}")
             traceback.print_exc()
             failed += 1
         except Exception as e:
-            import traceback
             print(f"✗ {test.__name__} error: {e}")
             traceback.print_exc()
             failed += 1

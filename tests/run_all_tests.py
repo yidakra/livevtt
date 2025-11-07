@@ -2,23 +2,39 @@
 """
 Master test runner for LiveVTT test suite.
 
-Runs all unit tests and reports overall coverage.
+Runs all unit tests and reports overall results.
 """
 
+import re
 import sys
 import subprocess
 from pathlib import Path
 
 
+RESULT_PATTERN = re.compile(
+    r"""(?ix)
+    (?:
+        (?P<count>\d+)\s*[,;:]?\s*(?P<label>passed|failed)s? |
+        (?P<label_alt>passed|failed)s?\s*[,;:]?\s*(?P<count_alt>\d+)
+    )
+    """
+)
+
+
 def run_test_file(test_file: Path) -> tuple[int, int]:
     """Run a single test file and return (passed, failed) counts."""
-    print(f"\n{'=' * 70}")
+    print("\n" + "=" * 70)
     print(f"Running: {test_file.name}")
-    print(f"{'=' * 70}")
+    print("=" * 70)
+
+    if test_file.name == "test_archive_transcriber.py":
+        command = ["pytest", "tests/test_archive_transcriber.py", "-v"]
+    else:
+        command = [sys.executable, str(test_file)]
 
     try:
         result = subprocess.run(
-            [sys.executable, str(test_file)],
+            command,
             capture_output=True,
             text=True,
             timeout=60,
@@ -30,27 +46,31 @@ def run_test_file(test_file: Path) -> tuple[int, int]:
             print("STDERR:", result.stderr, file=sys.stderr)
 
         # Parse results from output
-        # Look for pattern like "Results: X passed, Y failed"
-        lines = result.stdout.split("\n")
-        for line in lines:
-            if "passed" in line.lower() and "failed" in line.lower():
-                # Extract numbers
-                parts = line.split()
-                passed = 0
-                failed = 0
-                for i, part in enumerate(parts):
-                    if part.isdigit():
-                        if i + 1 < len(parts):
-                            if "passed" in parts[i + 1].lower():
-                                passed = int(part)
-                            elif "failed" in parts[i + 1].lower():
-                                failed = int(part)
+        passed = None
+        failed = None
+        for line in result.stdout.splitlines():
+            matches = RESULT_PATTERN.finditer(line)
+            for match in matches:
+                label = (match.group("label") or match.group("label_alt") or "").lower()
+                raw_count = match.group("count") or match.group("count_alt")
+                if not raw_count:
+                    continue
+                count = int(raw_count)
+                if label.startswith("pass"):
+                    passed = count
+                elif label.startswith("fail"):
+                    failed = count
+            if passed is not None and failed is not None:
                 return passed, failed
+        if passed is not None or failed is not None:
+            return (passed or 0, failed or 0)
 
         # If we can't parse, check return code
         if result.returncode == 0:
+            print(f"WARNING: Could not parse test results from {test_file.name}, assuming success based on exit code")
             return (1, 0)  # Assume at least one test passed
         else:
+            print(f"WARNING: Could not parse test results from {test_file.name}, assuming failure based on exit code")
             return (0, 1)  # Assume failure
 
     except subprocess.TimeoutExpired:
@@ -70,10 +90,7 @@ def main():
     tests_dir = Path(__file__).parent
 
     # Find all test files
-    test_files = sorted([
-        f for f in tests_dir.glob("test_*.py")
-        if f.name != "run_all_tests.py"
-    ])
+    test_files = sorted(tests_dir.glob("test_*.py"))
 
     if not test_files:
         print("No test files found!")
@@ -105,7 +122,7 @@ def main():
     print(f"Test files run: {len(test_files)}")
 
     if failed_files:
-        print(f"\nFiles with failures:")
+        print("\nFiles with failures:")
         for fname in failed_files:
             print(f"  ✗ {fname}")
     else:
