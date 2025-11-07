@@ -28,7 +28,7 @@ def run_test_file(test_file: Path) -> tuple[int, int]:
     print("=" * 70)
 
     if test_file.name == "test_archive_transcriber.py":
-        command = ["pytest", "tests/test_archive_transcriber.py", "-v"]
+        command = ["pytest", str(test_file), "-v"]
     else:
         command = [sys.executable, str(test_file)]
 
