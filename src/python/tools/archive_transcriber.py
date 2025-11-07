@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from faster_whisper import WhisperModel  # type: ignore
 
 # Import TTML utilities
-from ttml_utils import segments_to_ttml
+from ttml_utils import cues_to_ttml, parse_vtt_content
 
 
 VIDEO_EXTENSIONS = {
@@ -96,6 +96,39 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
 
     # Ensure file ends with newline
     return "\n".join(lines).rstrip() + "\n"
+
+
+def translation_output_suspect(
+    source_segments: List,
+    translated_segments: List,
+    target_language: str,
+) -> bool:
+    if not translated_segments:
+        return True
+
+    target = (target_language or "").lower()
+
+    if target in {"en", "eng"}:
+        total_chars = 0
+        cyrillic_chars = 0
+        for seg in translated_segments:
+            text = (seg.text or "")
+            total_chars += len(text)
+            cyrillic_chars += sum("\u0400" <= ch <= "\u04FF" for ch in text)
+
+        if total_chars == 0:
+            return True
+
+        if cyrillic_chars / total_chars > 0.2:
+            return True
+
+    source_count = len(source_segments)
+    translated_count = len(translated_segments)
+
+    if source_count and translated_count < max(1, source_count // 3):
+        return True
+
+    return False
 
 
 def extract_resolution(value: str) -> Optional[int]:
@@ -181,44 +214,52 @@ class Manifest:
 class WhisperModelHolder(threading.local):
     def __init__(self) -> None:
         super().__init__()
-        self.model: Optional[WhisperModel] = None
+        self.models: Dict[str, WhisperModel] = {}
 
 
 MODEL_HOLDER = WhisperModelHolder()
 
 
-def get_model(args: argparse.Namespace) -> WhisperModel:
-    if MODEL_HOLDER.model is not None:
-        return MODEL_HOLDER.model
+def get_model(
+    args: argparse.Namespace,
+    model_name: Optional[str] = None,
+    compute_type: Optional[str] = None,
+) -> WhisperModel:
+    name = model_name or args.model
+
+    if name in MODEL_HOLDER.models:
+        return MODEL_HOLDER.models[name]
 
     device = "cuda" if args.use_cuda else "cpu"
-    compute_type = args.compute_type
+    selected_compute_type = compute_type or args.compute_type
 
     def instantiate(target_device: str, target_compute_type: str) -> WhisperModel:
         LOGGER.debug(
             "Loading Whisper model %s (device=%s, compute_type=%s)",
-            args.model,
+            name,
             target_device,
             target_compute_type,
         )
         return WhisperModel(
-            args.model,
+            name,
             device=target_device,
             compute_type=target_compute_type,
         )
 
     try:
-        MODEL_HOLDER.model = instantiate(device, compute_type)
-        return MODEL_HOLDER.model
+        MODEL_HOLDER.models[name] = instantiate(device, selected_compute_type)
     except RuntimeError as exc:
         if args.use_cuda:
             LOGGER.warning(
-                "CUDA initialisation failed (%s). Falling back to CPU with float32 compute type.",
+                "CUDA initialisation failed for %s (%s). Falling back to CPU with float32 compute type.",
+                name,
                 exc,
             )
-            MODEL_HOLDER.model = instantiate("cpu", "float32")
-            return MODEL_HOLDER.model
-        raise
+            MODEL_HOLDER.models[name] = instantiate("cpu", "float32")
+        else:
+            raise
+
+    return MODEL_HOLDER.models[name]
 
 @dataclass
 class VideoMetadata:
@@ -553,7 +594,9 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
-    need_transcription = not args.smil_only and not (job.ru_vtt.exists() and job.en_vtt.exists())
+    need_transcription = not args.smil_only and (
+        args.force or not (job.ru_vtt.exists() and job.en_vtt.exists())
+    )
 
     audio_path: Optional[Path] = None
 
@@ -571,7 +614,10 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             )
             ru_segments = list(ru_iter)
 
-            en_iter, en_info = model.transcribe(
+            translation_model_name = args.translation_model or args.model
+            translation_model = get_model(args, model_name=translation_model_name)
+
+            en_iter, en_info = translation_model.transcribe(
                 str(audio_path),
                 beam_size=args.beam_size,
                 language=args.source_language,
@@ -580,13 +626,47 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             )
             en_segments = list(en_iter)
 
+            fallback_name = (args.translation_fallback_model or "").strip()
+            if fallback_name.lower() == "none":
+                fallback_name = ""
+
+            if (
+                fallback_name
+                and fallback_name != translation_model_name
+                and translation_output_suspect(ru_segments, en_segments, args.translation_language)
+            ):
+                LOGGER.warning(
+                    "Translation model %s produced unexpected output; retrying with %s",
+                    translation_model_name,
+                    fallback_name,
+                )
+                translation_model = get_model(args, model_name=fallback_name)
+                en_iter, en_info = translation_model.transcribe(
+                    str(audio_path),
+                    beam_size=args.beam_size,
+                    language=args.source_language,
+                    vad_filter=args.vad_filter,
+                    task="translate",
+                )
+                en_segments = list(en_iter)
+                translation_model_name = fallback_name
+
             ru_content = segments_to_webvtt(ru_segments)
+            en_content = segments_to_webvtt(en_segments)
+
             atomic_write(job.ru_vtt, ru_content)
-            atomic_write(job.en_vtt, segments_to_webvtt(en_segments))
+            atomic_write(job.en_vtt, en_content)
 
             # Generate TTML file by default (unless --no-ttml is specified)
             if not args.no_ttml:
-                ttml_content = segments_to_ttml(ru_segments, en_segments, lang1="ru", lang2="en")
+                ru_cues = parse_vtt_content(ru_content)
+                en_cues = parse_vtt_content(en_content)
+                ttml_content = cues_to_ttml(
+                    ru_cues,
+                    en_cues,
+                    lang1=args.source_language,
+                    lang2=args.translation_language,
+                )
                 atomic_write(job.ttml, ttml_content)
                 LOGGER.debug("Generated TTML file: %s", job.ttml)
 
@@ -674,6 +754,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--compute-type", type=str, default="float16", help="Faster-Whisper compute type (e.g., float16, int8_float16)")
     parser.add_argument("--use-cuda", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=True, help="Use CUDA if available (default: true)")
     parser.add_argument("--source-language", type=str, default="ru", help="Source language code for transcription")
+    parser.add_argument("--translation-language", type=str, default="en", help="Target language code for translation output")
+    parser.add_argument(
+        "--translation-model",
+        type=str,
+        default="large-v3",
+        help="Model name to use for translation (default: large-v3; use --model for transcription)",
+    )
+    parser.add_argument(
+        "--translation-fallback-model",
+        type=str,
+        default="large-v3",
+        help="Fallback model for translation if the primary output appears incorrect (set to 'none' to disable)",
+    )
     parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
     parser.add_argument("--sample-rate", type=int, default=16000, help="Audio sample rate for extraction")
     parser.add_argument("--vad-filter", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=False, help="Enable Silero VAD filtering")
