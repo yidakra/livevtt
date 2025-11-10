@@ -478,8 +478,8 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
     else:
         # Use TTML by default (bilingual subtitle file)
         if job.ttml.exists():
-            # TTML is bilingual, so we use the primary language (Russian) as system-language
-            ensure_textstream(job.ttml.name, "rus")
+            # TTML is bilingual, so we include both languages in system-language
+            ensure_textstream(job.ttml.name, "rus,eng")
             LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
         elif not args.smil_only:
             LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)

@@ -266,3 +266,29 @@ class TestSMILGeneration:
         assert audio_codec_param is not None
         assert audio_codec_param.get("value") == "aac"
 
+
+    def test_smil_ttml_bilingual_language(self, video_job, metadata):
+        """Test that TTML textstream includes both languages in system-language."""
+        # Create TTML file
+        video_job.ttml.write_text("<?xml version='1.0' encoding='UTF-8'?><tt></tt>")
+
+        # Use default args (TTML in SMIL, not VTT)
+        args = MockArgs(vtt_in_smil=False)
+        write_smil(video_job, metadata, args)
+
+        tree = ET.parse(video_job.smil)
+        root = tree.getroot()
+        switch = root.find("body/switch")
+        textstreams = switch.findall("textstream")
+
+        # Find TTML textstream
+        ttml_stream = None
+        for ts in textstreams:
+            if "video.ttml" in ts.get("src", ""):
+                ttml_stream = ts
+                break
+
+        assert ttml_stream is not None, "TTML textstream should be present"
+        assert ttml_stream.get("system-language") == "rus,eng", \
+            "TTML textstream should have bilingual system-language attribute"
+
