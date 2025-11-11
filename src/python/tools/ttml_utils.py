@@ -77,28 +77,25 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
         return _FILTER_WORDS
 
 
-def apply_text_filter(text: str, filter_words: List[str]) -> str:
-    """Remove filter words from text.
+def should_filter_cue(text: str, filter_words: List[str]) -> bool:
+    """Check if a cue should be filtered out based on filter words.
 
     Args:
-        text: Original text
-        filter_words: List of strings to filter out
+        text: Text to check
+        filter_words: List of strings to check for
 
     Returns:
-        Filtered text with filter words removed
+        True if the cue contains any filter word and should be removed, False otherwise
     """
     if not filter_words or not text:
-        return text
+        return False
 
-    filtered_text = text
     for word in filter_words:
-        # Remove the word (case-insensitive) and clean up extra whitespace
-        filtered_text = re.sub(re.escape(word), "", filtered_text, flags=re.IGNORECASE)
+        # Check if the word appears in the text (case-insensitive)
+        if re.search(re.escape(word), text, flags=re.IGNORECASE):
+            return True
 
-    # Clean up multiple spaces and leading/trailing whitespace
-    filtered_text = re.sub(r"\s+", " ", filtered_text).strip()
-
-    return filtered_text
+    return False
 
 
 def format_ttml_timestamp(seconds: float) -> str:
@@ -318,32 +315,24 @@ def create_ttml_document(
 
     for cue1, cue2_list in aligned_cues:
         if cue1 is not None:
-            text1 = cue1.text
-            if filter_words:
-                text1 = apply_text_filter(text1, filter_words)
-
-            # Only add cue if text is not empty after filtering
-            if text1:
+            # Skip entire cue if it contains any filter words
+            if not (filter_words and should_filter_cue(cue1.text, filter_words)):
                 p = ET.SubElement(div, "p")
                 p.set("begin", format_ttml_timestamp(cue1.start))
                 p.set("end", format_ttml_timestamp(cue1.end))
                 span1 = ET.SubElement(p, "span")
                 span1.set(lang_attr, lang1)
-                span1.text = text1
+                span1.text = cue1.text
 
         for cue2 in cue2_list:
-            text2 = cue2.text
-            if filter_words:
-                text2 = apply_text_filter(text2, filter_words)
-
-            # Only add cue if text is not empty after filtering
-            if text2:
+            # Skip entire cue if it contains any filter words
+            if not (filter_words and should_filter_cue(cue2.text, filter_words)):
                 p_en = ET.SubElement(div, "p")
                 p_en.set("begin", format_ttml_timestamp(cue2.start))
                 p_en.set("end", format_ttml_timestamp(cue2.end))
                 span2 = ET.SubElement(p_en, "span")
                 span2.set(lang_attr, lang2)
-                span2.text = text2
+                span2.text = cue2.text
 
     return tt
 

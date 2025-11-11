@@ -107,28 +107,25 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
         return _FILTER_WORDS
 
 
-def apply_text_filter(text: str, filter_words: List[str]) -> str:
-    """Remove filter words from text.
+def should_filter_cue(text: str, filter_words: List[str]) -> bool:
+    """Check if a cue should be filtered out based on filter words.
 
     Args:
-        text: Original text
-        filter_words: List of strings to filter out
+        text: Text to check
+        filter_words: List of strings to check for
 
     Returns:
-        Filtered text with filter words removed
+        True if the cue contains any filter word and should be removed, False otherwise
     """
     if not filter_words or not text:
-        return text
+        return False
 
-    filtered_text = text
     for word in filter_words:
-        # Remove the word (case-insensitive) and clean up extra whitespace
-        filtered_text = re.sub(re.escape(word), "", filtered_text, flags=re.IGNORECASE)
+        # Check if the word appears in the text (case-insensitive)
+        if re.search(re.escape(word), text, flags=re.IGNORECASE):
+            return True
 
-    # Clean up multiple spaces and leading/trailing whitespace
-    filtered_text = re.sub(r"\s+", " ", filtered_text).strip()
-
-    return filtered_text
+    return False
 
 
 def ensure_python_version() -> None:
@@ -170,11 +167,11 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_w
         end = format_timestamp(segment.end)
         text = (segment.text or "").strip()
 
-        # Apply text filtering if filter words are provided
-        if filter_words:
-            text = apply_text_filter(text, filter_words)
-
         if not text:
+            continue
+
+        # Skip entire cue if it contains any filter words
+        if filter_words and should_filter_cue(text, filter_words):
             continue
 
         lines.append(str(cue_idx))
