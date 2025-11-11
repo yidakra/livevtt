@@ -88,11 +88,8 @@ def convert_vtt_to_ttml(
     if not validate_vtt_file(vtt_file2):
         return False
 
-    # Load filter words if specified
-    filter_words = load_filter_words(filter_json_path) if filter_json_path else []
-
-    if filter_words:
-        LOGGER.info("Loaded %d filter words from %s", len(filter_words), filter_json_path)
+    # Load filter words (auto-discovers if not specified)
+    filter_words = load_filter_words(filter_json_path)
 
     try:
         # Parse VTT files
@@ -129,7 +126,7 @@ def convert_vtt_to_ttml(
             lang2=lang2,
             tolerance=tolerance,
             aligned_cues=aligned,
-            filter_words=filter_words if filter_words else None,
+            filter_words=filter_words,
         )
 
         # Write output
