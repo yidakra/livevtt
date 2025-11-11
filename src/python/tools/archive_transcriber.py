@@ -58,6 +58,78 @@ RESOLUTION_TOKEN_PATTERN = re.compile(r"([_.-])(\d{3,4})p(?=([_.-]|$))", re.IGNO
 
 LOGGER = logging.getLogger("archive_transcriber")
 
+# Global filter words cache
+_FILTER_WORDS: Optional[List[str]] = None
+
+
+def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
+    """Load filter words from filter.json file.
+
+    Args:
+        filter_json_path: Optional path to filter.json. If not provided, searches for it
+                         in standard locations (config/filter.json or filter.json)
+
+    Returns:
+        List of strings to filter from transcriptions
+    """
+    global _FILTER_WORDS
+
+    if _FILTER_WORDS is not None:
+        return _FILTER_WORDS
+
+    if filter_json_path is None:
+        # Try standard locations
+        script_dir = Path(__file__).parent.parent.parent.parent
+        possible_paths = [
+            script_dir / "config" / "filter.json",
+            script_dir / "filter.json",
+        ]
+
+        for path in possible_paths:
+            if path.exists():
+                filter_json_path = path
+                break
+
+    if filter_json_path is None or not filter_json_path.exists():
+        LOGGER.debug("No filter.json found, no text filtering will be applied")
+        _FILTER_WORDS = []
+        return _FILTER_WORDS
+
+    try:
+        with open(filter_json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            _FILTER_WORDS = data.get("filter_words", [])
+            LOGGER.info("Loaded %d filter words from %s", len(_FILTER_WORDS), filter_json_path)
+            return _FILTER_WORDS
+    except (json.JSONDecodeError, OSError) as exc:
+        LOGGER.warning("Failed to load filter.json from %s: %s", filter_json_path, exc)
+        _FILTER_WORDS = []
+        return _FILTER_WORDS
+
+
+def apply_text_filter(text: str, filter_words: List[str]) -> str:
+    """Remove filter words from text.
+
+    Args:
+        text: Original text
+        filter_words: List of strings to filter out
+
+    Returns:
+        Filtered text with filter words removed
+    """
+    if not filter_words or not text:
+        return text
+
+    filtered_text = text
+    for word in filter_words:
+        # Remove the word (case-insensitive) and clean up extra whitespace
+        filtered_text = re.sub(re.escape(word), "", filtered_text, flags=re.IGNORECASE)
+
+    # Clean up multiple spaces and leading/trailing whitespace
+    filtered_text = re.sub(r"\s+", " ", filtered_text).strip()
+
+    return filtered_text
+
 
 def ensure_python_version() -> None:
     if sys.version_info < (3, 10):
@@ -68,8 +140,17 @@ def human_time() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
-    """Convert Faster-Whisper segments to WebVTT content."""
+def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_words: Optional[List[str]] = None) -> str:
+    """Convert Faster-Whisper segments to WebVTT content.
+
+    Args:
+        segments: Iterable of segment objects with start, end, and text attributes
+        prepend_header: Whether to include WEBVTT header
+        filter_words: Optional list of strings to filter from text
+
+    Returns:
+        WebVTT formatted string
+    """
 
     def format_timestamp(seconds: float) -> str:
         total_ms = int(seconds * 1000)
@@ -83,16 +164,24 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
         lines.append("WEBVTT")
         lines.append("")
 
-    for idx, segment in enumerate(segments, start=1):
+    cue_idx = 1
+    for segment in segments:
         start = format_timestamp(segment.start)
         end = format_timestamp(segment.end)
         text = (segment.text or "").strip()
+
+        # Apply text filtering if filter words are provided
+        if filter_words:
+            text = apply_text_filter(text, filter_words)
+
         if not text:
             continue
-        lines.append(str(idx))
+
+        lines.append(str(cue_idx))
         lines.append(f"{start} --> {end}")
         lines.append(text)
         lines.append("")
+        cue_idx += 1
 
     # Ensure file ends with newline
     return "\n".join(lines).rstrip() + "\n"
@@ -627,6 +716,9 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
 
+    # Load filter words (cached after first call)
+    filter_words = load_filter_words()
+
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
     need_transcription = not args.smil_only and (
@@ -686,8 +778,8 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                 en_segments = list(en_iter)
                 translation_model_name = fallback_name
 
-            ru_content = segments_to_webvtt(ru_segments)
-            en_content = segments_to_webvtt(en_segments)
+            ru_content = segments_to_webvtt(ru_segments, filter_words=filter_words)
+            en_content = segments_to_webvtt(en_segments, filter_words=filter_words)
 
             atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, en_content)
@@ -701,6 +793,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                     en_cues,
                     lang1=args.source_language,
                     lang2=args.translation_language,
+                    filter_words=filter_words,
                 )
                 atomic_write(job.ttml, ttml_content)
                 LOGGER.debug("Generated TTML file: %s", job.ttml)

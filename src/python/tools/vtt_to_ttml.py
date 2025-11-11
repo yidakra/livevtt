@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from ttml_utils import parse_vtt_file, align_bilingual_cues, vtt_files_to_ttml
+from ttml_utils import parse_vtt_file, align_bilingual_cues, vtt_files_to_ttml, load_filter_words
 
 
 LOGGER = logging.getLogger("vtt_to_ttml")
@@ -66,6 +66,7 @@ def convert_vtt_to_ttml(
     lang1: str = "ru",
     lang2: str = "en",
     tolerance: float = 1.0,
+    filter_json_path: Optional[Path] = None,
 ) -> bool:
     """Convert two VTT files to a single TTML file.
 
@@ -76,6 +77,7 @@ def convert_vtt_to_ttml(
         lang1: Language code for first language
         lang2: Language code for second language
         tolerance: Maximum time difference (seconds) for cue alignment
+        filter_json_path: Optional path to filter.json file for text filtering
 
     Returns:
         True if successful, False otherwise
@@ -85,6 +87,12 @@ def convert_vtt_to_ttml(
         return False
     if not validate_vtt_file(vtt_file2):
         return False
+
+    # Load filter words if specified
+    filter_words = load_filter_words(filter_json_path) if filter_json_path else []
+
+    if filter_words:
+        LOGGER.info("Loaded %d filter words from %s", len(filter_words), filter_json_path)
 
     try:
         # Parse VTT files
@@ -121,6 +129,7 @@ def convert_vtt_to_ttml(
             lang2=lang2,
             tolerance=tolerance,
             aligned_cues=aligned,
+            filter_words=filter_words if filter_words else None,
         )
 
         # Write output
@@ -243,6 +252,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--filter",
+        type=Path,
+        metavar="PATH",
+        help="Path to filter.json file for text filtering",
+    )
+
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -296,6 +312,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         lang1=args.lang1,
         lang2=args.lang2,
         tolerance=args.tolerance,
+        filter_json_path=args.filter,
     )
 
     return 0 if success else 1
