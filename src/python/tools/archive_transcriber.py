@@ -65,22 +65,39 @@ def ensure_python_version() -> None:
 
 
 def human_time() -> str:
+    """
+    Return the current UTC time formatted as an ISO-like timestamp.
+    
+    Returns:
+        A string in the format `YYYY-MM-DDTHH:MM:SSZ` representing the current time in UTC.
+    """
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_words: Optional[List[str]] = None) -> str:
-    """Convert Faster-Whisper segments to WebVTT content.
-
-    Args:
-        segments: Iterable of segment objects with start, end, and text attributes
-        prepend_header: Whether to include WEBVTT header
-        filter_words: Optional list of strings to filter from text
-
+    """
+    Convert an iterable of transcription segments into WebVTT subtitle content.
+    
+    Parameters:
+        segments: Iterable of objects with numeric `start` and `end` (seconds) and string `text` attributes.
+        prepend_header: If True, include the leading "WEBVTT" header and a blank line.
+        filter_words: Optional list of substrings; any cue whose text matches filtering rules will be omitted.
+    
+    Notes:
+        - Timestamps are formatted as "HH:MM:SS.mmm".
+        - Empty texts are skipped. Cue indices are assigned sequentially only to emitted cues.
+    
     Returns:
-        WebVTT formatted string
+        A WebVTT-formatted string ending with a single newline.
     """
 
     def format_timestamp(seconds: float) -> str:
+        """
+        Format a time value in seconds into a WebVTT-style timestamp "HH:MM:SS.mmm".
+        
+        Returns:
+            str: Timestamp in the form "HH:MM:SS.mmm" corresponding to the input seconds; sub-millisecond fractions are truncated.
+        """
         total_ms = int(seconds * 1000)
         hours, remainder = divmod(total_ms, 3_600_000)
         minutes, remainder = divmod(remainder, 60_000)
@@ -641,6 +658,17 @@ def atomic_write(path: Path, content: str) -> None:
 
 
 def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
+    """
+    Process a single VideoJob: transcribe/translate audio if needed, write VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
+    
+    Parameters:
+        job (VideoJob): Candidate video and target output paths.
+        args (argparse.Namespace): CLI options that control processing (sampling rate, models, transcription/translation flags, ttml/vtt behavior, force, etc.).
+        manifest (Manifest): Append-only manifest used to record processing results.
+    
+    Returns:
+        dict: A manifest-style record describing the processed video. On success the record has "status": "success" and contains output paths, duration, timestamps, and processing time; on failure the record has "status": "error" and includes an "error" message.
+    """
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
 
@@ -938,4 +966,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
