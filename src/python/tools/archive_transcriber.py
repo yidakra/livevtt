@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from faster_whisper import WhisperModel  # type: ignore
 
 # Import TTML utilities
-from ttml_utils import cues_to_ttml, parse_vtt_content
+from ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words, should_filter_cue
 
 
 VIDEO_EXTENSIONS = {
@@ -65,13 +65,39 @@ def ensure_python_version() -> None:
 
 
 def human_time() -> str:
+    """
+    Return the current UTC time formatted as an ISO-like timestamp.
+    
+    Returns:
+        A string in the format `YYYY-MM-DDTHH:MM:SSZ` representing the current time in UTC.
+    """
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
-    """Convert Faster-Whisper segments to WebVTT content."""
+def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_words: Optional[List[str]] = None) -> str:
+    """
+    Convert an iterable of transcription segments into WebVTT subtitle content.
+    
+    Parameters:
+        segments: Iterable of objects with numeric `start` and `end` (seconds) and string `text` attributes.
+        prepend_header: If True, include the leading "WEBVTT" header and a blank line.
+        filter_words: Optional list of substrings; any cue whose text matches filtering rules will be omitted.
+    
+    Notes:
+        - Timestamps are formatted as "HH:MM:SS.mmm".
+        - Empty texts are skipped. Cue indices are assigned sequentially only to emitted cues.
+    
+    Returns:
+        A WebVTT-formatted string ending with a single newline.
+    """
 
     def format_timestamp(seconds: float) -> str:
+        """
+        Format a time value in seconds into a WebVTT-style timestamp "HH:MM:SS.mmm".
+        
+        Returns:
+            str: Timestamp in the form "HH:MM:SS.mmm" corresponding to the input seconds; sub-millisecond fractions are truncated.
+        """
         total_ms = int(seconds * 1000)
         hours, remainder = divmod(total_ms, 3_600_000)
         minutes, remainder = divmod(remainder, 60_000)
@@ -83,16 +109,24 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True) -> str:
         lines.append("WEBVTT")
         lines.append("")
 
-    for idx, segment in enumerate(segments, start=1):
+    cue_idx = 1
+    for segment in segments:
         start = format_timestamp(segment.start)
         end = format_timestamp(segment.end)
         text = (segment.text or "").strip()
+
         if not text:
             continue
-        lines.append(str(idx))
+
+        # Skip entire cue if it contains any filter words
+        if filter_words and should_filter_cue(text, filter_words):
+            continue
+
+        lines.append(str(cue_idx))
         lines.append(f"{start} --> {end}")
         lines.append(text)
         lines.append("")
+        cue_idx += 1
 
     # Ensure file ends with newline
     return "\n".join(lines).rstrip() + "\n"
@@ -624,8 +658,22 @@ def atomic_write(path: Path, content: str) -> None:
 
 
 def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
+    """
+    Process a single VideoJob: transcribe/translate audio if needed, write VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
+    
+    Parameters:
+        job (VideoJob): Candidate video and target output paths.
+        args (argparse.Namespace): CLI options that control processing (sampling rate, models, transcription/translation flags, ttml/vtt behavior, force, etc.).
+        manifest (Manifest): Append-only manifest used to record processing results.
+    
+    Returns:
+        dict: A manifest-style record describing the processed video. On success the record has "status": "success" and contains output paths, duration, timestamps, and processing time; on failure the record has "status": "error" and includes an "error" message.
+    """
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
+
+    # Load filter words (cached after first call)
+    filter_words = load_filter_words()
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
@@ -686,8 +734,8 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                 en_segments = list(en_iter)
                 translation_model_name = fallback_name
 
-            ru_content = segments_to_webvtt(ru_segments)
-            en_content = segments_to_webvtt(en_segments)
+            ru_content = segments_to_webvtt(ru_segments, filter_words=filter_words)
+            en_content = segments_to_webvtt(en_segments, filter_words=filter_words)
 
             atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, en_content)
@@ -701,6 +749,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                     en_cues,
                     lang1=args.source_language,
                     lang2=args.translation_language,
+                    filter_words=filter_words,
                 )
                 atomic_write(job.ttml, ttml_content)
                 LOGGER.debug("Generated TTML file: %s", job.ttml)
@@ -917,4 +966,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

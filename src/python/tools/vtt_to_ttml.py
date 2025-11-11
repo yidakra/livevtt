@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from ttml_utils import parse_vtt_file, align_bilingual_cues, vtt_files_to_ttml
+from ttml_utils import parse_vtt_file, align_bilingual_cues, vtt_files_to_ttml, load_filter_words
 
 
 LOGGER = logging.getLogger("vtt_to_ttml")
@@ -66,25 +66,36 @@ def convert_vtt_to_ttml(
     lang1: str = "ru",
     lang2: str = "en",
     tolerance: float = 1.0,
+    filter_json_path: Optional[Path] = None,
 ) -> bool:
-    """Convert two VTT files to a single TTML file.
-
-    Args:
-        vtt_file1: Path to first language VTT file
-        vtt_file2: Path to second language VTT file
-        output: Path for output TTML file
-        lang1: Language code for first language
-        lang2: Language code for second language
-        tolerance: Maximum time difference (seconds) for cue alignment
-
+    """
+    Create a single TTML file by aligning cues from two WebVTT files.
+    
+    Validates the input VTT files, aligns their cues within the specified time tolerance,
+    optionally applies text filters from a filter.json, and writes the resulting TTML to
+    the given output path.
+    
+    Parameters:
+        vtt_file1 (Path): Path to the first-language WebVTT file.
+        vtt_file2 (Path): Path to the second-language WebVTT file.
+        output (Path): Destination path for the generated TTML file.
+        lang1 (str): Language code for the first VTT (default "ru").
+        lang2 (str): Language code for the second VTT (default "en").
+        tolerance (float): Maximum allowed time difference in seconds when aligning cues.
+        filter_json_path (Optional[Path]): Path to a filter.json file to control text filtering;
+            if None the function will attempt to auto-discover filter words.
+    
     Returns:
-        True if successful, False otherwise
+        bool: `True` if the TTML file was created successfully, `False` otherwise.
     """
     # Validate input files
     if not validate_vtt_file(vtt_file1):
         return False
     if not validate_vtt_file(vtt_file2):
         return False
+
+    # Load filter words (auto-discovers if not specified)
+    filter_words = load_filter_words(filter_json_path)
 
     try:
         # Parse VTT files
@@ -121,6 +132,7 @@ def convert_vtt_to_ttml(
             lang2=lang2,
             tolerance=tolerance,
             aligned_cues=aligned,
+            filter_words=filter_words,
         )
 
         # Write output
@@ -159,13 +171,22 @@ def convert_vtt_to_ttml(
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    """Parse command-line arguments.
-
-    Args:
-        argv: Optional argument list (defaults to sys.argv)
-
+    """
+    Parse and return command-line arguments for the VTT→TTML converter.
+    
+    Parameters:
+        argv (Optional[list[str]]): Optional list of argument strings to parse; when omitted, the process's command-line arguments are used.
+    
     Returns:
-        Parsed arguments
+        argparse.Namespace: Namespace containing parsed options:
+            - vtt_ru / vtt_file1: Path to first WebVTT file
+            - vtt_en / vtt_file2: Path to second WebVTT file
+            - output: Path for the output TTML file
+            - lang1: language code for the first VTT (default "ru")
+            - lang2: language code for the second VTT (default "en")
+            - tolerance: maximum time difference in seconds for aligning cues (default 1.0)
+            - filter: optional Path to filter.json for text filtering
+            - verbose: boolean flag to enable verbose logging
     """
     parser = argparse.ArgumentParser(
         description="Convert two WebVTT files to a single bilingual TTML file",
@@ -243,6 +264,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--filter",
+        type=Path,
+        metavar="PATH",
+        help="Path to filter.json file for text filtering",
+    )
+
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -273,13 +301,14 @@ def configure_logging(verbose: bool) -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """Main entry point.
-
-    Args:
-        argv: Optional argument list
-
+    """
+    Run the command-line interface: parse arguments, configure logging, and perform the VTT→TTML conversion.
+    
+    Parameters:
+        argv (Optional[list[str]]): Optional list of command-line arguments to parse; if omitted, uses sys.argv.
+    
     Returns:
-        Exit code (0 for success, non-zero for failure)
+        int: 0 on success, 1 on failure.
     """
     args = parse_args(argv)
     configure_logging(args.verbose)
@@ -296,6 +325,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         lang1=args.lang1,
         lang2=args.lang2,
         tolerance=args.tolerance,
+        filter_json_path=args.filter,
     )
 
     return 0 if success else 1
