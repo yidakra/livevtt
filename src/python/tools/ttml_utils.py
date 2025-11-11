@@ -31,8 +31,8 @@ class SegmentLike(Protocol):
     text: Optional[str]
 
 
-# Global filter words cache
-_FILTER_WORDS: Optional[List[str]] = None
+# Global filter words cache: (path, filter_words)
+_FILTER_CACHE: Optional[Tuple[Optional[Path], List[str]]] = None
 
 
 def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
@@ -45,12 +45,11 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
     Returns:
         List of strings to filter from subtitles
     """
-    global _FILTER_WORDS
+    global _FILTER_CACHE
 
-    if _FILTER_WORDS is not None:
-        return _FILTER_WORDS
-
-    if filter_json_path is None:
+    # Resolve the path to use
+    resolved_path = filter_json_path
+    if resolved_path is None:
         # Try standard locations relative to this file
         script_dir = Path(__file__).parent.parent.parent.parent
         possible_paths = [
@@ -60,21 +59,29 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
 
         for path in possible_paths:
             if path.exists():
-                filter_json_path = path
+                resolved_path = path
                 break
 
-    if filter_json_path is None or not filter_json_path.exists():
-        _FILTER_WORDS = []
-        return _FILTER_WORDS
+    # Check if we have a cached result for this path
+    if _FILTER_CACHE is not None:
+        cached_path, cached_words = _FILTER_CACHE
+        if cached_path == resolved_path:
+            return cached_words
+
+    # Load filter words from the resolved path
+    if resolved_path is None or not resolved_path.exists():
+        _FILTER_CACHE = (resolved_path, [])
+        return []
 
     try:
-        with open(filter_json_path, "r", encoding="utf-8") as f:
+        with open(resolved_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            _FILTER_WORDS = data.get("filter_words", [])
-            return _FILTER_WORDS
+            filter_words = data.get("filter_words", [])
+            _FILTER_CACHE = (resolved_path, filter_words)
+            return filter_words
     except (json.JSONDecodeError, OSError):
-        _FILTER_WORDS = []
-        return _FILTER_WORDS
+        _FILTER_CACHE = (resolved_path, [])
+        return []
 
 
 def should_filter_cue(text: str, filter_words: List[str]) -> bool:
