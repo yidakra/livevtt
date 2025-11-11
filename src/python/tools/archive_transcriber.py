@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from faster_whisper import WhisperModel  # type: ignore
 
 # Import TTML utilities
-from ttml_utils import cues_to_ttml, parse_vtt_content
+from ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words, should_filter_cue
 
 
 VIDEO_EXTENSIONS = {
@@ -57,75 +57,6 @@ RESOLUTION_TOKEN_PATTERN = re.compile(r"([_.-])(\d{3,4})p(?=([_.-]|$))", re.IGNO
 
 
 LOGGER = logging.getLogger("archive_transcriber")
-
-# Global filter words cache
-_FILTER_WORDS: Optional[List[str]] = None
-
-
-def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
-    """Load filter words from filter.json file.
-
-    Args:
-        filter_json_path: Optional path to filter.json. If not provided, searches for it
-                         in standard locations (config/filter.json or filter.json)
-
-    Returns:
-        List of strings to filter from transcriptions
-    """
-    global _FILTER_WORDS
-
-    if _FILTER_WORDS is not None:
-        return _FILTER_WORDS
-
-    if filter_json_path is None:
-        # Try standard locations
-        script_dir = Path(__file__).parent.parent.parent.parent
-        possible_paths = [
-            script_dir / "config" / "filter.json",
-            script_dir / "filter.json",
-        ]
-
-        for path in possible_paths:
-            if path.exists():
-                filter_json_path = path
-                break
-
-    if filter_json_path is None or not filter_json_path.exists():
-        LOGGER.debug("No filter.json found, no text filtering will be applied")
-        _FILTER_WORDS = []
-        return _FILTER_WORDS
-
-    try:
-        with open(filter_json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            _FILTER_WORDS = data.get("filter_words", [])
-            LOGGER.info("Loaded %d filter words from %s", len(_FILTER_WORDS), filter_json_path)
-            return _FILTER_WORDS
-    except (json.JSONDecodeError, OSError) as exc:
-        LOGGER.warning("Failed to load filter.json from %s: %s", filter_json_path, exc)
-        _FILTER_WORDS = []
-        return _FILTER_WORDS
-
-
-def should_filter_cue(text: str, filter_words: List[str]) -> bool:
-    """Check if a cue should be filtered out based on filter words.
-
-    Args:
-        text: Text to check
-        filter_words: List of strings to check for
-
-    Returns:
-        True if the cue contains any filter word and should be removed, False otherwise
-    """
-    if not filter_words or not text:
-        return False
-
-    for word in filter_words:
-        # Check if the word appears in the text (case-insensitive)
-        if re.search(re.escape(word), text, flags=re.IGNORECASE):
-            return True
-
-    return False
 
 
 def ensure_python_version() -> None:
