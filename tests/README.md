@@ -66,30 +66,82 @@ Tests for the standalone VTT-to-TTML converter CLI:
 
 ### Run All Tests
 ```bash
+# With pytest (recommended)
+pytest tests/ -v
+
+# Or using the test runner
 python tests/run_all_tests.py
+
+# With coverage report
+pytest tests/ -v --cov=src/python --cov-report=term-missing
 ```
 
 ### Run Individual Test Files
 ```bash
+# Unit tests
 pytest tests/test_archive_transcriber.py -v
+pytest tests/test_ttml_utils.py -v
+pytest tests/test_smil_generation.py -v
+
+# CLI tool tests
+pytest tests/test_vtt_to_ttml_cli.py -v
+pytest tests/test_caption_sender.py -v
+pytest tests/test_stream_checker.py -v
+
+# Service tests
+pytest tests/test_subtitle_autogen.py -v
+
+# Standalone tests (can also run directly with Python)
 python tests/test_ttml_simple.py
 python tests/test_smil_generation.py
 python tests/test_vtt_to_ttml_cli.py
 ```
 
-### Run with pytest (when available)
-```bash
-pytest tests/ -v
-pytest tests/test_ttml_utils.py -v
-```
+#### `test_subtitle_autogen.py` (11 tests)
+Tests for the subtitle_autogen background service:
+- Argument parsing with all options
+- Default value validation
+- Transcriber arguments builder
+- Run cycle success and failure handling
+- Logging configuration
+
+**Run**: `pytest tests/test_subtitle_autogen.py -v`
+
+#### `test_caption_sender.py` (11 tests)
+Tests for the caption_sender utility:
+- Caption sending with various response codes
+- Authentication handling
+- Custom language codes and track IDs
+- Connection error handling
+- Payload structure validation
+- Multiple captions sending
+
+**Run**: `pytest tests/test_caption_sender.py -v`
+
+#### `test_stream_checker.py` (13 tests)
+Tests for the stream_checker utility:
+- Basic stream status checking
+- Wowza REST API integration
+- Multiple applications and streams
+- Fallback to basic check when REST API unavailable
+- Connection error handling
+- JSON parsing validation
+
+**Run**: `pytest tests/test_stream_checker.py -v`
 
 ## Test Results Summary
 
 As of last run:
-- **Total tests**: 57+
-- **Passing**: 57
-- **Failing**: 0 (1 requires pytest installation)
-- **Coverage**: Core functionality, TTML generation, SMIL manifests, CLI tools
+- **Total tests**: 116
+- **Passing**: 116
+- **Failing**: 0
+- **Coverage**: 65% overall
+  - archive_transcriber.py: 46%
+  - ttml_utils.py: 92%
+  - vtt_to_ttml.py: 68%
+  - subtitle_autogen.py: 71%
+  - caption_sender.py: 98%
+  - stream_checker.py: 92%
 
 ## Test Structure
 

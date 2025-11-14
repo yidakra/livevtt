@@ -241,7 +241,7 @@ class TestTTMLDocumentCreation:
     """Tests for TTML document creation."""
 
     def test_create_simple_ttml_document(self):
-        """Test creating a simple TTML document."""
+        """Test creating a simple TTML document with new two-div structure."""
         aligned_cues = [
             (
                 SubtitleCue(start=5.0, end=7.0, text="Привет"),
@@ -249,36 +249,52 @@ class TestTTMLDocumentCreation:
             ),
         ]
 
-        root = create_ttml_document(aligned_cues, lang1="ru", lang2="en")
+        root = create_ttml_document(aligned_cues, lang1="rus", lang2="eng")
 
-        assert root.tag == "tt"
-        assert root.get("xmlns") == "http://www.w3.org/ns/ttml"
-        assert root.get("{http://www.w3.org/XML/1998/namespace}lang") == "ru"
+        # Check root element with namespaces
+        assert root.tag == "{http://www.w3.org/ns/ttml}tt"
+        assert root.get("{http://www.w3.org/XML/1998/namespace}lang") == "en"
+        assert root.get("{http://www.w3.org/ns/ttml#parameter}profile") == "ttml2-presentation"
 
-        body = root.find("body")
+        # Check head with styling and layout
+        head = root.find("{http://www.w3.org/ns/ttml}head")
+        assert head is not None
+
+        styling = head.find("{http://www.w3.org/ns/ttml}styling")
+        assert styling is not None
+
+        layout = head.find("{http://www.w3.org/ns/ttml}layout")
+        assert layout is not None
+
+        # Check body
+        body = root.find("{http://www.w3.org/ns/ttml}body")
         assert body is not None
+        assert body.get("style") == "s1"
+        assert body.get("region") == "r1"
 
-        div = body.find("div")
-        assert div is not None
+        # Check two div elements (one per language)
+        divs = body.findall("{http://www.w3.org/ns/ttml}div")
+        assert len(divs) == 2
 
-        paragraphs = div.findall("p")
-        assert len(paragraphs) == 2
-
-        p_ru = paragraphs[0]
-        assert p_ru.get("begin") == "00:00:05.000"
-        assert p_ru.get("end") == "00:00:07.000"
-        spans_ru = p_ru.findall("span")
-        assert len(spans_ru) == 1
-        assert spans_ru[0].get("{http://www.w3.org/XML/1998/namespace}lang") == "ru"
-        assert spans_ru[0].text == "Привет"
-
-        p_en = paragraphs[1]
+        # First div should be for lang2 (eng)
+        div_eng = divs[0]
+        assert div_eng.get("{http://www.w3.org/XML/1998/namespace}lang") == "eng"
+        paragraphs_eng = div_eng.findall("{http://www.w3.org/ns/ttml}p")
+        assert len(paragraphs_eng) == 1
+        p_en = paragraphs_eng[0]
         assert p_en.get("begin") == "00:00:05.000"
         assert p_en.get("end") == "00:00:07.000"
-        spans_en = p_en.findall("span")
-        assert len(spans_en) == 1
-        assert spans_en[0].get("{http://www.w3.org/XML/1998/namespace}lang") == "en"
-        assert spans_en[0].text == "Hello"
+        assert p_en.text == "Hello"
+
+        # Second div should be for lang1 (rus)
+        div_rus = divs[1]
+        assert div_rus.get("{http://www.w3.org/XML/1998/namespace}lang") == "rus"
+        paragraphs_rus = div_rus.findall("{http://www.w3.org/ns/ttml}p")
+        assert len(paragraphs_rus) == 1
+        p_ru = paragraphs_rus[0]
+        assert p_ru.get("begin") == "00:00:05.000"
+        assert p_ru.get("end") == "00:00:07.000"
+        assert p_ru.text == "Привет"
 
     def test_create_ttml_document_with_unmatched_cues(self):
         """Test creating TTML with unmatched cues."""
@@ -293,21 +309,25 @@ class TestTTMLDocumentCreation:
             ),
         ]
 
-        root = create_ttml_document(aligned_cues, lang1="ru", lang2="en")
+        root = create_ttml_document(aligned_cues, lang1="rus", lang2="eng")
 
-        div = root.find("body/div")
-        paragraphs = div.findall("p")
-        assert len(paragraphs) == 2
+        body = root.find("{http://www.w3.org/ns/ttml}body")
+        assert body is not None
 
-        # First paragraph should have only Russian
-        spans1 = paragraphs[0].findall("span")
-        assert len(spans1) == 1
-        assert spans1[0].get("{http://www.w3.org/XML/1998/namespace}lang") == "ru"
+        divs = body.findall("{http://www.w3.org/ns/ttml}div")
+        assert len(divs) == 2
 
-        # Second paragraph should have only English
-        spans2 = paragraphs[1].findall("span")
-        assert len(spans2) == 1
-        assert spans2[0].get("{http://www.w3.org/XML/1998/namespace}lang") == "en"
+        # First div is for eng - should have one paragraph
+        div_eng = divs[0]
+        paragraphs_eng = div_eng.findall("{http://www.w3.org/ns/ttml}p")
+        assert len(paragraphs_eng) == 1
+        assert paragraphs_eng[0].text == "Hello"
+
+        # Second div is for rus - should have one paragraph
+        div_rus = divs[1]
+        paragraphs_rus = div_rus.findall("{http://www.w3.org/ns/ttml}p")
+        assert len(paragraphs_rus) == 1
+        assert paragraphs_rus[0].text == "Привет"
 
 
 class TestSegmentsToTTML:
@@ -332,14 +352,16 @@ class TestSegmentsToTTML:
             MockSegment(10.0, 12.0, "How are you?"),
         ]
 
-        ttml_content = segments_to_ttml(segments_ru, segments_en, lang1="ru", lang2="en")
+        ttml_content = segments_to_ttml(segments_ru, segments_en, lang1="rus", lang2="eng")
 
         assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
         assert '<tt xmlns="http://www.w3.org/ns/ttml"' in ttml_content
-        assert 'xml:lang="ru"' in ttml_content
-        assert '<p begin="00:00:05.000" end="00:00:07.000">' in ttml_content
-        assert '<span xml:lang="ru">Привет, мир!</span>' in ttml_content
-        assert '<span xml:lang="en">Hello, world!</span>' in ttml_content
+        assert 'xml:lang="en"' in ttml_content  # Root lang is en
+        assert '<head>' in ttml_content
+        assert '<div xml:lang="eng">' in ttml_content
+        assert '<div xml:lang="rus">' in ttml_content
+        assert '<p begin="00:00:05.000" end="00:00:07.000">Привет, мир!</p>' in ttml_content
+        assert '<p begin="00:00:05.000" end="00:00:07.000">Hello, world!</p>' in ttml_content
 
 
 class TestVTTFilesToTTML:
@@ -378,7 +400,7 @@ How are you?
             vtt_en_path = f_en.name
 
         try:
-            ttml_content = vtt_files_to_ttml(vtt_ru_path, vtt_en_path, lang1="ru", lang2="en")
+            ttml_content = vtt_files_to_ttml(vtt_ru_path, vtt_en_path, lang1="rus", lang2="eng")
 
             # Validate XML structure
             assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
@@ -387,36 +409,40 @@ How are you?
             xml_content = ttml_content.split("\n", 1)[1]  # Skip XML declaration
             root = ET.fromstring(xml_content)
 
-            assert root.tag.endswith("tt")
+            assert root.tag == "{http://www.w3.org/ns/ttml}tt"
             ns = {"tt": "http://www.w3.org/ns/ttml"}
-            body = root.find("tt:body", ns)
-            div = body.find("tt:div", ns)
-            paragraphs = div.findall("tt:p", ns)
 
-            # Expect two languages per cue (overlapping paragraphs)
-            assert len(paragraphs) == 4
+            # Check for head
+            head = root.find("tt:head", ns)
+            assert head is not None
+
+            # Check body
+            body = root.find("tt:body", ns)
+            assert body is not None
+
+            # Should have two divs (one per language)
+            divs = body.findall("tt:div", ns)
+            assert len(divs) == 2
 
             lang_attr = "{http://www.w3.org/XML/1998/namespace}lang"
-            ru_paragraphs = []
-            en_paragraphs = []
-            for p in paragraphs:
-                spans = p.findall("tt:span", ns)
-                assert len(spans) == 1
-                lang = spans[0].get(lang_attr)
-                if lang == "ru":
-                    ru_paragraphs.append(p)
-                elif lang == "en":
-                    en_paragraphs.append(p)
-                else:
-                    raise AssertionError(f"Unexpected language span: {lang}")
 
-            assert len(ru_paragraphs) == 2
-            assert len(en_paragraphs) == 2
+            # First div is for eng
+            div_eng = divs[0]
+            assert div_eng.get(lang_attr) == "eng"
+            paragraphs_eng = div_eng.findall("tt:p", ns)
+            assert len(paragraphs_eng) == 2
+            assert paragraphs_eng[0].get("begin") == "00:00:05.000"
+            assert paragraphs_eng[0].text == "Hello, world!"
+            assert paragraphs_eng[1].text == "How are you?"
 
-            assert ru_paragraphs[0].get("begin") == "00:00:05.000"
-            assert en_paragraphs[0].get("begin") == "00:00:05.000"
-            first_en_span = en_paragraphs[0].findall("tt:span", ns)[0]
-            assert first_en_span.text == "Hello, world!"
+            # Second div is for rus
+            div_rus = divs[1]
+            assert div_rus.get(lang_attr) == "rus"
+            paragraphs_rus = div_rus.findall("tt:p", ns)
+            assert len(paragraphs_rus) == 2
+            assert paragraphs_rus[0].get("begin") == "00:00:05.000"
+            assert paragraphs_rus[0].text == "Привет, мир!"
+            assert paragraphs_rus[1].text == "Как дела?"
 
         finally:
             Path(vtt_ru_path).unlink()

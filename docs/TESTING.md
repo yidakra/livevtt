@@ -4,13 +4,26 @@ This document provides comprehensive testing procedures for the LiveVTT Caption 
 
 ## Overview
 
-The LiveVTT testing suite has been streamlined to focus on essential, reliable tools:
+The LiveVTT testing suite includes both integration tests and comprehensive unit tests:
 
+### Integration Testing Tools
 1. **test_final_integration.py** - Comprehensive system health check
-2. **caption_sender.py** - Interactive caption testing tool  
+2. **caption_sender.py** - Interactive caption testing tool
 3. **stream_checker.py** - Stream status and setup verification
 
 All tools provide helpful error messages and guidance for resolving issues.
+
+### Unit Test Coverage
+The project maintains **116 unit tests** with **65% code coverage** across all Python modules:
+- **archive_transcriber.py**: 46% coverage (33 tests)
+- **ttml_utils.py**: 92% coverage (21 tests)
+- **vtt_to_ttml.py**: 68% coverage (14 tests)
+- **subtitle_autogen.py**: 71% coverage (11 tests)
+- **caption_sender.py**: 98% coverage (11 tests)
+- **stream_checker.py**: 92% coverage (13 tests)
+- **SMIL generation**: 100% coverage (8 tests)
+
+See [tests/README.md](../tests/README.md) for detailed test documentation.
 
 ## 🚀 Quick Start Testing
 
@@ -75,6 +88,40 @@ python caption_sender.py --stream testStream
 
 # Send multiple captions with custom settings
 python caption_sender.py --stream myShow --count 5 --interval 2 --text "Live caption test"
+```
+
+### 4. Run Unit Tests
+
+```bash
+# Install test dependencies
+pip install pytest pytest-cov
+
+# Run all unit tests with coverage report
+pytest tests/ -v
+
+# Run specific test module
+pytest tests/test_caption_sender.py -v
+
+# Generate detailed coverage report
+pytest tests/ --cov=src/python --cov-report=html
+# Open htmlcov/index.html in browser for interactive report
+```
+
+**Expected Output**:
+```
+============================= test session starts ==============================
+collected 116 items
+
+tests/test_archive_transcriber.py ................................. [ 28%]
+tests/test_caption_sender.py ........... [ 37%]
+tests/test_smil_generation.py ........ [ 44%]
+tests/test_stream_checker.py ............. [ 56%]
+tests/test_subtitle_autogen.py ........... [ 65%]
+tests/test_ttml_simple.py ..... [ 69%]
+tests/test_ttml_utils.py ..................... [ 87%]
+tests/test_vtt_to_ttml_cli.py .............. [100%]
+
+============================= 116 passed in 0.69s ==============================
 ```
 
 ## 🔧 Testing Workflows
