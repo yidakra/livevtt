@@ -142,8 +142,9 @@ class TestSMILGeneration:
 
         assert ru_stream is not None
         assert en_stream is not None
-        assert ru_stream.get("src") == "mp4:video.ru.vtt"
-        assert en_stream.get("src") == "mp4:video.en.vtt"
+        # Textstream elements should NOT have mp4: prefix (unlike video sources)
+        assert ru_stream.get("src") == "video.ru.vtt"
+        assert en_stream.get("src") == "video.en.vtt"
 
 
     def test_smil_wowza_caption_params(self, video_job, args):

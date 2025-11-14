@@ -468,16 +468,19 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             switch.remove(node)
 
     def ensure_textstream(src: str, language: str) -> None:
-        target_src = f"mp4:{src}"
+        # Textstream sources should NOT have mp4: prefix (unlike video sources)
+        target_src = src
 
         def _normalize(value: Optional[str]) -> str:
             if not value:
                 return ""
             value = value.strip()
+            # Remove mp4: prefix if present for comparison
             if value.lower().startswith("mp4:"):
                 return value[4:]
             return value
 
+        # Remove existing textstream nodes with the same source
         for node in list(switch.findall("textstream")):
             if _normalize(node.get("src")) == src:
                 switch.remove(node)
