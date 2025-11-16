@@ -299,66 +299,103 @@ def align_bilingual_cues(
 
 def create_ttml_document(
     aligned_cues: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]],
-    lang1: str = "ru",
-    lang2: str = "en",
-    default_lang: str = "ru",
+    lang1: str = "rus",
+    lang2: str = "eng",
+    default_lang: str = "en",
     filter_words: Optional[List[str]] = None
 ) -> ET.Element:
     """
-    Create a TTML document containing aligned bilingual subtitle cues.
+    Builds a namespaced TTML <tt> element containing two language-specific <div> sections with styled and regioned subtitle cues.
     
     Parameters:
-        aligned_cues (List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]):
-            Sequence of tuples where the first element is an optional cue from the first language
-            and the second element is a list of zero or more cues from the second language that align with it.
-        lang1 (str): Language code to apply to spans for the first language.
-        lang2 (str): Language code to apply to spans for the second language.
-        default_lang (str): Language code to set as the document's default xml:lang.
-        filter_words (Optional[List[str]]):
-            If provided, cues whose text contains any of these words (case-insensitive) will be omitted.
+        aligned_cues (List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]): Sequence of tuples where the first element is an optional cue from the first language and the second element is a list of cues from the second language aligned to it.
+        lang1 (str): Language code assigned to the second div (defaults to "rus").
+        lang2 (str): Language code assigned to the first div (defaults to "eng").
+        default_lang (str): Language code set on the root xml:lang attribute (defaults to "en").
+        filter_words (Optional[List[str]]): If provided, cues whose text contains any of these words (case-insensitive) will be omitted.
     
     Returns:
-        ET.Element: Root <tt> element of the constructed TTML document.
+        ET.Element: The root <tt> element of the constructed TTML document.
     """
-    # Create root element with TTML namespace
-    tt = ET.Element("tt")
-    tt.set("xmlns", "http://www.w3.org/ns/ttml")
-    tt.set("{http://www.w3.org/XML/1998/namespace}lang", default_lang)
+    # Namespace constants
+    TTML_NS = "http://www.w3.org/ns/ttml"
+    TTP_NS = "http://www.w3.org/ns/ttml#parameter"
+    TTS_NS = "http://www.w3.org/ns/ttml#style"
+    XML_NS = "http://www.w3.org/XML/1998/namespace"
 
-    # Create body and div
-    body = ET.SubElement(tt, "body")
-    div = ET.SubElement(body, "div")
+    # Register namespaces for proper output
+    ET.register_namespace("", TTML_NS)
+    ET.register_namespace("ttp", TTP_NS)
+    ET.register_namespace("tts", TTS_NS)
 
-    lang_attr = "{http://www.w3.org/XML/1998/namespace}lang"
+    # Create root element with all namespace declarations
+    tt = ET.Element("{%s}tt" % TTML_NS)
+    tt.set("{%s}lang" % XML_NS, default_lang)
+    tt.set("{%s}profile" % TTP_NS, "ttml2-presentation")
+
+    # Create head with styling and layout
+    head = ET.SubElement(tt, "{%s}head" % TTML_NS)
+
+    # Styling section
+    styling = ET.SubElement(head, "{%s}styling" % TTML_NS)
+    style = ET.SubElement(styling, "{%s}style" % TTML_NS)
+    style.set("{%s}id" % XML_NS, "s1")
+    style.set("{%s}fontSize" % TTS_NS, "10px")
+    style.set("{%s}textAlign" % TTS_NS, "center")
+
+    # Layout section
+    layout = ET.SubElement(head, "{%s}layout" % TTML_NS)
+    region = ET.SubElement(layout, "{%s}region" % TTML_NS)
+    region.set("{%s}id" % XML_NS, "r1")
+    region.set("{%s}extent" % TTS_NS, "80% 10%")
+    region.set("{%s}origin" % TTS_NS, "10% 85%")
+    region.set("{%s}displayAlign" % TTS_NS, "after")
+
+    # Create body with style and region references
+    body = ET.SubElement(tt, "{%s}body" % TTML_NS)
+    body.set("style", "s1")
+    body.set("region", "r1")
+
+    # Collect all cues for each language separately
+    cues_lang2_all: List[SubtitleCue] = []
+    cues_lang1_all: List[SubtitleCue] = []
 
     for cue1, cue2_list in aligned_cues:
         if cue1 is not None:
-            # Skip entire cue if it contains any filter words
             if not (filter_words and should_filter_cue(cue1.text, filter_words)):
-                p = ET.SubElement(div, "p")
-                p.set("begin", format_ttml_timestamp(cue1.start))
-                p.set("end", format_ttml_timestamp(cue1.end))
-                span1 = ET.SubElement(p, "span")
-                span1.set(lang_attr, lang1)
-                span1.text = cue1.text
+                cues_lang1_all.append(cue1)
 
         for cue2 in cue2_list:
-            # Skip entire cue if it contains any filter words
             if not (filter_words and should_filter_cue(cue2.text, filter_words)):
-                p_en = ET.SubElement(div, "p")
-                p_en.set("begin", format_ttml_timestamp(cue2.start))
-                p_en.set("end", format_ttml_timestamp(cue2.end))
-                span2 = ET.SubElement(p_en, "span")
-                span2.set(lang_attr, lang2)
-                span2.text = cue2.text
+                cues_lang2_all.append(cue2)
+
+    # Create first div for lang2 (English)
+    div_lang2 = ET.SubElement(body, "{%s}div" % TTML_NS)
+    div_lang2.set("{%s}lang" % XML_NS, lang2)
+
+    for cue in cues_lang2_all:
+        p = ET.SubElement(div_lang2, "{%s}p" % TTML_NS)
+        p.set("begin", format_ttml_timestamp(cue.start))
+        p.set("end", format_ttml_timestamp(cue.end))
+        p.text = cue.text
+
+    # Create second div for lang1 (Russian)
+    div_lang1 = ET.SubElement(body, "{%s}div" % TTML_NS)
+    div_lang1.set("{%s}lang" % XML_NS, lang1)
+
+    for cue in cues_lang1_all:
+        p = ET.SubElement(div_lang1, "{%s}p" % TTML_NS)
+        p.set("begin", format_ttml_timestamp(cue.start))
+        p.set("end", format_ttml_timestamp(cue.end))
+        p.text = cue.text
 
     return tt
 
 
 def aligned_cues_to_ttml(
     aligned_cues: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]],
-    lang1: str = "ru",
-    lang2: str = "en",
+    lang1: str = "rus",
+    lang2: str = "eng",
     filter_words: Optional[List[str]] = None
 ) -> str:
     """
@@ -388,8 +425,8 @@ def aligned_cues_to_ttml(
 def cues_to_ttml(
     cues_lang1: List[SubtitleCue],
     cues_lang2: List[SubtitleCue],
-    lang1: str = "ru",
-    lang2: str = "en",
+    lang1: str = "rus",
+    lang2: str = "eng",
     *,
     tolerance: float = 2.5,
     aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
@@ -422,8 +459,8 @@ def cues_to_ttml(
 def segments_to_ttml(
     segments_lang1: List[SegmentLike],
     segments_lang2: List[SegmentLike],
-    lang1: str = "ru",
-    lang2: str = "en",
+    lang1: str = "rus",
+    lang2: str = "eng",
     *,
     tolerance: float = 2.5,
     filter_words: Optional[List[str]] = None,
@@ -468,8 +505,8 @@ def segments_to_ttml(
 def vtt_files_to_ttml(
     vtt_path_lang1: str,
     vtt_path_lang2: str,
-    lang1: str = "ru",
-    lang2: str = "en",
+    lang1: str = "rus",
+    lang2: str = "eng",
     *,
     tolerance: float = 2.5,
     cues_lang1: Optional[List[SubtitleCue]] = None,

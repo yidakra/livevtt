@@ -395,6 +395,16 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
 
 
 def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> None:
+    """
+    Write or update the SMIL manifest for a video job, ensuring a video element and appropriate textstream entries.
+    
+    Creates the SMIL parent directory if needed, makes a one-time backup of an existing SMIL file, parses an existing SMIL (or creates a minimal one), ensures a single <video> element with available metadata attributes, removes previously managed caption <textstream> nodes, and adds new <textstream> entries for subtitles. By default adds a bilingual TTML textstream (if present); if args.vtt_in_smil is true, adds individual Russian and English VTT textstreams instead. When comparing or deduplicating textstream sources the comparison strips an optional "mp4:" prefix; textstream entries are not added if the referenced subtitle file is missing (a warning is emitted). The final SMIL XML is optionally indented and written with an XML declaration.
+    
+    Parameters:
+        job (VideoJob): Job record containing source video path and target artifact paths (smil, ttml, ru_vtt, en_vtt).
+        metadata (VideoMetadata): Probed video metadata used to populate video attributes (bitrate, width, height, codec ids).
+        args (argparse.Namespace): Parsed CLI arguments; used flags are at least `vtt_in_smil` and `smil_only`.
+    """
     job.smil.parent.mkdir(parents=True, exist_ok=True)
 
     tree: Optional[ET.ElementTree] = None
@@ -468,16 +478,42 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             switch.remove(node)
 
     def ensure_textstream(src: str, language: str) -> None:
-        target_src = f"mp4:{src}"
+        # Textstream sources should NOT have mp4: prefix (unlike video sources)
+        """
+        Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
+        
+        Removes any existing <textstream> entries that reference the same subtitle source (comparison ignores a leading "mp4:" prefix), then adds a new <textstream> child with the given language and an `isWowzaCaptionStream` parameter. If the referenced subtitle file is missing on disk, logs a warning and does not add an entry.
+        
+        Parameters:
+        	src (str): Subtitle file path as used in the SMIL `src` attribute.
+        	language (str): Language code to set on the `system-language` attribute.
+        
+        Notes:
+        	This function mutates the surrounding SMIL `switch` element and reads the job's SMIL directory to check for file existence. It does not return a value.
+        """
+        target_src = src
 
         def _normalize(value: Optional[str]) -> str:
+            """
+            Normalize a subtitle/textstream source string for comparison.
+            
+            Strips surrounding whitespace and, if present, removes a leading "mp4:" prefix (case-insensitive). Returns an empty string when the input is None or empty.
+            
+            Parameters:
+                value (Optional[str]): The source string to normalize; may be None.
+            
+            Returns:
+                str: The normalized source string (trimmed and without a leading "mp4:"), or an empty string if the input was falsy.
+            """
             if not value:
                 return ""
             value = value.strip()
+            # Remove mp4: prefix if present for comparison
             if value.lower().startswith("mp4:"):
                 return value[4:]
             return value
 
+        # Remove existing textstream nodes with the same source
         for node in list(switch.findall("textstream")):
             if _normalize(node.get("src")) == src:
                 switch.remove(node)
