@@ -120,7 +120,11 @@ class TestSMILGeneration:
 
 
     def test_smil_textstream_elements(self, video_job, metadata, args):
-        """Test that SMIL includes textstream elements for subtitles."""
+        """
+        Verify the SMIL contains two subtitle textstream elements (Russian and English) with correct src and language attributes.
+        
+        Asserts that exactly two textstream elements appear under body/switch, one with system-language "rus" and one with "eng", and that their src attributes are "video.ru.vtt" and "video.en.vtt" respectively (no "mp4:" prefix).
+        """
         write_smil(video_job, metadata, args)
 
         tree = ET.parse(video_job.smil)
@@ -292,4 +296,3 @@ class TestSMILGeneration:
         assert ttml_stream is not None, "TTML textstream should be present"
         assert ttml_stream.get("system-language") == "rus,eng", \
             "TTML textstream should have bilingual system-language attribute"
-

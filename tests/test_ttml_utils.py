@@ -334,7 +334,9 @@ class TestSegmentsToTTML:
     """Tests for converting Whisper segments to TTML."""
 
     def test_segments_to_ttml_basic(self):
-        """Test basic segment conversion."""
+        """
+        Verify conversion of parallel speech segments into a bilingual TTML string containing an XML declaration, a TTML root with `xml:lang="en"`, a head section, two language-specific `div` elements (`eng` and `rus`), and `p` elements with correct `begin`/`end` timestamps and texts.
+        """
         # Mock Whisper segment objects
         class MockSegment:
             def __init__(self, start, end, text):

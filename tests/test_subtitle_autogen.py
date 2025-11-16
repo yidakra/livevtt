@@ -182,7 +182,14 @@ class TestLoggingConfiguration:
 
 
 def run_all_tests():
-    """Run all tests."""
+    """
+    Execute the module's test suite across the predefined test classes and report results.
+    
+    Discovers and runs test methods whose names start with "test_" on each test class, prints per-test progress and failure tracebacks, and prints a summary of passed/failed counts.
+    
+    Returns:
+        bool: `True` if all tests passed, `False` otherwise.
+    """
     test_classes = [
         TestArgumentParsing,
         TestTranscriberArgsBuilder,

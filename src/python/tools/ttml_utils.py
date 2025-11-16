@@ -305,23 +305,17 @@ def create_ttml_document(
     filter_words: Optional[List[str]] = None
 ) -> ET.Element:
     """
-    Create a TTML document containing bilingual subtitle cues with proper structure.
-
-    Creates a TTML document with two separate <div> elements, one for each language.
-    Each <div> contains all subtitle cues for that language in separate <p> elements.
-
+    Builds a namespaced TTML <tt> element containing two language-specific <div> sections with styled and regioned subtitle cues.
+    
     Parameters:
-        aligned_cues (List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]):
-            Sequence of tuples where the first element is an optional cue from the first language
-            and the second element is a list of zero or more cues from the second language that align with it.
-        lang1 (str): Language code for the first language (default: "rus").
-        lang2 (str): Language code for the second language (default: "eng").
-        default_lang (str): Language code to set as the document's default xml:lang (default: "en").
-        filter_words (Optional[List[str]]):
-            If provided, cues whose text contains any of these words (case-insensitive) will be omitted.
-
+        aligned_cues (List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]): Sequence of tuples where the first element is an optional cue from the first language and the second element is a list of cues from the second language aligned to it.
+        lang1 (str): Language code assigned to the second div (defaults to "rus").
+        lang2 (str): Language code assigned to the first div (defaults to "eng").
+        default_lang (str): Language code set on the root xml:lang attribute (defaults to "en").
+        filter_words (Optional[List[str]]): If provided, cues whose text contains any of these words (case-insensitive) will be omitted.
+    
     Returns:
-        ET.Element: Root <tt> element of the constructed TTML document.
+        ET.Element: The root <tt> element of the constructed TTML document.
     """
     # Namespace constants
     TTML_NS = "http://www.w3.org/ns/ttml"

@@ -216,7 +216,14 @@ class TestMainFunction:
 
 
 def run_all_tests():
-    """Run all tests."""
+    """
+    Execute all test methods defined on the test classes and report aggregated results.
+    
+    Discovers methods whose names start with "test_" on each test class, instantiates the class for each method, runs the method, prints per-test failures and a final summary to stdout, and counts passed and failed tests.
+    
+    Returns:
+        bool: `True` if all tests passed, `False` otherwise.
+    """
     test_classes = [
         TestSendCaption,
         TestMainFunction
