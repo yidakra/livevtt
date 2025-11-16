@@ -199,7 +199,11 @@ class TestMainFunction:
     """Tests for main function."""
 
     def test_main_default_arguments(self):
-        """Test main function with default arguments."""
+        """
+        Verify that main() exits successfully when run with default CLI arguments and the Wowza API reports no applications.
+        
+        This test sets sys.argv to the script's default invocation and mocks requests.get to return a 200 response whose JSON is {'applications': []}; it asserts that main() returns 0.
+        """
         test_args = ['stream_checker.py']
 
         apps_response = mock.MagicMock()
@@ -248,7 +252,14 @@ class TestMainFunction:
 
 
 def run_all_tests():
-    """Run all tests."""
+    """
+    Run the module's test suite and print per-test results and a summary.
+    
+    Executes every method whose name starts with "test_" from the TestBasicStreamStatus, TestWowzaStreams, and TestMainFunction classes and prints failures and a final pass/fail summary.
+    
+    Returns:
+        True if all tests passed, False otherwise.
+    """
     test_classes = [
         TestBasicStreamStatus,
         TestWowzaStreams,
