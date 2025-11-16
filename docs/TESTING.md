@@ -96,13 +96,13 @@ python caption_sender.py --stream myShow --count 5 --interval 2 --text "Live cap
 # Install test dependencies
 pip install pytest pytest-cov
 
-# Run all unit tests with coverage report
+# Run all unit tests
 pytest tests/ -v
 
 # Run specific test module
 pytest tests/test_caption_sender.py -v
 
-# Generate detailed coverage report
+# Generate detailed coverage report (requires pytest-cov)
 pytest tests/ --cov=src/python --cov-report=html
 # Open htmlcov/index.html in browser for interactive report
 ```
