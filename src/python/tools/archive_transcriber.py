@@ -574,23 +574,127 @@ def discover_video_jobs(
     force: bool,
     extensions: Iterable[str],
     ttml_enabled: bool,
+    scan_cache_path: Optional[Path] = None,
+    force_scan: bool = False,
 ) -> List[VideoJob]:
     extensions = {ext.lower() for ext in extensions}
     grouped: Dict[Tuple[str, str], List[Path]] = {}
 
-    LOGGER.info("Scanning archive at %s", input_root)
-    for dirpath, _, filenames in os.walk(input_root):
-        directory = Path(dirpath)
-        for filename in filenames:
-            path = directory / filename
-            if path.suffix.lower() not in extensions:
-                continue
-            normalized_name = normalise_variant_name(path)
-            key = (str(path.parent), normalized_name.lower())
-            grouped.setdefault(key, []).append(path)
+    # Try to load from cache if available
+    if scan_cache_path and scan_cache_path.exists() and not force_scan:
+        try:
+            LOGGER.info("Loading scan results from cache: %s", scan_cache_path)
+            with open(scan_cache_path, 'r') as f:
+                cache_data = json.load(f)
+                # Convert JSON back to our grouped structure
+                for key_str, paths_list in cache_data.items():
+                    # key_str is like "dir|||normalized_name"
+                    dir_path, normalized_name = key_str.split("|||", 1)
+                    key = (dir_path, normalized_name)
+                    grouped[key] = [Path(p) for p in paths_list]
+            LOGGER.info("Loaded %d groups from cache (%d total files)",
+                       len(grouped), sum(len(v) for v in grouped.values()))
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            LOGGER.warning("Failed to load scan cache (%s), will rescan", e)
+            grouped = {}
+
+    if not grouped:
+        LOGGER.info("Scanning archive at %s (using find for faster scanning)", input_root)
+
+        # Build find command with -name patterns for each extension
+        find_args = ["find", str(input_root), "-type", "f"]
+
+        # Add extension patterns
+        if len(extensions) > 0:
+            find_args.append("(")
+            first = True
+            for ext in extensions:
+                if not first:
+                    find_args.append("-o")
+                find_args.extend(["-name", f"*{ext}"])
+                first = False
+            find_args.append(")")
+
+        # Run find command with streaming output
+        file_count = 0
+        try:
+            LOGGER.info("Running: %s", " ".join(find_args))
+            process = subprocess.Popen(
+                find_args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+
+            # Stream and process results as they come
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+
+                path = Path(line)
+                normalized_name = normalise_variant_name(path)
+                key = (str(path.parent), normalized_name.lower())
+                grouped.setdefault(key, []).append(path)
+                file_count += 1
+
+                # Log progress periodically
+                if file_count % 1000 == 0:
+                    LOGGER.info("Scanning... found %d videos so far in %d groups", file_count, len(grouped))
+
+            # Wait for process to complete
+            return_code = process.wait()
+            if return_code != 0:
+                stderr = process.stderr.read()
+                raise subprocess.CalledProcessError(return_code, find_args, stderr=stderr)
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            LOGGER.error("Failed to scan with find command: %s", e)
+            LOGGER.info("Falling back to os.walk()")
+            # Fallback to os.walk if find fails
+            file_count = 0
+            last_log_time = time.time()
+            for dirpath, _, filenames in os.walk(input_root):
+                directory = Path(dirpath)
+                for filename in filenames:
+                    path = directory / filename
+                    if path.suffix.lower() not in extensions:
+                        continue
+                    normalized_name = normalise_variant_name(path)
+                    key = (str(path.parent), normalized_name.lower())
+                    grouped.setdefault(key, []).append(path)
+                    file_count += 1
+
+                    current_time = time.time()
+                    if current_time - last_log_time >= 5:
+                        LOGGER.info("Scanning... found %d videos so far in %d groups", file_count, len(grouped))
+                        last_log_time = current_time
+
+        LOGGER.info("Scan complete! Found %d videos in %d candidate groups", file_count, len(grouped))
+
+        # Save scan results to cache
+        if scan_cache_path:
+            try:
+                LOGGER.info("Saving scan results to cache: %s", scan_cache_path)
+                scan_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                # Convert grouped dict to JSON-serializable format
+                cache_data = {}
+                for (dir_path, normalized_name), paths in grouped.items():
+                    key_str = f"{dir_path}|||{normalized_name}"
+                    cache_data[key_str] = [str(p) for p in paths]
+                with open(scan_cache_path, 'w') as f:
+                    json.dump(cache_data, f)
+                LOGGER.info("Scan cache saved successfully")
+            except (OSError, IOError) as e:
+                LOGGER.warning("Failed to save scan cache: %s", e)
 
     jobs: List[VideoJob] = []
-    LOGGER.info("Found %d candidate groups", len(grouped))
+    LOGGER.info("Building job list (selecting best variants and checking for already-processed files)...")
+
+    processed_groups = 0
+    skipped_count = 0
+    last_log_time = time.time()
 
     for (_, normalized_name_lower), candidates in grouped.items():
         best_path = select_best_variant(candidates)
@@ -601,19 +705,27 @@ def discover_video_jobs(
 
         if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
             LOGGER.debug("Skipping already processed %s", best_path)
-            continue
-
-        jobs.append(
-            VideoJob(
-                video_path=best_path,
-                normalized_name=normalized_name,
-                ru_vtt=ru_vtt,
-                en_vtt=en_vtt,
-                ttml=ttml_path,
-                smil=smil_path,
+            skipped_count += 1
+        else:
+            jobs.append(
+                VideoJob(
+                    video_path=best_path,
+                    normalized_name=normalized_name,
+                    ru_vtt=ru_vtt,
+                    en_vtt=en_vtt,
+                    ttml=ttml_path,
+                    smil=smil_path,
+                )
             )
-        )
 
+        processed_groups += 1
+        current_time = time.time()
+        if current_time - last_log_time >= 5:
+            LOGGER.info("Building job list... processed %d/%d groups (%d to process, %d already done)",
+                       processed_groups, len(grouped), len(jobs), skipped_count)
+            last_log_time = current_time
+
+    LOGGER.info("Job list complete! %d videos to process (%d already done)", len(jobs), skipped_count)
     jobs.sort(key=lambda job: job.video_path)
     return jobs
 
@@ -909,6 +1021,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--log-file", type=Path, help="Optional log file path")
     parser.add_argument("--progress", action="store_true", help="Display progress bar (requires tqdm)")
     parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
+    parser.add_argument("--scan-cache", type=Path, default=Path("logs/scan_cache.json"), help="Path to scan cache file (default: logs/scan_cache.json)")
+    parser.add_argument("--force-scan", action="store_true", help="Force a fresh scan even if cache exists")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv)
 
@@ -927,6 +1041,10 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     manifest = Manifest(args.manifest.resolve())
     extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
+
+    # Prepare scan cache path
+    scan_cache_path = args.scan_cache.resolve() if args.scan_cache else None
+
     jobs = discover_video_jobs(
         input_root,
         output_root,
@@ -934,6 +1052,8 @@ def run(argv: Optional[List[str]] = None) -> int:
         args.force or args.smil_only,
         extensions,
         not args.no_ttml,
+        scan_cache_path=scan_cache_path,
+        force_scan=args.force_scan,
     )
 
     if args.max_files is not None:
