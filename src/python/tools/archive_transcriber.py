@@ -58,6 +58,12 @@ RESOLUTION_TOKEN_PATTERN = re.compile(r"([_.-])(\d{3,4})p(?=([_.-]|$))", re.IGNO
 
 LOGGER = logging.getLogger("archive_transcriber")
 
+# ISO 639-1 (2-letter) to ISO 639-2 (3-letter) language code mapping for TTML
+LANG_CODE_2_TO_3 = {
+    "en": "eng",
+    "ru": "rus",
+}
+
 
 def ensure_python_version() -> None:
     if sys.version_info < (3, 10):
@@ -410,7 +416,8 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
     tree: Optional[ET.ElementTree] = None
     root: Optional[ET.Element] = None
 
-    backup_path = job.smil.with_suffix(job.smil.suffix + ".bak")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = job.smil.with_suffix(job.smil.suffix + f".bak.{timestamp}")
     if job.smil.exists() and not backup_path.exists():
         try:
             shutil.copy2(job.smil, backup_path)
@@ -780,11 +787,14 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             if not args.no_ttml:
                 ru_cues = parse_vtt_content(ru_content)
                 en_cues = parse_vtt_content(en_content)
+                # Convert 2-letter language codes to 3-letter for TTML
+                ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+                ttml_lang2 = LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
                 ttml_content = cues_to_ttml(
                     ru_cues,
                     en_cues,
-                    lang1=args.source_language,
-                    lang2=args.translation_language,
+                    lang1=ttml_lang1,
+                    lang2=ttml_lang2,
                     filter_words=filter_words,
                 )
                 atomic_write(job.ttml, ttml_content)
