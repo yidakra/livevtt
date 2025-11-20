@@ -368,12 +368,12 @@ python examples/compare_translations.py /path/to/archive
 ```bash
 # 1. No installation needed! (uses HTTP API)
 
-# 2. Option A: Use Mistral API (cloud)
+# 2. Option A: Use Mistral API (cloud) - mistral-large-latest for best quality
 export MISTRAL_API_KEY=your_api_key_here
 python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --api-url https://api.mistral.ai/v1/chat/completions \
   --api-key $MISTRAL_API_KEY \
-  --model mistral-small-latest \
+  --model mistral-large-latest \
   --max-files 5 \
   --progress
 
@@ -400,9 +400,10 @@ python examples/compare_translations.py /path/to/archive
 | **Whisper** | Good | faster-whisper | Recommended | Yes | Free | Built-in convenience |
 | **NLLB-200** | Excellent | transformers, torch | Recommended | Yes | Free | Best translation quality |
 | **LibreTranslate** | Good | None (HTTP) | No | Yes (Docker) | Free tier | No GPU, lightweight |
-| **Mistral LLM** | Excellent | None (HTTP) | No* | Yes (vLLM/Ollama) | Paid/Free* | Context-aware, nuanced |
+| **Mistral LLM** | Excellent* | None (HTTP) | No** | Yes (vLLM/Ollama) | Paid/Free** | Context-aware, nuanced |
 
-*Mistral can run on CPU with llama.cpp, or use cloud API (paid). Free when self-hosted.
+*Default uses `mistral-large-latest` for best quality. Use `--model mistral-small-latest` for faster/cheaper option.
+**Mistral can run on CPU with llama.cpp, or use cloud API (paid). Free when self-hosted.
 
 **When to use Mistral:**
 - Need context-aware, nuanced translation

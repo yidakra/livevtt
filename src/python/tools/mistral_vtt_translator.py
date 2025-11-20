@@ -376,8 +376,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        default="mistral-small-latest",
-        help="Model name (default: mistral-small-latest for Mistral API, or your local model name)",
+        default="mistral-large-latest",
+        help="Model name (default: mistral-large-latest for best quality; use mistral-small-latest for faster/cheaper)",
     )
     parser.add_argument(
         "--system-prompt",

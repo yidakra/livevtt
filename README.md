@@ -167,11 +167,11 @@ python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
 ```bash
 # No dependencies required! Uses HTTP API
 
-# Use Mistral API (requires API key)
+# Use Mistral API (requires API key) - mistral-large-latest for best quality
 python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --api-url https://api.mistral.ai/v1/chat/completions \
   --api-key YOUR_MISTRAL_API_KEY \
-  --model mistral-small-latest \
+  --model mistral-large-latest \
   --progress
 
 # Use local inference server (vLLM, llama.cpp, Ollama, etc.)
