@@ -10,12 +10,12 @@ import time
 from pathlib import Path
 
 try:
-    from src.python.tools import archive_transcriber  # type: ignore
+    from src.python.tools import archive_transcriber
 except ImportError:  # pragma: no cover
     REPO_ROOT = Path(__file__).resolve().parents[3]
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    from src.python.tools import archive_transcriber  # type: ignore
+    from src.python.tools import archive_transcriber
 
 LOGGER = logging.getLogger("subtitle_service")
 

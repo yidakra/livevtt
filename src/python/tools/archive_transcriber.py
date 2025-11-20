@@ -32,11 +32,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:  # Optional progress feedback
-    from tqdm import tqdm  # type: ignore
+    from tqdm import tqdm
 except ImportError:  # pragma: no cover - optional dependency
     tqdm = None
 
-from faster_whisper import WhisperModel  # type: ignore
+from faster_whisper import WhisperModel
 
 # Import TTML utilities
 from ttml_utils import cues_to_ttml, load_filter_words, parse_vtt_content, should_filter_cue
@@ -361,8 +361,8 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
         )
 
     streams = data.get("streams", [])
-    video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
-    audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+    video_stream: dict = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
+    audio_stream: dict = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
     format_data = data.get("format", {})
 
     def _get_int(value: str | None) -> int | None:
@@ -560,7 +560,7 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
 
     if hasattr(ET, "indent"):
-        ET.indent(tree, space="  ")  # type: ignore[arg-type]
+        ET.indent(tree, space="  ")
 
     tree.write(job.smil, encoding="utf-8", xml_declaration=True)
 

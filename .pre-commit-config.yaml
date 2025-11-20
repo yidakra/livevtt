@@ -23,12 +23,11 @@ repos:
         additional_dependencies:
           - types-requests
           - types-urllib3
-        args: [--ignore-missing-imports, --no-strict-optional]
+        args: [--ignore-missing-imports, --no-strict-optional, src/python/]
         exclude: ^(tests/|examples/)
         # Allow mypy to fail without blocking commit (gradual typing improvement)
         # Remove this line once typing coverage is sufficient
         verbose: true
-        always_run: false
         pass_filenames: false
 
   # Basic file checks

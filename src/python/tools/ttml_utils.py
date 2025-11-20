@@ -79,7 +79,7 @@ def load_filter_words(filter_json_path: Path | None = None) -> list[str]:
     try:
         with open(resolved_path, encoding="utf-8") as f:
             data = json.load(f)
-            filter_words = data.get("filter_words", [])
+            filter_words: list[str] = data.get("filter_words", [])
             _FILTER_CACHE = (resolved_path, filter_words)
             return filter_words
     except (json.JSONDecodeError, OSError):

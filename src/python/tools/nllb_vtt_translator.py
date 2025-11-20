@@ -21,13 +21,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from tqdm import tqdm  # type: ignore
+    from tqdm import tqdm
 except ImportError:
     tqdm = None
 
 try:
-    import torch  # type: ignore
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
+    import torch
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 except ImportError:
     print("ERROR: transformers and torch are required for NLLB translation.")
     print("Install with: pip install transformers torch sentencepiece")

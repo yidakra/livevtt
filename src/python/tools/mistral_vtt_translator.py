@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from tqdm import tqdm  # type: ignore
+    from tqdm import tqdm
 except ImportError:
     tqdm = None
 
@@ -167,7 +167,8 @@ def translate_with_llm(
             # Extract message content from response
             if "choices" in result and len(result["choices"]) > 0:
                 message = result["choices"][0].get("message", {})
-                return message.get("content", "").strip()
+                content: str = message.get("content", "")
+                return content.strip()
             else:
                 raise Exception(f"Unexpected API response format: {result}")
 

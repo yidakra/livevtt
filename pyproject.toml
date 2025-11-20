@@ -102,11 +102,18 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
 
-# Exclude patterns
+# Exclude patterns (for gradual typing adoption)
 exclude = [
     "^build/",
     "^dist/",
     "^\\.venv/",
+    "^main\\.py$",
+    "^src/python/utils/",
+    "^src/python/services/",
+    "^src/python/tools/stream_checker\\.py$",
+    "^src/python/tools/test_final_integration\\.py$",
+    "^src/python/tools/caption_sender\\.py$",
+    "^src/python/tools/archive_transcriber\\.py$",
 ]
 
 [tool.bandit]

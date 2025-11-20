@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:
-    from tqdm import tqdm  # type: ignore
+    from tqdm import tqdm
 except ImportError:
     tqdm = None
 
@@ -157,7 +157,8 @@ def translate_text_libretranslate(
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
             result = json.loads(response.read().decode("utf-8"))
-            return result.get("translatedText", "")
+            translated_text: str = result.get("translatedText", "")
+            return translated_text
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="ignore")
         raise Exception(f"LibreTranslate API error {e.code}: {error_body}")
