@@ -46,6 +46,7 @@ caption_sender = "python.tools.caption_sender:main"
 nllb_vtt_translator = "python.tools.nllb_vtt_translator:main"
 libretranslate_vtt_translator = "python.tools.libretranslate_vtt_translator:main"
 mistral_vtt_translator = "python.tools.mistral_vtt_translator:main"
+openai_vtt_translator = "python.tools.openai_vtt_translator:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

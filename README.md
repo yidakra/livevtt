@@ -241,7 +241,7 @@ python src/python/tools/mistral_vtt_translator.py /path/to/archive \
 python src/python/tools/mistral_vtt_translator.py /path/to/archive --max-files 10 --progress
 ```
 
-Scans for `*.ru.vtt` files and generates `*.mistral.en.vtt` translations using Mistral LLM or any OpenAI-compatible API, preserving original timestamps. This allows quality comparison between Whisper (`*.en.vtt`), NLLB (`*.nllb.en.vtt`), LibreTranslate (`*.libretranslate.en.vtt`), and Mistral (`*.mistral.en.vtt`) translations.
+Scans for `*.ru.vtt` files and generates `*.mistral.en.vtt` translations using Mistral LLM or any OpenAI-compatible API, preserving original timestamps. This allows quality comparison between Whisper (`*.en.vtt`), NLLB (`*.nllb.en.vtt`), LibreTranslate (`*.libretranslate.en.vtt`), Mistral (`*.mistral.en.vtt`), and OpenAI (`*.openai.en.vtt`) translations.
 
 **Why Mistral LLM?**
 - **State-of-the-art quality**: LLMs excel at nuanced, context-aware translation
@@ -267,6 +267,51 @@ python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --api-url http://localhost:8000/v1/chat/completions \
   --model mistral
 ```
+
+### `openai_vtt_translator`
+**High-quality translation using OpenAI's GPT models**
+
+```bash
+# No dependencies required! Uses HTTP API
+
+# Simple usage with .env configuration (recommended)
+# Set OPENAI_API_KEY in .env file, then:
+python src/python/tools/openai_vtt_translator.py /path/to/archive --progress
+
+# Or use command-line flags (overrides .env)
+python src/python/tools/openai_vtt_translator.py /path/to/archive \
+  --api-url https://api.openai.com/v1/chat/completions \
+  --api-key YOUR_OPENAI_API_KEY \
+  --model gpt-4o \
+  --progress
+
+# Use different models
+python src/python/tools/openai_vtt_translator.py /path/to/archive \
+  --model gpt-4-turbo \
+  --progress
+
+# Or use faster/cheaper model
+python src/python/tools/openai_vtt_translator.py /path/to/archive \
+  --model gpt-3.5-turbo \
+  --progress
+
+# Adjust delay based on your tier (free tier needs higher delay)
+python src/python/tools/openai_vtt_translator.py /path/to/archive --delay 20 --progress
+```
+
+Scans for `*.ru.vtt` files and generates `*.openai.en.vtt` translations using OpenAI's GPT models, preserving original timestamps. This allows quality comparison between different translation methods.
+
+**Why OpenAI?**
+- **Excellent quality**: GPT-4o provides state-of-the-art translation
+- **No ML dependencies**: Uses HTTP API
+- **Multiple models**: Choose between gpt-4o (best), gpt-4-turbo, or gpt-3.5-turbo (fast/cheap)
+- **Context-aware**: Excellent handling of idioms, cultural references, technical terms
+- **Well-documented API**: Robust and reliable
+
+**Rate limits by tier:**
+- Free tier: 3 requests/minute (use `--delay 20`)
+- Tier 1: 500 requests/minute (default `--delay 0.5` works)
+- Tier 2+: 5000 requests/minute (use `--delay 0`)
 
 ### `subtitle_autogen`
 **Polling service for automated transcription + SMIL regeneration**
