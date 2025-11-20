@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Compare Whisper, NLLB, and LibreTranslate translations side-by-side.
+"""Compare Whisper, NLLB, LibreTranslate, and Mistral translations side-by-side.
 
 This script takes a directory containing:
 - *.ru.vtt (Russian source)
 - *.en.vtt (Whisper translation)
 - *.nllb.en.vtt (NLLB translation)
 - *.libretranslate.en.vtt (LibreTranslate translation)
+- *.mistral.en.vtt (Mistral LLM translation)
 
 And displays them side-by-side for quality comparison.
 """
@@ -25,6 +26,7 @@ def print_comparison(
     whisper_cue: Optional[SubtitleCue],
     nllb_cue: Optional[SubtitleCue],
     libre_cue: Optional[SubtitleCue],
+    mistral_cue: Optional[SubtitleCue],
     index: int
 ):
     """Print a side-by-side comparison of all available translations."""
@@ -53,6 +55,12 @@ def print_comparison(
     else:
         print(f"   [NOT FOUND]")
 
+    print(f"\n🧠 Mistral LLM translation:")
+    if mistral_cue:
+        print(f"   {mistral_cue.text}")
+    else:
+        print(f"   [NOT FOUND]")
+
 
 def find_matching_cue(cues: List[SubtitleCue], target_start: float, tolerance: float = 0.5) -> Optional[SubtitleCue]:
     """Find a cue with matching start time."""
@@ -77,24 +85,28 @@ def compare_translations(directory: Path, max_cues: int = 20):
     whisper_vtt = directory / f"{base_name}.en.vtt"
     nllb_vtt = directory / f"{base_name}.nllb.en.vtt"
     libre_vtt = directory / f"{base_name}.libretranslate.en.vtt"
+    mistral_vtt = directory / f"{base_name}.mistral.en.vtt"
 
     print(f"📁 Comparing translations for: {base_name}")
     print(f"   Russian source: {ru_vtt.name}")
     print(f"   Whisper: {whisper_vtt.name} {'✅' if whisper_vtt.exists() else '❌ MISSING'}")
     print(f"   NLLB-200: {nllb_vtt.name} {'✅' if nllb_vtt.exists() else '❌ MISSING'}")
     print(f"   LibreTranslate: {libre_vtt.name} {'✅' if libre_vtt.exists() else '❌ MISSING'}")
+    print(f"   Mistral LLM: {mistral_vtt.name} {'✅' if mistral_vtt.exists() else '❌ MISSING'}")
 
     # Parse files
     ru_cues = parse_vtt_file(str(ru_vtt))
     whisper_cues = parse_vtt_file(str(whisper_vtt)) if whisper_vtt.exists() else []
     nllb_cues = parse_vtt_file(str(nllb_vtt)) if nllb_vtt.exists() else []
     libre_cues = parse_vtt_file(str(libre_vtt)) if libre_vtt.exists() else []
+    mistral_cues = parse_vtt_file(str(mistral_vtt)) if mistral_vtt.exists() else []
 
     print(f"\n📊 Cue counts:")
     print(f"   Russian: {len(ru_cues)} cues")
     print(f"   Whisper: {len(whisper_cues)} cues")
     print(f"   NLLB-200: {len(nllb_cues)} cues")
     print(f"   LibreTranslate: {len(libre_cues)} cues")
+    print(f"   Mistral LLM: {len(mistral_cues)} cues")
 
     # Compare side-by-side
     num_to_show = min(len(ru_cues), max_cues)
@@ -104,8 +116,9 @@ def compare_translations(directory: Path, max_cues: int = 20):
         whisper_cue = find_matching_cue(whisper_cues, ru_cue.start)
         nllb_cue = find_matching_cue(nllb_cues, ru_cue.start)
         libre_cue = find_matching_cue(libre_cues, ru_cue.start)
+        mistral_cue = find_matching_cue(mistral_cues, ru_cue.start)
 
-        print_comparison(ru_cue, whisper_cue, nllb_cue, libre_cue, i)
+        print_comparison(ru_cue, whisper_cue, nllb_cue, libre_cue, mistral_cue, i)
 
     if len(ru_cues) > max_cues:
         print(f"\n... and {len(ru_cues) - max_cues} more cues (use --max-cues to see more)")
@@ -116,12 +129,12 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Compare Whisper, NLLB, and LibreTranslate translations side-by-side"
+        description="Compare Whisper, NLLB, LibreTranslate, and Mistral translations side-by-side"
     )
     parser.add_argument(
         "directory",
         type=Path,
-        help="Directory containing .ru.vtt, .en.vtt, .nllb.en.vtt, and .libretranslate.en.vtt files"
+        help="Directory containing .ru.vtt, .en.vtt, .nllb.en.vtt, .libretranslate.en.vtt, and .mistral.en.vtt files"
     )
     parser.add_argument(
         "--max-cues",

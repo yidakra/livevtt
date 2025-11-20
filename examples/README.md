@@ -205,7 +205,7 @@ python src/python/tools/nllb_vtt_translator.py /tmp/nllb_test_XXXXX --verbose
 
 ### `compare_translations.py`
 
-Compare Whisper, NLLB, and LibreTranslate translations side-by-side for quality assessment.
+Compare Whisper, NLLB, LibreTranslate, and Mistral LLM translations side-by-side for quality assessment.
 
 **Usage:**
 ```bash
@@ -222,6 +222,7 @@ The directory must contain:
 - `*.en.vtt` - Whisper translations (from archive_transcriber)
 - `*.nllb.en.vtt` - NLLB translations (from nllb_vtt_translator) [optional]
 - `*.libretranslate.en.vtt` - LibreTranslate translations (from libretranslate_vtt_translator) [optional]
+- `*.mistral.en.vtt` - Mistral LLM translations (from mistral_vtt_translator) [optional]
 
 **Example workflow:**
 ```bash
@@ -234,7 +235,12 @@ python src/python/tools/nllb_vtt_translator.py . --max-files 1
 # 3. Translate with LibreTranslate
 python src/python/tools/libretranslate_vtt_translator.py . --max-files 1
 
-# 4. Compare all translations
+# 4. Translate with Mistral LLM
+python src/python/tools/mistral_vtt_translator.py . \
+  --api-url http://localhost:8000/v1/chat/completions \
+  --max-files 1
+
+# 5. Compare all translations
 python examples/compare_translations.py .
 ```
 
@@ -254,6 +260,9 @@ Cue #1 [0.0s - 3.0s]
    Good afternoon!
 
 🔄 LibreTranslate translation:
+   Good afternoon!
+
+🧠 Mistral LLM translation:
    Good afternoon!
 ```
 
@@ -354,6 +363,58 @@ python examples/compare_translations.py /path/to/archive
 - Processing locally without network dependency
 - Batch processing large archives
 
+### Quick Start with Mistral LLM
+
+```bash
+# 1. No installation needed! (uses HTTP API)
+
+# 2. Option A: Use Mistral API (cloud)
+export MISTRAL_API_KEY=your_api_key_here
+python src/python/tools/mistral_vtt_translator.py /path/to/archive \
+  --api-url https://api.mistral.ai/v1/chat/completions \
+  --api-key $MISTRAL_API_KEY \
+  --model mistral-small-latest \
+  --max-files 5 \
+  --progress
+
+# 2. Option B: Use local inference (vLLM, Ollama, llama.cpp)
+# First, start your inference server:
+vllm serve mistralai/Mistral-7B-Instruct-v0.2 --host 0.0.0.0 --port 8000
+# OR: ollama pull mistral && ollama serve
+
+# Then translate:
+python src/python/tools/mistral_vtt_translator.py /path/to/archive \
+  --api-url http://localhost:8000/v1/chat/completions \
+  --model mistral \
+  --max-files 5 \
+  --progress
+
+# 3. Compare quality with other translations
+python examples/compare_translations.py /path/to/archive
+```
+
+### Translation Method Comparison
+
+| Method | Quality | Dependencies | GPU | Self-host | API Cost | Best For |
+|--------|---------|--------------|-----|-----------|----------|----------|
+| **Whisper** | Good | faster-whisper | Recommended | Yes | Free | Built-in convenience |
+| **NLLB-200** | Excellent | transformers, torch | Recommended | Yes | Free | Best translation quality |
+| **LibreTranslate** | Good | None (HTTP) | No | Yes (Docker) | Free tier | No GPU, lightweight |
+| **Mistral LLM** | Excellent | None (HTTP) | No* | Yes (vLLM/Ollama) | Paid/Free* | Context-aware, nuanced |
+
+*Mistral can run on CPU with llama.cpp, or use cloud API (paid). Free when self-hosted.
+
+**When to use Mistral:**
+- Need context-aware, nuanced translation
+- Want customizable prompts for specific domains (broadcast, technical, etc.)
+- Have access to Mistral API or can run local LLM inference
+- Quality is critical and budget allows (API costs ~$0.001-0.002 per subtitle)
+
+**When NOT to use Mistral:**
+- Budget constrained and processing thousands of files (use NLLB or LibreTranslate)
+- Need fastest possible speed (use NLLB with GPU)
+- Want zero-dependency solution (use LibreTranslate)
+
 ---
 
 ## Further Reading
@@ -363,3 +424,6 @@ python examples/compare_translations.py /path/to/archive
 - [LiveVTT Documentation](../docs/TOOLS.md)
 - [Meta NLLB-200 Model](https://ai.meta.com/research/no-language-left-behind/)
 - [LibreTranslate Project](https://github.com/LibreTranslate/LibreTranslate)
+- [Mistral AI](https://mistral.ai/)
+- [vLLM Inference Engine](https://github.com/vllm-project/vllm)
+- [Ollama](https://ollama.ai/)

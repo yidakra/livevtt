@@ -161,6 +161,64 @@ python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
   --api-url http://localhost:5000/translate
 ```
 
+### `mistral_vtt_translator`
+**LLM-powered translation using Mistral or compatible APIs**
+
+```bash
+# No dependencies required! Uses HTTP API
+
+# Use Mistral API (requires API key)
+python src/python/tools/mistral_vtt_translator.py /path/to/archive \
+  --api-url https://api.mistral.ai/v1/chat/completions \
+  --api-key YOUR_MISTRAL_API_KEY \
+  --model mistral-small-latest \
+  --progress
+
+# Use local inference server (vLLM, llama.cpp, Ollama, etc.)
+python src/python/tools/mistral_vtt_translator.py /path/to/archive \
+  --api-url http://localhost:8000/v1/chat/completions \
+  --model mistral-7b \
+  --progress
+
+# With custom system prompt for context
+python src/python/tools/mistral_vtt_translator.py /path/to/archive \
+  --api-url http://localhost:8000/v1/chat/completions \
+  --model mistral-7b \
+  --system-prompt "You are a professional translator specializing in broadcast subtitles. Translate naturally and fluently." \
+  --temperature 0.2 \
+  --progress
+
+# Limit to first 10 files for testing
+python src/python/tools/mistral_vtt_translator.py /path/to/archive --max-files 10 --progress
+```
+
+Scans for `*.ru.vtt` files and generates `*.mistral.en.vtt` translations using Mistral LLM or any OpenAI-compatible API, preserving original timestamps. This allows quality comparison between Whisper (`*.en.vtt`), NLLB (`*.nllb.en.vtt`), LibreTranslate (`*.libretranslate.en.vtt`), and Mistral (`*.mistral.en.vtt`) translations.
+
+**Why Mistral LLM?**
+- **State-of-the-art quality**: LLMs excel at nuanced, context-aware translation
+- **No ML dependencies**: Uses HTTP API (like LibreTranslate)
+- **Flexible**: Works with Mistral API, local vLLM, Ollama, llama.cpp servers
+- **Customizable**: Adjust prompts, temperature, and model selection
+- **Best for context**: Excellent handling of idioms, cultural references, technical terms
+
+**Local inference options:**
+```bash
+# Option 1: vLLM (fast, GPU-optimized)
+vllm serve mistralai/Mistral-7B-Instruct-v0.2 --host 0.0.0.0 --port 8000
+
+# Option 2: Ollama (easy setup)
+ollama pull mistral
+ollama serve
+
+# Option 3: llama.cpp (CPU-friendly)
+./server -m mistral-7b-instruct-v0.2.Q4_K_M.gguf --port 8000
+
+# Then use local endpoint:
+python src/python/tools/mistral_vtt_translator.py /path/to/archive \
+  --api-url http://localhost:8000/v1/chat/completions \
+  --model mistral
+```
+
 ### `subtitle_autogen`
 **Polling service for automated transcription + SMIL regeneration**
 
