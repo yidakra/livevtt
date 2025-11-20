@@ -115,6 +115,52 @@ Scans for `*.ru.vtt` files and generates `*.nllb.en.vtt` translations using NLLB
 
 **Why NLLB?** Meta's NLLB-200 (No Language Left Behind) model provides significantly better translation quality than Whisper's translation mode, especially for Russian→English. It's also much faster since it only translates text rather than reprocessing audio.
 
+### `libretranslate_vtt_translator`
+**Lightweight translation using LibreTranslate API (self-hosted or cloud)**
+
+```bash
+# No dependencies required! Uses HTTP API
+
+# Use public LibreTranslate instance (free, rate-limited)
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive --progress
+
+# Use self-hosted instance
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
+  --api-url http://localhost:5000/translate \
+  --progress
+
+# With API key (if required by your instance)
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
+  --api-url https://your-instance.com/translate \
+  --api-key YOUR_API_KEY \
+  --progress
+
+# Limit to first 10 files for testing
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive --max-files 10 --progress
+
+# Adjust delay for rate limiting (default 0.1s between requests)
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive --delay 0.5 --progress
+```
+
+Scans for `*.ru.vtt` files and generates `*.libretranslate.en.vtt` translations using LibreTranslate API, preserving original timestamps. This allows quality comparison between Whisper (`*.en.vtt`), NLLB (`*.nllb.en.vtt`), and LibreTranslate (`*.libretranslate.en.vtt`) translations.
+
+**Why LibreTranslate?**
+- **No ML dependencies**: Uses HTTP API, no need for transformers/torch
+- **Lightweight**: Works on any machine without GPU
+- **Self-hostable**: Run your own instance for unlimited, private translations
+- **Free tier available**: Public instance at libretranslate.com (rate-limited)
+- **Good quality**: Uses Argos Translate models under the hood
+
+**Self-hosting LibreTranslate:**
+```bash
+# Quick Docker setup
+docker run -ti --rm -p 5000:5000 libretranslate/libretranslate
+
+# Then use it:
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
+  --api-url http://localhost:5000/translate
+```
+
 ### `subtitle_autogen`
 **Polling service for automated transcription + SMIL regeneration**
 

@@ -205,7 +205,7 @@ python src/python/tools/nllb_vtt_translator.py /tmp/nllb_test_XXXXX --verbose
 
 ### `compare_translations.py`
 
-Compare Whisper and NLLB translations side-by-side for quality assessment.
+Compare Whisper, NLLB, and LibreTranslate translations side-by-side for quality assessment.
 
 **Usage:**
 ```bash
@@ -220,7 +220,8 @@ python examples/compare_translations.py /path/to/directory --max-cues 50
 The directory must contain:
 - `*.ru.vtt` - Russian source subtitles
 - `*.en.vtt` - Whisper translations (from archive_transcriber)
-- `*.nllb.en.vtt` - NLLB translations (from nllb_vtt_translator)
+- `*.nllb.en.vtt` - NLLB translations (from nllb_vtt_translator) [optional]
+- `*.libretranslate.en.vtt` - LibreTranslate translations (from libretranslate_vtt_translator) [optional]
 
 **Example workflow:**
 ```bash
@@ -230,7 +231,10 @@ cd /path/to/archive/subfolder
 # 2. Translate with NLLB
 python src/python/tools/nllb_vtt_translator.py . --max-files 1
 
-# 3. Compare translations
+# 3. Translate with LibreTranslate
+python src/python/tools/libretranslate_vtt_translator.py . --max-files 1
+
+# 4. Compare all translations
 python examples/compare_translations.py .
 ```
 
@@ -248,11 +252,14 @@ Cue #1 [0.0s - 3.0s]
 
 🌍 NLLB-200 translation:
    Good afternoon!
+
+🔄 LibreTranslate translation:
+   Good afternoon!
 ```
 
 ### Quality Comparison Tips
 
-When comparing Whisper vs NLLB translations, consider:
+When comparing translations, consider:
 
 1. **Naturalness**: Does it sound like natural English?
 2. **Context**: Is the meaning preserved from the original?
@@ -301,6 +308,52 @@ python src/python/tools/nllb_vtt_translator.py /path/to/archive \
   --model facebook/nllb-200-3.3B
 ```
 
+### Quick Start with LibreTranslate
+
+```bash
+# 1. No installation needed! (uses HTTP API)
+
+# 2. Translate using public instance (rate-limited)
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive --max-files 5 --progress
+
+# 3. OR self-host LibreTranslate for unlimited translations
+docker run -ti --rm -p 5000:5000 libretranslate/libretranslate
+
+# 4. Use your self-hosted instance
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
+  --api-url http://localhost:5000/translate \
+  --max-files 5 \
+  --progress
+
+# 5. Compare quality with other translations
+python examples/compare_translations.py /path/to/archive
+```
+
+### LibreTranslate vs NLLB
+
+| Feature | LibreTranslate | NLLB-200 |
+|---------|---------------|----------|
+| **Dependencies** | None (HTTP API) | transformers, torch, sentencepiece |
+| **GPU Required** | No | Recommended for speed |
+| **Installation** | None | `poetry install -E nllb` |
+| **Self-hostable** | Yes (Docker) | Yes (local model) |
+| **Free tier** | Yes (public API) | Yes (local model) |
+| **Translation quality** | Good | Excellent |
+| **Speed** | Depends on network | Very fast (GPU) |
+| **Best for** | Lightweight, no GPU | Best quality, local processing |
+
+**When to use LibreTranslate:**
+- No GPU available
+- Don't want to install heavy ML dependencies
+- Need API-based translation for distributed systems
+- Want self-hosted instance for privacy/unlimited use
+
+**When to use NLLB:**
+- Have GPU available
+- Need best possible translation quality
+- Processing locally without network dependency
+- Batch processing large archives
+
 ---
 
 ## Further Reading
@@ -309,3 +362,4 @@ python src/python/tools/nllb_vtt_translator.py /path/to/archive \
 - [WebVTT Specification](https://www.w3.org/TR/webvtt1/)
 - [LiveVTT Documentation](../docs/TOOLS.md)
 - [Meta NLLB-200 Model](https://ai.meta.com/research/no-language-left-behind/)
+- [LibreTranslate Project](https://github.com/LibreTranslate/LibreTranslate)
