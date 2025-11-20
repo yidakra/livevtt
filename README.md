@@ -86,6 +86,35 @@ python src/python/tools/archive_transcriber.py --max-files 1 --progress
 
 Generates `<hash>.ru.vtt` (source-language transcript), `<hash>.en.vtt` (English translation), and `<hash>.smil` manifest files alongside the source (or under `--output-root`). Uses `/mnt/vod/srv/storage/transcoded/` as the default archive root; pass a path to override.
 
+### `nllb_vtt_translator`
+**High-quality translation of existing Russian VTT files using Meta's NLLB-200 model**
+
+```bash
+# Install NLLB dependencies (one-time setup)
+poetry install -E nllb
+# OR with pip:
+pip install transformers torch sentencepiece
+
+# Translate all *.ru.vtt files in a directory
+python src/python/tools/nllb_vtt_translator.py /path/to/archive --progress
+
+# Limit to first 10 files for testing
+python src/python/tools/nllb_vtt_translator.py /path/to/archive --max-files 10 --progress
+
+# Use smaller/faster model (600M parameters)
+python src/python/tools/nllb_vtt_translator.py /path/to/archive --model facebook/nllb-200-distilled-600M
+
+# Use larger model for best quality (3.3B parameters, requires ~13GB GPU RAM)
+python src/python/tools/nllb_vtt_translator.py /path/to/archive --model facebook/nllb-200-3.3B
+
+# Force CPU (no GPU)
+python src/python/tools/nllb_vtt_translator.py /path/to/archive --device cpu
+```
+
+Scans for `*.ru.vtt` files and generates `*.nllb.en.vtt` translations using NLLB-200, preserving original timestamps. This allows quality comparison between Whisper's translation (`*.en.vtt`) and NLLB-200's translation (`*.nllb.en.vtt`) without modifying the existing transcription pipeline.
+
+**Why NLLB?** Meta's NLLB-200 (No Language Left Behind) model provides significantly better translation quality than Whisper's translation mode, especially for Russian→English. It's also much faster since it only translates text rather than reprocessing audio.
+
 ### `subtitle_autogen`
 **Polling service for automated transcription + SMIL regeneration**
 

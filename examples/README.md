@@ -175,8 +175,137 @@ The TTML functionality requires:
 - Standard library only (xml.etree.ElementTree, argparse, etc.)
 - No external dependencies for TTML generation
 
+---
+
+## NLLB Translation Examples
+
+This directory also contains example scripts for testing and comparing NLLB-200 translations.
+
+### `test_nllb_translation.py`
+
+Creates a test VTT file with Russian content for testing the NLLB translator.
+
+**Usage:**
+```bash
+python examples/test_nllb_translation.py
+```
+
+This will:
+1. Create a temporary directory with a test `*.ru.vtt` file
+2. Print the Russian content
+3. Show you the command to run the NLLB translator
+
+**Then translate it:**
+```bash
+# Follow the printed instructions, e.g.:
+python src/python/tools/nllb_vtt_translator.py /tmp/nllb_test_XXXXX --verbose
+```
+
+---
+
+### `compare_translations.py`
+
+Compare Whisper and NLLB translations side-by-side for quality assessment.
+
+**Usage:**
+```bash
+# Compare translations in a directory
+python examples/compare_translations.py /path/to/directory
+
+# Show more cues
+python examples/compare_translations.py /path/to/directory --max-cues 50
+```
+
+**Requirements:**
+The directory must contain:
+- `*.ru.vtt` - Russian source subtitles
+- `*.en.vtt` - Whisper translations (from archive_transcriber)
+- `*.nllb.en.vtt` - NLLB translations (from nllb_vtt_translator)
+
+**Example workflow:**
+```bash
+# 1. Find a directory with Whisper translations
+cd /path/to/archive/subfolder
+
+# 2. Translate with NLLB
+python src/python/tools/nllb_vtt_translator.py . --max-files 1
+
+# 3. Compare translations
+python examples/compare_translations.py .
+```
+
+**Output example:**
+```
+================================================================================
+Cue #1 [0.0s - 3.0s]
+================================================================================
+
+🇷🇺 Russian (source):
+   Добрый день!
+
+🤖 Whisper translation:
+   Good day!
+
+🌍 NLLB-200 translation:
+   Good afternoon!
+```
+
+### Quality Comparison Tips
+
+When comparing Whisper vs NLLB translations, consider:
+
+1. **Naturalness**: Does it sound like natural English?
+2. **Context**: Is the meaning preserved from the original?
+3. **Idioms**: Are Russian idioms appropriately translated?
+4. **Technical terms**: Are specialized terms correct?
+5. **Consistency**: Are terms translated consistently across cues?
+
+### Quick Start with NLLB
+
+```bash
+# 1. Install NLLB dependencies (one-time)
+poetry install -E nllb
+
+# 2. Create a test file
+python examples/test_nllb_translation.py
+
+# 3. Translate it (follow printed instructions)
+python src/python/tools/nllb_vtt_translator.py /tmp/nllb_test_XXXXX --verbose
+
+# 4. OR test on real archive data
+python src/python/tools/nllb_vtt_translator.py /mnt/vod/srv/storage/transcoded/some-subfolder --max-files 5
+
+# 5. Compare quality
+python examples/compare_translations.py /mnt/vod/srv/storage/transcoded/some-subfolder
+```
+
+### Model Selection
+
+NLLB-200 offers multiple model sizes:
+
+| Model | Parameters | GPU RAM | Speed | Quality |
+|-------|-----------|---------|-------|---------|
+| `facebook/nllb-200-distilled-600M` | 600M | ~2GB | Fast | Good |
+| `facebook/nllb-200-1.3B` | 1.3B | ~5GB | Medium | Better |
+| `facebook/nllb-200-3.3B` | 3.3B | ~13GB | Slow | Best |
+
+**Recommendation**: Start with `distilled-600M` for speed, use `3.3B` for best quality if you have the GPU memory.
+
+```bash
+# Use smaller/faster model
+python src/python/tools/nllb_vtt_translator.py /path/to/archive \
+  --model facebook/nllb-200-distilled-600M
+
+# Use larger/better model
+python src/python/tools/nllb_vtt_translator.py /path/to/archive \
+  --model facebook/nllb-200-3.3B
+```
+
+---
+
 ## Further Reading
 
 - [W3C TTML1 Specification](https://www.w3.org/TR/ttml1/)
 - [WebVTT Specification](https://www.w3.org/TR/webvtt1/)
 - [LiveVTT Documentation](../docs/TOOLS.md)
+- [Meta NLLB-200 Model](https://ai.meta.com/research/no-language-left-behind/)

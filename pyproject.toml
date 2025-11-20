@@ -21,6 +21,14 @@ tqdm = "*"
 
 websockets = "*"
 
+# NLLB-200 translation dependencies (optional)
+transformers = {version = "*", optional = true}
+torch = {version = "*", optional = true}
+sentencepiece = {version = "*", optional = true}
+
+[tool.poetry.extras]
+nllb = ["transformers", "torch", "sentencepiece"]
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
 pytest-asyncio = "^0.21.0"
@@ -35,6 +43,7 @@ ruff = "^0.8.0"
 archive_transcriber = "python.tools.archive_transcriber:main"
 vtt_to_ttml = "python.tools.vtt_to_ttml:main"
 caption_sender = "python.tools.caption_sender:main"
+nllb_vtt_translator = "python.tools.nllb_vtt_translator:main"
 
 [tool.black]
 line-length = 120
