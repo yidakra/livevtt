@@ -18,6 +18,9 @@ numpy = ">=1.26,<2.0"
 aiofiles = "*"
 hf_xet = "*"
 tqdm = "*"
+fastapi = "*"
+uvicorn = {extras = ["standard"], version = "*"}
+requests = "*"
 
 websockets = "*"
 
