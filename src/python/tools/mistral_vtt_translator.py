@@ -424,8 +424,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--delay",
         type=float,
-        default=1.0,
-        help="Delay between API requests in seconds (default: 1.0 for mistral-large-latest to avoid rate limits)",
+        default=1.2,
+        help="Delay between API requests in seconds (default: 1.2s for 1 req/sec rate limit with safety margin)",
     )
     parser.add_argument(
         "--max-files",

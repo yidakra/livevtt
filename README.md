@@ -208,6 +208,7 @@ python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
 
 # Simple usage with .env configuration (recommended)
 # Set MISTRAL_API_KEY in .env file, then:
+# Default 1.2s delay handles Mistral's 1 req/sec rate limit
 python src/python/tools/mistral_vtt_translator.py /path/to/archive --progress
 
 # Or use command-line flags (overrides .env)
@@ -217,8 +218,8 @@ python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --model mistral-large-latest \
   --progress
 
-# Adjust delay for rate limiting (increase if you hit 429 errors frequently)
-python src/python/tools/mistral_vtt_translator.py /path/to/archive --delay 2.0 --progress
+# Adjust delay if needed (default: 1.2s for 1 req/sec limit)
+python src/python/tools/mistral_vtt_translator.py /path/to/archive --delay 1.5 --progress
 
 # Use local inference server (vLLM, llama.cpp, Ollama, etc.)
 # No delay needed for local servers
