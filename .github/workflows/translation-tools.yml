@@ -1,0 +1,84 @@
+name: Translation Tools
+
+on:
+  push:
+    paths:
+      - 'src/python/tools/*translator*.py'
+      - '.github/workflows/translation-tools.yml'
+  pull_request:
+    paths:
+      - 'src/python/tools/*translator*.py'
+  workflow_dispatch:
+
+jobs:
+  test-nllb:
+    name: Test NLLB Translator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install --no-interaction -E nllb
+
+      - name: Syntax check
+        run: python -m py_compile src/python/tools/nllb_vtt_translator.py
+
+      - name: Run help command
+        run: python src/python/tools/nllb_vtt_translator.py --help
+
+  test-libretranslate:
+    name: Test LibreTranslate Translator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install --no-interaction
+
+      - name: Syntax check
+        run: python -m py_compile src/python/tools/libretranslate_vtt_translator.py
+
+      - name: Run help command
+        run: python src/python/tools/libretranslate_vtt_translator.py --help
+
+  test-mistral:
+    name: Test Mistral Translator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry config virtualenvs.create false
+          poetry install --no-interaction
+
+      - name: Syntax check
+        run: python -m py_compile src/python/tools/mistral_vtt_translator.py
+
+      - name: Run help command
+        run: python src/python/tools/mistral_vtt_translator.py --help

@@ -5,4 +5,4 @@
 echo "🔨 Building LiveVTT Caption Module..."
 echo "===================================="
 
-cd deploy/scripts && ./java_module_build.sh 
+cd deploy/scripts && ./java_module_build.sh

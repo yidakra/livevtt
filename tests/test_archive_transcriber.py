@@ -8,26 +8,27 @@ from pathlib import Path
 from unittest import mock
 
 # Mock faster_whisper before importing archive_transcriber
-sys.modules['faster_whisper'] = mock.MagicMock()
+sys.modules["faster_whisper"] = mock.MagicMock()
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
 from archive_transcriber import (
-    segments_to_webvtt,
+    Manifest,
+    VideoJob,
+    VideoMetadata,
+    atomic_write,
+    build_output_artifacts,
     extract_resolution,
     normalise_variant_name,
+    segments_to_webvtt,
     select_best_variant,
-    build_output_artifacts,
-    atomic_write,
-    VideoJob,
-    Manifest,
-    VideoMetadata,
     translation_output_suspect,
 )
 
 
 class MockSegment:
     """Mock Whisper segment for testing."""
+
     def __init__(self, start, end, text):
         self.start = start
         self.end = end
@@ -75,7 +76,7 @@ class TestSegmentsToWebVTT:
         segments = [
             MockSegment(0.0, 2.0, "Valid"),
             MockSegment(2.0, 4.0, "   "),  # Only whitespace
-            MockSegment(4.0, 6.0, ""),      # Empty
+            MockSegment(4.0, 6.0, ""),  # Empty
             MockSegment(6.0, 8.0, "Also valid"),
         ]
         result = segments_to_webvtt(segments)
@@ -283,9 +284,7 @@ class TestBuildOutputArtifacts:
         video_path = Path("/archive/2024/01/video_1080p.ts")
         input_root = Path("/archive")
 
-        ru_vtt, en_vtt, ttml, smil = build_output_artifacts(
-            video_path, "video.ts", input_root, None
-        )
+        ru_vtt, en_vtt, ttml, smil = build_output_artifacts(video_path, "video.ts", input_root, None)
 
         assert ru_vtt.name == "video.ru.vtt"
         assert en_vtt.name == "video.en.vtt"
@@ -305,9 +304,7 @@ class TestBuildOutputArtifacts:
             video_path.parent.mkdir()
             video_path.write_text("test")
 
-            ru_vtt, en_vtt, ttml, smil = build_output_artifacts(
-                video_path, "video.ts", input_root, output_root
-            )
+            ru_vtt, en_vtt, ttml, smil = build_output_artifacts(video_path, "video.ts", input_root, output_root)
 
             # Should mirror directory structure
             assert output_root in ru_vtt.parents

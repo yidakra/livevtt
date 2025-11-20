@@ -3,8 +3,8 @@
 
 import json
 import sys
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 
 def format_duration(seconds):
@@ -29,7 +29,7 @@ def check_progress(manifest_path="logs/archive_transcriber_manifest.jsonl"):
         return
 
     records = []
-    with open(manifest_file, "r", encoding="utf-8") as f:
+    with open(manifest_file, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 records.append(json.loads(line))

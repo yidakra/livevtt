@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Tests for stream_checker.py utility."""
 
+import json
 import sys
 from pathlib import Path
 from unittest import mock
-import json
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
@@ -19,7 +19,7 @@ class TestBasicStreamStatus:
         mock_response = mock.MagicMock()
         mock_response.status_code = 200
 
-        with mock.patch('stream_checker.requests.post', return_value=mock_response):
+        with mock.patch("stream_checker.requests.post", return_value=mock_response):
             result = stream_checker.check_basic_stream_status("localhost")
             assert result is True
         print("✓ test_check_basic_stream_status_success passed")
@@ -29,7 +29,7 @@ class TestBasicStreamStatus:
         mock_response = mock.MagicMock()
         mock_response.status_code = 404
 
-        with mock.patch('stream_checker.requests.post', return_value=mock_response):
+        with mock.patch("stream_checker.requests.post", return_value=mock_response):
             result = stream_checker.check_basic_stream_status("localhost")
             assert result is True  # Still successful check
         print("✓ test_check_basic_stream_status_no_streams passed")
@@ -39,14 +39,14 @@ class TestBasicStreamStatus:
         mock_response = mock.MagicMock()
         mock_response.status_code = 500
 
-        with mock.patch('stream_checker.requests.post', return_value=mock_response):
+        with mock.patch("stream_checker.requests.post", return_value=mock_response):
             result = stream_checker.check_basic_stream_status("localhost")
             assert result is False
         print("✓ test_check_basic_stream_status_unexpected_code passed")
 
     def test_check_basic_stream_status_connection_error(self):
         """Test basic stream status check with connection error."""
-        with mock.patch('stream_checker.requests.post', side_effect=Exception("Connection refused")):
+        with mock.patch("stream_checker.requests.post", side_effect=Exception("Connection refused")):
             result = stream_checker.check_basic_stream_status("localhost")
             assert result is False
         print("✓ test_check_basic_stream_status_connection_error passed")
@@ -60,34 +60,21 @@ class TestWowzaStreams:
         # Mock applications response
         apps_response = mock.MagicMock()
         apps_response.status_code = 200
-        apps_response.json.return_value = {
-            'applications': [
-                {'name': 'live'}
-            ]
-        }
+        apps_response.json.return_value = {"applications": [{"name": "live"}]}
 
         # Mock instances response
         instances_response = mock.MagicMock()
         instances_response.status_code = 200
-        instances_response.json.return_value = {
-            'instances': [
-                {'name': '_definst_'}
-            ]
-        }
+        instances_response.json.return_value = {"instances": [{"name": "_definst_"}]}
 
         # Mock streams response
         streams_response = mock.MagicMock()
         streams_response.status_code = 200
-        streams_response.json.return_value = {
-            'incomingStreams': [
-                {'name': 'testStream'},
-                {'name': 'liveShow'}
-            ]
-        }
+        streams_response.json.return_value = {"incomingStreams": [{"name": "testStream"}, {"name": "liveShow"}]}
 
         responses = [apps_response, instances_response, streams_response]
 
-        with mock.patch('stream_checker.requests.get', side_effect=responses):
+        with mock.patch("stream_checker.requests.get", side_effect=responses):
             result = stream_checker.check_wowza_streams("localhost", 8088)
             assert result is True
         print("✓ test_check_wowza_streams_with_active_streams passed")
@@ -96,11 +83,9 @@ class TestWowzaStreams:
         """Test checking Wowza streams with no active streams."""
         apps_response = mock.MagicMock()
         apps_response.status_code = 200
-        apps_response.json.return_value = {
-            'applications': []
-        }
+        apps_response.json.return_value = {"applications": []}
 
-        with mock.patch('stream_checker.requests.get', return_value=apps_response):
+        with mock.patch("stream_checker.requests.get", return_value=apps_response):
             result = stream_checker.check_wowza_streams("localhost", 8088)
             assert result is True  # Still a successful check
         print("✓ test_check_wowza_streams_no_active_streams passed")
@@ -114,8 +99,8 @@ class TestWowzaStreams:
         basic_response = mock.MagicMock()
         basic_response.status_code = 200
 
-        with mock.patch('stream_checker.requests.get', return_value=apps_response):
-            with mock.patch('stream_checker.requests.post', return_value=basic_response):
+        with mock.patch("stream_checker.requests.get", return_value=apps_response):
+            with mock.patch("stream_checker.requests.post", return_value=basic_response):
                 result = stream_checker.check_wowza_streams("localhost", 8088)
                 assert result is True
         print("✓ test_check_wowza_streams_api_not_accessible passed")
@@ -130,8 +115,8 @@ class TestWowzaStreams:
         basic_response = mock.MagicMock()
         basic_response.status_code = 200
 
-        with mock.patch('stream_checker.requests.get', return_value=apps_response):
-            with mock.patch('stream_checker.requests.post', return_value=basic_response):
+        with mock.patch("stream_checker.requests.get", return_value=apps_response):
+            with mock.patch("stream_checker.requests.post", return_value=basic_response):
                 result = stream_checker.check_wowza_streams("localhost", 8088)
                 assert result is True
         print("✓ test_check_wowza_streams_invalid_json passed")
@@ -140,8 +125,9 @@ class TestWowzaStreams:
         """Test when connection to Wowza fails."""
         import requests
 
-        with mock.patch('stream_checker.requests.get',
-                       side_effect=requests.exceptions.RequestException("Connection failed")):
+        with mock.patch(
+            "stream_checker.requests.get", side_effect=requests.exceptions.RequestException("Connection failed")
+        ):
             result = stream_checker.check_wowza_streams("localhost", 8088)
             assert result is False
         print("✓ test_check_wowza_streams_connection_error passed")
@@ -150,46 +136,23 @@ class TestWowzaStreams:
         """Test checking multiple applications with multiple streams."""
         apps_response = mock.MagicMock()
         apps_response.status_code = 200
-        apps_response.json.return_value = {
-            'applications': [
-                {'name': 'live'},
-                {'name': 'vod'}
-            ]
-        }
+        apps_response.json.return_value = {"applications": [{"name": "live"}, {"name": "vod"}]}
 
         instances_response = mock.MagicMock()
         instances_response.status_code = 200
-        instances_response.json.return_value = {
-            'instances': [
-                {'name': '_definst_'}
-            ]
-        }
+        instances_response.json.return_value = {"instances": [{"name": "_definst_"}]}
 
         streams_response1 = mock.MagicMock()
         streams_response1.status_code = 200
-        streams_response1.json.return_value = {
-            'incomingStreams': [
-                {'name': 'stream1'}
-            ]
-        }
+        streams_response1.json.return_value = {"incomingStreams": [{"name": "stream1"}]}
 
         streams_response2 = mock.MagicMock()
         streams_response2.status_code = 200
-        streams_response2.json.return_value = {
-            'incomingStreams': [
-                {'name': 'stream2'}
-            ]
-        }
+        streams_response2.json.return_value = {"incomingStreams": [{"name": "stream2"}]}
 
-        responses = [
-            apps_response,
-            instances_response,
-            streams_response1,
-            instances_response,
-            streams_response2
-        ]
+        responses = [apps_response, instances_response, streams_response1, instances_response, streams_response2]
 
-        with mock.patch('stream_checker.requests.get', side_effect=responses):
+        with mock.patch("stream_checker.requests.get", side_effect=responses):
             result = stream_checker.check_wowza_streams("localhost", 8088)
             assert result is True
         print("✓ test_check_wowza_streams_multiple_apps_and_streams passed")
@@ -201,51 +164,46 @@ class TestMainFunction:
     def test_main_default_arguments(self):
         """
         Verify that main() exits successfully when run with default CLI arguments and the Wowza API reports no applications.
-        
+
         This test sets sys.argv to the script's default invocation and mocks requests.get to return a 200 response whose JSON is {'applications': []}; it asserts that main() returns 0.
         """
-        test_args = ['stream_checker.py']
+        test_args = ["stream_checker.py"]
 
         apps_response = mock.MagicMock()
         apps_response.status_code = 200
-        apps_response.json.return_value = {'applications': []}
+        apps_response.json.return_value = {"applications": []}
 
-        with mock.patch('sys.argv', test_args):
-            with mock.patch('stream_checker.requests.get', return_value=apps_response):
+        with mock.patch("sys.argv", test_args):
+            with mock.patch("stream_checker.requests.get", return_value=apps_response):
                 result = stream_checker.main()
                 assert result == 0
         print("✓ test_main_default_arguments passed")
 
     def test_main_custom_host_and_port(self):
         """Test main function with custom host and port."""
-        test_args = [
-            'stream_checker.py',
-            '--host', 'example.com',
-            '--port', '9090'
-        ]
+        test_args = ["stream_checker.py", "--host", "example.com", "--port", "9090"]
 
         apps_response = mock.MagicMock()
         apps_response.status_code = 200
-        apps_response.json.return_value = {'applications': []}
+        apps_response.json.return_value = {"applications": []}
 
-        with mock.patch('sys.argv', test_args):
-            with mock.patch('stream_checker.requests.get', return_value=apps_response) as mock_get:
+        with mock.patch("sys.argv", test_args):
+            with mock.patch("stream_checker.requests.get", return_value=apps_response) as mock_get:
                 result = stream_checker.main()
                 assert result == 0
                 # Verify correct host and port were used
                 call_url = mock_get.call_args[0][0]
-                assert 'example.com:9090' in call_url
+                assert "example.com:9090" in call_url
         print("✓ test_main_custom_host_and_port passed")
 
     def test_main_with_failure(self):
         """Test main function when check fails."""
-        test_args = ['stream_checker.py']
+        test_args = ["stream_checker.py"]
 
         import requests
 
-        with mock.patch('sys.argv', test_args):
-            with mock.patch('stream_checker.requests.get',
-                          side_effect=requests.exceptions.RequestException("Error")):
+        with mock.patch("sys.argv", test_args):
+            with mock.patch("stream_checker.requests.get", side_effect=requests.exceptions.RequestException("Error")):
                 result = stream_checker.main()
                 assert result == 1
         print("✓ test_main_with_failure passed")
@@ -254,17 +212,13 @@ class TestMainFunction:
 def run_all_tests():
     """
     Run the module's test suite and print per-test results and a summary.
-    
+
     Executes every method whose name starts with "test_" from the TestBasicStreamStatus, TestWowzaStreams, and TestMainFunction classes and prints failures and a final pass/fail summary.
-    
+
     Returns:
         True if all tests passed, False otherwise.
     """
-    test_classes = [
-        TestBasicStreamStatus,
-        TestWowzaStreams,
-        TestMainFunction
-    ]
+    test_classes = [TestBasicStreamStatus, TestWowzaStreams, TestMainFunction]
 
     passed = 0
     failed = 0
@@ -273,10 +227,7 @@ def run_all_tests():
         print(f"\n{test_class.__name__}:")
         print("-" * 60)
 
-        test_methods = [
-            method for method in dir(test_class)
-            if method.startswith("test_")
-        ]
+        test_methods = [method for method in dir(test_class) if method.startswith("test_")]
 
         for method_name in test_methods:
             try:
@@ -287,6 +238,7 @@ def run_all_tests():
             except Exception as e:
                 print(f"✗ {method_name} failed: {e}")
                 import traceback
+
                 traceback.print_exc()
                 failed += 1
 
@@ -298,5 +250,6 @@ def run_all_tests():
 
 if __name__ == "__main__":
     import sys
+
     success = run_all_tests()
     sys.exit(0 if success else 1)

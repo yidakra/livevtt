@@ -13,25 +13,25 @@ import com.wowza.wms.stream.*;
 
 /**
  * LiveVTT Caption Module for Wowza Streaming Engine
- * 
+ *
  * This module provides real-time closed caption support for Wowza Streaming Engine
  * by injecting onTextData events into live streams. It is designed to work with
  * the LiveVTT application to provide captions from transcribed audio.
  */
 public class LiveVTTCaptionModule extends ModuleBase {
-    
+
     // Logger
     private static final Class<?> CLASS = LiveVTTCaptionModule.class;
     private WMSLogger logger = WMSLoggerFactory.getLogger(CLASS);
-    
+
     // Configuration
     private String defaultLanguage = "eng";
     private int defaultTrackId = 99;
     private boolean debugLogging = false;
-    
+
     // Stream listeners map
     private Map<String, CaptionStreamListener> streamListeners = new HashMap<>();
-    
+
     /**
      * Class to store caption data
      */
@@ -40,31 +40,31 @@ public class LiveVTTCaptionModule extends ModuleBase {
         private String language;
         private int trackId;
         private long timestamp;
-        
+
         public CaptionData(String text, String language, int trackId) {
             this.text = text;
             this.language = language;
             this.trackId = trackId;
             this.timestamp = System.currentTimeMillis();
         }
-        
+
         public String getText() {
             return text;
         }
-        
+
         public String getLanguage() {
             return language;
         }
-        
+
         public int getTrackId() {
             return trackId;
         }
-        
+
         public long getTimestamp() {
             return timestamp;
         }
     }
-    
+
     /**
      * Stream listener to handle caption publishing
      */
@@ -75,14 +75,14 @@ public class LiveVTTCaptionModule extends ModuleBase {
         private boolean isRunning = false;
         private Thread captionThread;
         private static final int MAX_QUEUE_SIZE = 100; // Prevent memory issues
-        
+
         public CaptionStreamListener(IMediaStream stream) {
             this.stream = stream;
         }
-        
+
         public void start() {
             if (isRunning) return;
-            
+
             isRunning = true;
             captionThread = new Thread(new Runnable() {
                 @Override
@@ -93,29 +93,29 @@ public class LiveVTTCaptionModule extends ModuleBase {
             captionThread.setName("LiveVTTCaptionPublisher-" + stream.getName());
             captionThread.setDaemon(true);
             captionThread.start();
-            
+
             if (debugLogging) {
                 logger.info("LiveVTTCaptionModule: Started caption thread for stream: " + stream.getName());
             }
         }
-        
+
         public void stop() {
             isRunning = false;
             if (captionThread != null) {
                 captionThread.interrupt();
                 captionThread = null;
             }
-            
+
             synchronized (queueLock) {
                 captionQueue.clear();
                 queueLock.notifyAll(); // Wake up any waiting threads
             }
-            
+
             if (debugLogging) {
                 logger.info("LiveVTTCaptionModule: Stopped caption thread for stream: " + stream.getName());
             }
         }
-        
+
         public void addCaptionData(CaptionData captionData) {
             synchronized (queueLock) {
                 // Prevent queue from growing too large
@@ -129,11 +129,11 @@ public class LiveVTTCaptionModule extends ModuleBase {
                 queueLock.notify();
             }
         }
-        
+
         private void processCaptionQueue() {
             while (isRunning) {
                 CaptionData captionData = null;
-                
+
                 synchronized (queueLock) {
                     if (captionQueue.isEmpty()) {
                         try {
@@ -142,18 +142,18 @@ public class LiveVTTCaptionModule extends ModuleBase {
                             break;
                         }
                     }
-                    
+
                     if (!captionQueue.isEmpty()) {
                         captionData = captionQueue.poll();
                     }
                 }
-                
+
                 if (captionData != null) {
                     sendCaptionData(captionData);
                 }
             }
         }
-        
+
         private void sendCaptionData(CaptionData captionData) {
             try {
                 if (stream != null && stream.isPublishStreamReady(true, true)) {
@@ -161,12 +161,12 @@ public class LiveVTTCaptionModule extends ModuleBase {
                     amfData.put("text", new AMFDataItem(captionData.getText()));
                     amfData.put("language", new AMFDataItem(captionData.getLanguage()));
                     amfData.put("trackid", new AMFDataItem(captionData.getTrackId()));
-                    
+
                     stream.sendDirect("onTextData", amfData);
                     ((MediaStream)stream).processSendDirectMessages();
-                    
+
                     if (debugLogging) {
-                        logger.info("LiveVTTCaptionModule: Sent caption to stream " + stream.getName() + 
+                        logger.info("LiveVTTCaptionModule: Sent caption to stream " + stream.getName() +
                                    ": [" + captionData.getLanguage() + "] " + captionData.getText());
                     }
                 }
@@ -174,7 +174,7 @@ public class LiveVTTCaptionModule extends ModuleBase {
                 logger.error("LiveVTTCaptionModule: Error sending caption data: " + e.getMessage(), e);
             }
         }
-        
+
         // IMediaStreamActionNotify3 implementation
         @Override
         public void onPublish(IMediaStream stream, String streamName, boolean isRecord, boolean isAppend) {
@@ -226,7 +226,7 @@ public class LiveVTTCaptionModule extends ModuleBase {
             // Not used
         }
     }
-    
+
     /**
      * Module initialization when application starts
      */
@@ -235,11 +235,11 @@ public class LiveVTTCaptionModule extends ModuleBase {
         defaultLanguage = appInstance.getProperties().getPropertyStr("livevtt.caption.language", defaultLanguage);
         defaultTrackId = appInstance.getProperties().getPropertyInt("livevtt.caption.trackId", defaultTrackId);
         debugLogging = appInstance.getProperties().getPropertyBoolean("livevtt.caption.debug", debugLogging);
-        
+
         logger.info("LiveVTTCaptionModule.onAppStart: Application: " + appInstance.getApplication().getName() + "/" + appInstance.getName());
         logger.info("LiveVTTCaptionModule: Initialized with language=" + defaultLanguage + ", trackId=" + defaultTrackId);
     }
-    
+
     /**
      * Called when application instance is shut down
      */
@@ -251,10 +251,10 @@ public class LiveVTTCaptionModule extends ModuleBase {
         }
         streamListeners.clear();
         }
-        
+
         logger.info("LiveVTTCaptionModule.onAppStop: Application: " + appInstance.getApplication().getName() + "/" + appInstance.getName());
     }
-    
+
     /**
      * Called when a new stream is created
      */
@@ -265,7 +265,7 @@ public class LiveVTTCaptionModule extends ModuleBase {
             CaptionStreamListener listener = new CaptionStreamListener(stream);
             streamListeners.put(stream.getName(), listener);
             stream.addClientListener(listener);
-            
+
             if (debugLogging) {
                 logger.info("LiveVTTCaptionModule: Added listener to stream: " + stream.getName());
             }
@@ -273,7 +273,7 @@ public class LiveVTTCaptionModule extends ModuleBase {
             logger.info("LiveVTTCaptionModule: Skipping transcoded stream: " + stream.getName());
         }
     }
-    
+
     /**
      * Called when a stream is destroyed
      */
@@ -282,16 +282,16 @@ public class LiveVTTCaptionModule extends ModuleBase {
         if (listener != null) {
             listener.stop();
             stream.removeClientListener(listener);
-            
+
             if (debugLogging) {
                 logger.info("LiveVTTCaptionModule: Removed listener from stream: " + stream.getName());
             }
         }
     }
-    
+
     /**
      * Public API to add caption data to a stream
-     * 
+     *
      * @param streamName The name of the stream to add captions to
      * @param text The caption text
      * @param language The caption language (ISO 639 code)
@@ -302,25 +302,25 @@ public class LiveVTTCaptionModule extends ModuleBase {
         if (streamName == null || text == null) {
             return false;
         }
-        
+
         CaptionStreamListener listener = streamListeners.get(streamName);
         if (listener != null) {
             // Use default values if not provided
             String captionLanguage = (language != null) ? language : defaultLanguage;
             int captionTrackId = (trackId != null) ? trackId : defaultTrackId;
-            
+
             CaptionData captionData = new CaptionData(text, captionLanguage, captionTrackId);
             listener.addCaptionData(captionData);
             return true;
         }
-        
+
         return false;
     }
-    
+
     /**
      * Simplified version of addCaptionToStream using default language and track ID
      */
     public boolean addCaptionToStream(String streamName, String text) {
         return addCaptionToStream(streamName, text, null, null);
     }
-} 
+}

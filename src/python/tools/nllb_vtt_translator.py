@@ -19,7 +19,6 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -27,16 +26,15 @@ except ImportError:
     tqdm = None
 
 try:
-    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline  # type: ignore
     import torch  # type: ignore
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
 except ImportError:
     print("ERROR: transformers and torch are required for NLLB translation.")
     print("Install with: pip install transformers torch sentencepiece")
     sys.exit(1)
 
 # Import VTT parsing utilities
-from ttml_utils import parse_vtt_file, SubtitleCue, load_filter_words, should_filter_cue
-
+from ttml_utils import SubtitleCue, load_filter_words, parse_vtt_file, should_filter_cue
 
 LOGGER = logging.getLogger("nllb_vtt_translator")
 
@@ -44,6 +42,7 @@ LOGGER = logging.getLogger("nllb_vtt_translator")
 @dataclass
 class TranslationJob:
     """Represents a VTT file to be translated."""
+
     ru_vtt_path: Path
     nllb_en_vtt_path: Path
 
@@ -65,7 +64,7 @@ def format_vtt_timestamp(seconds: float) -> str:
     return f"{hours:02}:{minutes:02}:{secs:02}.{ms:03}"
 
 
-def cues_to_webvtt(cues: List[SubtitleCue], filter_words: Optional[List[str]] = None) -> str:
+def cues_to_webvtt(cues: list[SubtitleCue], filter_words: list[str] | None = None) -> str:
     """
     Convert a list of SubtitleCue objects into WebVTT content.
 
@@ -76,7 +75,7 @@ def cues_to_webvtt(cues: List[SubtitleCue], filter_words: Optional[List[str]] = 
     Returns:
         WebVTT-formatted string
     """
-    lines: List[str] = ["WEBVTT", ""]
+    lines: list[str] = ["WEBVTT", ""]
 
     cue_idx = 1
     for cue in cues:
@@ -149,7 +148,7 @@ def load_nllb_model(model_name: str, device: str = "auto") -> tuple:
 
 
 def translate_batch(
-    texts: List[str],
+    texts: list[str],
     model,
     tokenizer,
     device: str,
@@ -157,7 +156,7 @@ def translate_batch(
     tgt_lang: str = "eng_Latn",
     max_length: int = 512,
     batch_size: int = 16,
-) -> List[str]:
+) -> list[str]:
     """
     Translate a batch of texts using NLLB-200.
 
@@ -183,7 +182,7 @@ def translate_batch(
     # Process in batches
     translations = []
     for i in range(0, len(texts), batch_size):
-        batch = texts[i:i+batch_size]
+        batch = texts[i : i + batch_size]
 
         # Tokenize
         inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
@@ -197,7 +196,7 @@ def translate_batch(
             forced_bos_token_id=tokenizer.lang_code_to_id[tgt_lang],
             max_length=max_length,
             num_beams=5,
-            early_stopping=True
+            early_stopping=True,
         )
 
         # Decode
@@ -213,7 +212,7 @@ def translate_vtt_file(
     tokenizer,
     device: str,
     args: argparse.Namespace,
-    filter_words: Optional[List[str]] = None,
+    filter_words: list[str] | None = None,
 ) -> dict:
     """
     Translate a single VTT file from Russian to English using NLLB-200.
@@ -263,13 +262,7 @@ def translate_vtt_file(
         # Create English cues with translated text but same timestamps
         en_cues = []
         for ru_cue, en_text in zip(ru_cues, translated_texts):
-            en_cues.append(
-                SubtitleCue(
-                    start=ru_cue.start,
-                    end=ru_cue.end,
-                    text=en_text
-                )
-            )
+            en_cues.append(SubtitleCue(start=ru_cue.start, end=ru_cue.end, text=en_text))
 
         # Generate WebVTT content
         en_vtt_content = cues_to_webvtt(en_cues, filter_words=filter_words)
@@ -302,7 +295,7 @@ def translate_vtt_file(
 def discover_vtt_files(
     input_root: Path,
     force: bool,
-) -> List[TranslationJob]:
+) -> list[TranslationJob]:
     """
     Scan directory for *.ru.vtt files and prepare translation jobs.
 
@@ -315,23 +308,23 @@ def discover_vtt_files(
     """
     LOGGER.info("Scanning for *.ru.vtt files in %s", input_root)
 
-    jobs: List[TranslationJob] = []
+    jobs: list[TranslationJob] = []
 
     for ru_vtt_path in input_root.rglob("*.ru.vtt"):
         # Generate output path: replace .ru.vtt with .nllb.en.vtt
-        nllb_en_vtt_path = ru_vtt_path.with_name(
-            ru_vtt_path.name.replace(".ru.vtt", ".nllb.en.vtt")
-        )
+        nllb_en_vtt_path = ru_vtt_path.with_name(ru_vtt_path.name.replace(".ru.vtt", ".nllb.en.vtt"))
 
         # Skip if already exists (unless force)
         if nllb_en_vtt_path.exists() and not force:
             LOGGER.debug("Skipping %s (output exists)", ru_vtt_path)
             continue
 
-        jobs.append(TranslationJob(
-            ru_vtt_path=ru_vtt_path,
-            nllb_en_vtt_path=nllb_en_vtt_path,
-        ))
+        jobs.append(
+            TranslationJob(
+                ru_vtt_path=ru_vtt_path,
+                nllb_en_vtt_path=nllb_en_vtt_path,
+            )
+        )
 
     LOGGER.info("Found %d VTT files to translate", len(jobs))
     return jobs
@@ -340,7 +333,7 @@ def discover_vtt_files(
 def configure_logging(args: argparse.Namespace) -> None:
     """Configure logging based on command-line arguments."""
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if args.log_file:
         handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
     logging.basicConfig(
@@ -350,11 +343,9 @@ def configure_logging(args: argparse.Namespace) -> None:
     )
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Translate Russian VTT files to English using NLLB-200"
-    )
+    parser = argparse.ArgumentParser(description="Translate Russian VTT files to English using NLLB-200")
     parser.add_argument(
         "input_root",
         type=Path,
@@ -419,7 +410,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run(argv: Optional[List[str]] = None) -> int:
+def run(argv: list[str] | None = None) -> int:
     """Main entry point for the translator."""
     args = parse_args(argv)
     configure_logging(args)
@@ -443,7 +434,7 @@ def run(argv: Optional[List[str]] = None) -> int:
             LOGGER.warning("--max-files must be greater than zero; no work will be performed")
             jobs = []
         else:
-            jobs = jobs[:args.max_files]
+            jobs = jobs[: args.max_files]
 
     if not jobs:
         LOGGER.info("No VTT files to translate. Exiting.")

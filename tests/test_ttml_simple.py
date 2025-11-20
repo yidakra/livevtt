@@ -12,10 +12,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"
 
 from ttml_utils import (
     SubtitleCue,
-    format_ttml_timestamp,
-    parse_vtt_timestamp,
-    parse_vtt_file,
     align_bilingual_cues,
+    format_ttml_timestamp,
+    parse_vtt_file,
+    parse_vtt_timestamp,
     vtt_files_to_ttml,
 )
 
@@ -113,8 +113,8 @@ Hello, world!
         assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
         assert '<tt xmlns="http://www.w3.org/ns/ttml"' in ttml_content
         assert 'xml:lang="ru"' in ttml_content
-        assert 'Привет, мир!' in ttml_content
-        assert 'Hello, world!' in ttml_content
+        assert "Привет, мир!" in ttml_content
+        assert "Hello, world!" in ttml_content
 
         # Parse XML to validate structure
         xml_content = ttml_content.split("\n", 1)[1]

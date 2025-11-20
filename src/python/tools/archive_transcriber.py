@@ -25,12 +25,11 @@ import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:  # Optional progress feedback
     from tqdm import tqdm  # type: ignore
@@ -40,8 +39,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from faster_whisper import WhisperModel  # type: ignore
 
 # Import TTML utilities
-from ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words, should_filter_cue
-
+from ttml_utils import cues_to_ttml, load_filter_words, parse_vtt_content, should_filter_cue
 
 VIDEO_EXTENSIONS = {
     ".ts",
@@ -73,26 +71,26 @@ def ensure_python_version() -> None:
 def human_time() -> str:
     """
     Return the current UTC time formatted as an ISO-like timestamp.
-    
+
     Returns:
         A string in the format `YYYY-MM-DDTHH:MM:SSZ` representing the current time in UTC.
     """
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_words: Optional[List[str]] = None) -> str:
+def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_words: list[str] | None = None) -> str:
     """
     Convert an iterable of transcription segments into WebVTT subtitle content.
-    
+
     Parameters:
         segments: Iterable of objects with numeric `start` and `end` (seconds) and string `text` attributes.
         prepend_header: If True, include the leading "WEBVTT" header and a blank line.
         filter_words: Optional list of substrings; any cue whose text matches filtering rules will be omitted.
-    
+
     Notes:
         - Timestamps are formatted as "HH:MM:SS.mmm".
         - Empty texts are skipped. Cue indices are assigned sequentially only to emitted cues.
-    
+
     Returns:
         A WebVTT-formatted string ending with a single newline.
     """
@@ -100,7 +98,7 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_w
     def format_timestamp(seconds: float) -> str:
         """
         Format a time value in seconds into a WebVTT-style timestamp "HH:MM:SS.mmm".
-        
+
         Returns:
             str: Timestamp in the form "HH:MM:SS.mmm" corresponding to the input seconds; sub-millisecond fractions are truncated.
         """
@@ -110,7 +108,7 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_w
         secs, ms = divmod(remainder, 1000)
         return f"{hours:02}:{minutes:02}:{secs:02}.{ms:03}"
 
-    lines: List[str] = []
+    lines: list[str] = []
     if prepend_header:
         lines.append("WEBVTT")
         lines.append("")
@@ -138,7 +136,7 @@ def segments_to_webvtt(segments: Iterable, prepend_header: bool = True, filter_w
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _normalise_language_code(language: Optional[str]) -> Optional[str]:
+def _normalise_language_code(language: str | None) -> str | None:
     """Normalise language labels to simplified codes for downstream checks."""
     if not language:
         return None
@@ -171,8 +169,8 @@ def _normalise_language_code(language: Optional[str]) -> Optional[str]:
 
 
 def translation_output_suspect(
-    source_segments: List,
-    translated_segments: List,
+    source_segments: list,
+    translated_segments: list,
     target_language: str,
 ) -> bool:
     if not translated_segments:
@@ -184,9 +182,9 @@ def translation_output_suspect(
         total_chars = 0
         cyrillic_chars = 0
         for seg in translated_segments:
-            text = (seg.text or "")
+            text = seg.text or ""
             total_chars += len(text)
-            cyrillic_chars += sum("\u0400" <= ch <= "\u04FF" for ch in text)
+            cyrillic_chars += sum("\u0400" <= ch <= "\u04ff" for ch in text)
 
         if total_chars == 0:
             return True
@@ -197,13 +195,10 @@ def translation_output_suspect(
     source_count = len(source_segments)
     translated_count = len(translated_segments)
 
-    if source_count and translated_count < max(1, source_count // 3):
-        return True
-
-    return False
+    return bool(source_count and translated_count < max(1, source_count // 3))
 
 
-def extract_resolution(value: str) -> Optional[int]:
+def extract_resolution(value: str) -> int | None:
     match = RESOLUTION_TOKEN_PATTERN.search(value)
     if not match:
         return None
@@ -222,8 +217,8 @@ def build_output_artifacts(
     video_path: Path,
     normalized_name: str,
     input_root: Path,
-    output_root: Optional[Path],
-) -> Tuple[Path, Path, Path, Path]:
+    output_root: Path | None,
+) -> tuple[Path, Path, Path, Path]:
     if output_root:
         relative = video_path.relative_to(input_root)
         target_dir = output_root.joinpath(*relative.parts[:-1])
@@ -255,7 +250,7 @@ class Manifest:
     def __init__(self, path: Path):
         self.path = path
         self.lock = threading.Lock()
-        self.records: Dict[str, Dict] = {}
+        self.records: dict[str, dict] = {}
         if self.path.exists():
             with self.path.open("r", encoding="utf-8") as manifest_file:
                 for line in manifest_file:
@@ -273,10 +268,10 @@ class Manifest:
         # Ensure parent directory exists for future writes
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def get(self, video_path: Path) -> Optional[Dict]:
+    def get(self, video_path: Path) -> dict | None:
         return self.records.get(str(video_path))
 
-    def append(self, record: Dict) -> None:
+    def append(self, record: dict) -> None:
         with self.lock:
             with self.path.open("a", encoding="utf-8") as manifest_file:
                 manifest_file.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -286,7 +281,7 @@ class Manifest:
 class WhisperModelHolder(threading.local):
     def __init__(self) -> None:
         super().__init__()
-        self.models: Dict[str, WhisperModel] = {}
+        self.models: dict[str, WhisperModel] = {}
 
 
 MODEL_HOLDER = WhisperModelHolder()
@@ -294,8 +289,8 @@ MODEL_HOLDER = WhisperModelHolder()
 
 def get_model(
     args: argparse.Namespace,
-    model_name: Optional[str] = None,
-    compute_type: Optional[str] = None,
+    model_name: str | None = None,
+    compute_type: str | None = None,
 ) -> WhisperModel:
     name = model_name or args.model
 
@@ -333,14 +328,15 @@ def get_model(
 
     return MODEL_HOLDER.models[name]
 
+
 @dataclass
 class VideoMetadata:
-    duration: Optional[float]
-    width: Optional[int]
-    height: Optional[int]
-    video_codec_id: Optional[str]
-    audio_codec_id: Optional[str]
-    bitrate: Optional[int]
+    duration: float | None
+    width: int | None
+    height: int | None
+    video_codec_id: str | None
+    audio_codec_id: str | None
+    bitrate: int | None
 
 
 def probe_video_metadata(video_path: Path) -> VideoMetadata:
@@ -360,14 +356,16 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
         data = json.loads(result.stdout or "{}")
     except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         LOGGER.warning("Failed to probe metadata for %s: %s", video_path, exc)
-        return VideoMetadata(duration=None, width=None, height=None, video_codec_id=None, audio_codec_id=None, bitrate=None)
+        return VideoMetadata(
+            duration=None, width=None, height=None, video_codec_id=None, audio_codec_id=None, bitrate=None
+        )
 
     streams = data.get("streams", [])
     video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
     audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
     format_data = data.get("format", {})
 
-    def _get_int(value: Optional[str]) -> Optional[int]:
+    def _get_int(value: str | None) -> int | None:
         if value in (None, "", "N/A"):
             return None
         try:
@@ -375,7 +373,7 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
         except (ValueError, TypeError):
             return None
 
-    def _get_float(value: Optional[str]) -> Optional[float]:
+    def _get_float(value: str | None) -> float | None:
         if value in (None, "", "N/A"):
             return None
         try:
@@ -403,9 +401,9 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
 def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> None:
     """
     Write or update the SMIL manifest for a video job, ensuring a video element and appropriate textstream entries.
-    
+
     Creates the SMIL parent directory if needed, makes a one-time backup of an existing SMIL file, parses an existing SMIL (or creates a minimal one), ensures a single <video> element with available metadata attributes, removes previously managed caption <textstream> nodes, and adds new <textstream> entries for subtitles. By default adds a bilingual TTML textstream (if present); if args.vtt_in_smil is true, adds individual Russian and English VTT textstreams instead. When comparing or deduplicating textstream sources the comparison strips an optional "mp4:" prefix; textstream entries are not added if the referenced subtitle file is missing (a warning is emitted). The final SMIL XML is optionally indented and written with an XML declaration.
-    
+
     Parameters:
         job (VideoJob): Job record containing source video path and target artifact paths (smil, ttml, ru_vtt, en_vtt).
         metadata (VideoMetadata): Probed video metadata used to populate video attributes (bitrate, width, height, codec ids).
@@ -413,8 +411,8 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
     """
     job.smil.parent.mkdir(parents=True, exist_ok=True)
 
-    tree: Optional[ET.ElementTree] = None
-    root: Optional[ET.Element] = None
+    tree: ET.ElementTree | None = None
+    root: ET.Element | None = None
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = job.smil.with_suffix(job.smil.suffix + f".bak.{timestamp}")
@@ -488,27 +486,27 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         # Textstream sources should NOT have mp4: prefix (unlike video sources)
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
-        
+
         Removes any existing <textstream> entries that reference the same subtitle source (comparison ignores a leading "mp4:" prefix), then adds a new <textstream> child with the given language and an `isWowzaCaptionStream` parameter. If the referenced subtitle file is missing on disk, logs a warning and does not add an entry.
-        
+
         Parameters:
-        	src (str): Subtitle file path as used in the SMIL `src` attribute.
-        	language (str): Language code to set on the `system-language` attribute.
-        
+                src (str): Subtitle file path as used in the SMIL `src` attribute.
+                language (str): Language code to set on the `system-language` attribute.
+
         Notes:
-        	This function mutates the surrounding SMIL `switch` element and reads the job's SMIL directory to check for file existence. It does not return a value.
+                This function mutates the surrounding SMIL `switch` element and reads the job's SMIL directory to check for file existence. It does not return a value.
         """
         target_src = src
 
-        def _normalize(value: Optional[str]) -> str:
+        def _normalize(value: str | None) -> str:
             """
             Normalize a subtitle/textstream source string for comparison.
-            
+
             Strips surrounding whitespace and, if present, removes a leading "mp4:" prefix (case-insensitive). Returns an empty string when the input is None or empty.
-            
+
             Parameters:
                 value (Optional[str]): The source string to normalize; may be None.
-            
+
             Returns:
                 str: The normalized source string (trimmed and without a leading "mp4:"), or an empty string if the input was falsy.
             """
@@ -569,22 +567,22 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
 
 def discover_video_jobs(
     input_root: Path,
-    output_root: Optional[Path],
+    output_root: Path | None,
     manifest: Manifest,
     force: bool,
     extensions: Iterable[str],
     ttml_enabled: bool,
-    scan_cache_path: Optional[Path] = None,
+    scan_cache_path: Path | None = None,
     force_scan: bool = False,
-) -> List[VideoJob]:
+) -> list[VideoJob]:
     extensions = {ext.lower() for ext in extensions}
-    grouped: Dict[Tuple[str, str], List[Path]] = {}
+    grouped: dict[tuple[str, str], list[Path]] = {}
 
     # Try to load from cache if available
     if scan_cache_path and scan_cache_path.exists() and not force_scan:
         try:
             LOGGER.info("Loading scan results from cache: %s", scan_cache_path)
-            with open(scan_cache_path, 'r') as f:
+            with open(scan_cache_path) as f:
                 cache_data = json.load(f)
                 # Convert JSON back to our grouped structure
                 for key_str, paths_list in cache_data.items():
@@ -592,8 +590,9 @@ def discover_video_jobs(
                     dir_path, normalized_name = key_str.split("|||", 1)
                     key = (dir_path, normalized_name)
                     grouped[key] = [Path(p) for p in paths_list]
-            LOGGER.info("Loaded %d groups from cache (%d total files)",
-                       len(grouped), sum(len(v) for v in grouped.values()))
+            LOGGER.info(
+                "Loaded %d groups from cache (%d total files)", len(grouped), sum(len(v) for v in grouped.values())
+            )
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             LOGGER.warning("Failed to load scan cache (%s), will rescan", e)
             grouped = {}
@@ -619,13 +618,7 @@ def discover_video_jobs(
         file_count = 0
         try:
             LOGGER.info("Running: %s", " ".join(find_args))
-            process = subprocess.Popen(
-                find_args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1
-            )
+            process = subprocess.Popen(find_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
 
             # Stream and process results as they come
             for line in process.stdout:
@@ -683,13 +676,13 @@ def discover_video_jobs(
                 for (dir_path, normalized_name), paths in grouped.items():
                     key_str = f"{dir_path}|||{normalized_name}"
                     cache_data[key_str] = [str(p) for p in paths]
-                with open(scan_cache_path, 'w') as f:
+                with open(scan_cache_path, "w") as f:
                     json.dump(cache_data, f)
                 LOGGER.info("Scan cache saved successfully")
-            except (OSError, IOError) as e:
+            except OSError as e:
                 LOGGER.warning("Failed to save scan cache: %s", e)
 
-    jobs: List[VideoJob] = []
+    jobs: list[VideoJob] = []
     LOGGER.info("Building job list (selecting best variants and checking for already-processed files)...")
 
     processed_groups = 0
@@ -701,7 +694,9 @@ def discover_video_jobs(
         if not best_path:
             continue
         normalized_name = normalise_variant_name(best_path)
-        ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(best_path, normalized_name, input_root, output_root)
+        ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(
+            best_path, normalized_name, input_root, output_root
+        )
 
         if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
             LOGGER.debug("Skipping already processed %s", best_path)
@@ -721,8 +716,13 @@ def discover_video_jobs(
         processed_groups += 1
         current_time = time.time()
         if current_time - last_log_time >= 5:
-            LOGGER.info("Building job list... processed %d/%d groups (%d to process, %d already done)",
-                       processed_groups, len(grouped), len(jobs), skipped_count)
+            LOGGER.info(
+                "Building job list... processed %d/%d groups (%d to process, %d already done)",
+                processed_groups,
+                len(grouped),
+                len(jobs),
+                skipped_count,
+            )
             last_log_time = current_time
 
     LOGGER.info("Job list complete! %d videos to process (%d already done)", len(jobs), skipped_count)
@@ -730,8 +730,8 @@ def discover_video_jobs(
     return jobs
 
 
-def select_best_variant(candidates: List[Path]) -> Optional[Path]:
-    best_path: Optional[Path] = None
+def select_best_variant(candidates: list[Path]) -> Path | None:
+    best_path: Path | None = None
     best_score = (-1, -1)
 
     for path in candidates:
@@ -797,8 +797,7 @@ def extract_audio(video_path: Path, sample_rate: int) -> Path:
     if result.returncode != 0:
         stderr_preview = (result.stderr or "").splitlines()[-5:]
         raise RuntimeError(
-            f"FFmpeg failed for {video_path}: return code {result.returncode}\n" +
-            "\n".join(stderr_preview)
+            f"FFmpeg failed for {video_path}: return code {result.returncode}\n" + "\n".join(stderr_preview)
         )
 
     return tmp_file_path
@@ -812,15 +811,15 @@ def atomic_write(path: Path, content: str) -> None:
     tmp_path.replace(path)
 
 
-def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
+def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> dict:
     """
     Process a single VideoJob: transcribe/translate audio if needed, write VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
-    
+
     Parameters:
         job (VideoJob): Candidate video and target output paths.
         args (argparse.Namespace): CLI options that control processing (sampling rate, models, transcription/translation flags, ttml/vtt behavior, force, etc.).
         manifest (Manifest): Append-only manifest used to record processing results.
-    
+
     Returns:
         dict: A manifest-style record describing the processed video. On success the record has "status": "success" and contains output paths, duration, timestamps, and processing time; on failure the record has "status": "error" and includes an "error" message.
     """
@@ -832,11 +831,9 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
-    need_transcription = not args.smil_only and (
-        args.force or not (job.ru_vtt.exists() and job.en_vtt.exists())
-    )
+    need_transcription = not args.smil_only and (args.force or not (job.ru_vtt.exists() and job.en_vtt.exists()))
 
-    audio_path: Optional[Path] = None
+    audio_path: Path | None = None
 
     try:
         if need_transcription:
@@ -971,7 +968,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
 def configure_logging(args: argparse.Namespace) -> None:
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if args.log_file:
         handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
     logging.basicConfig(
@@ -981,7 +978,7 @@ def configure_logging(args: argparse.Namespace) -> None:
     )
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Batch archive transcription and translation")
     parser.add_argument(
         "input_root",
@@ -991,12 +988,28 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Root directory of archived video chunks (default: /mnt/vod/srv/storage/transcoded/)",
     )
     parser.add_argument("--output-root", type=Path, help="Optional output root for VTT files")
-    parser.add_argument("--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl"), help="Path to manifest file (JSONL)")
-    parser.add_argument("--model", type=str, default="large-v3-turbo", help="Faster-Whisper model to load (default: large-v3-turbo)")
-    parser.add_argument("--compute-type", type=str, default="float16", help="Faster-Whisper compute type (e.g., float16, int8_float16)")
-    parser.add_argument("--use-cuda", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=True, help="Use CUDA if available (default: true)")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("logs/archive_transcriber_manifest.jsonl"),
+        help="Path to manifest file (JSONL)",
+    )
+    parser.add_argument(
+        "--model", type=str, default="large-v3-turbo", help="Faster-Whisper model to load (default: large-v3-turbo)"
+    )
+    parser.add_argument(
+        "--compute-type", type=str, default="float16", help="Faster-Whisper compute type (e.g., float16, int8_float16)"
+    )
+    parser.add_argument(
+        "--use-cuda",
+        type=lambda x: str(x).lower() in {"1", "true", "yes"},
+        default=True,
+        help="Use CUDA if available (default: true)",
+    )
     parser.add_argument("--source-language", type=str, default="ru", help="Source language code for transcription")
-    parser.add_argument("--translation-language", type=str, default="en", help="Target language code for translation output")
+    parser.add_argument(
+        "--translation-language", type=str, default="en", help="Target language code for translation output"
+    )
     parser.add_argument(
         "--translation-model",
         type=str,
@@ -1011,23 +1024,42 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
     parser.add_argument("--sample-rate", type=int, default=16000, help="Audio sample rate for extraction")
-    parser.add_argument("--vad-filter", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=False, help="Enable Silero VAD filtering")
-    parser.add_argument("--extensions", type=str, default=",".join(sorted(VIDEO_EXTENSIONS)), help="Comma-separated list of video extensions to include")
+    parser.add_argument(
+        "--vad-filter",
+        type=lambda x: str(x).lower() in {"1", "true", "yes"},
+        default=False,
+        help="Enable Silero VAD filtering",
+    )
+    parser.add_argument(
+        "--extensions",
+        type=str,
+        default=",".join(sorted(VIDEO_EXTENSIONS)),
+        help="Comma-separated list of video extensions to include",
+    )
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument("--max-files", type=int, help="Limit the number of videos processed in this run")
-    parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL manifests without creating or updating VTT files")
+    parser.add_argument(
+        "--smil-only", action="store_true", help="Regenerate SMIL manifests without creating or updating VTT files"
+    )
     parser.add_argument("--no-ttml", action="store_true", help="Skip TTML file generation (generate only VTT files)")
-    parser.add_argument("--vtt-in-smil", action="store_true", help="Include individual VTT files in SMIL manifest instead of TTML")
+    parser.add_argument(
+        "--vtt-in-smil", action="store_true", help="Include individual VTT files in SMIL manifest instead of TTML"
+    )
     parser.add_argument("--log-file", type=Path, help="Optional log file path")
     parser.add_argument("--progress", action="store_true", help="Display progress bar (requires tqdm)")
     parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
-    parser.add_argument("--scan-cache", type=Path, default=Path("logs/scan_cache.json"), help="Path to scan cache file (default: logs/scan_cache.json)")
+    parser.add_argument(
+        "--scan-cache",
+        type=Path,
+        default=Path("logs/scan_cache.json"),
+        help="Path to scan cache file (default: logs/scan_cache.json)",
+    )
     parser.add_argument("--force-scan", action="store_true", help="Force a fresh scan even if cache exists")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv)
 
 
-def run(argv: Optional[List[str]] = None) -> int:
+def run(argv: list[str] | None = None) -> int:
     ensure_python_version()
     args = parse_args(argv)
     configure_logging(args)
@@ -1061,7 +1093,7 @@ def run(argv: Optional[List[str]] = None) -> int:
             LOGGER.warning("--max-files must be greater than zero; no work will be performed")
             jobs = []
         else:
-            jobs = jobs[:args.max_files]
+            jobs = jobs[: args.max_files]
 
     if not jobs:
         LOGGER.info("No videos to process. Exiting.")

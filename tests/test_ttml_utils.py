@@ -14,11 +14,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"
 
 from ttml_utils import (
     SubtitleCue,
-    format_ttml_timestamp,
-    parse_vtt_timestamp,
-    parse_vtt_file,
     align_bilingual_cues,
     create_ttml_document,
+    format_ttml_timestamp,
+    parse_vtt_file,
+    parse_vtt_timestamp,
     segments_to_ttml,
     vtt_files_to_ttml,
 )
@@ -337,6 +337,7 @@ class TestSegmentsToTTML:
         """
         Verify conversion of parallel speech segments into a bilingual TTML string containing an XML declaration, a TTML root with `xml:lang="en"`, a head section, two language-specific `div` elements (`eng` and `rus`), and `p` elements with correct `begin`/`end` timestamps and texts.
         """
+
         # Mock Whisper segment objects
         class MockSegment:
             def __init__(self, start, end, text):
@@ -359,7 +360,7 @@ class TestSegmentsToTTML:
         assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
         assert '<tt xmlns="http://www.w3.org/ns/ttml"' in ttml_content
         assert 'xml:lang="en"' in ttml_content  # Root lang is en
-        assert '<head>' in ttml_content
+        assert "<head>" in ttml_content
         assert '<div xml:lang="eng">' in ttml_content
         assert '<div xml:lang="rus">' in ttml_content
         assert '<p begin="00:00:05.000" end="00:00:07.000">Привет, мир!</p>' in ttml_content

@@ -33,11 +33,10 @@ nllb = ["transformers", "torch", "sentencepiece"]
 pytest = "^7.4.0"
 pytest-asyncio = "^0.21.0"
 pytest-cov = "^4.1.0"
-black = "^23.7.0"
-isort = "^5.12.0"
 mypy = "^1.4.0"
-flake8 = "^6.0.0"
 ruff = "^0.8.0"
+pre-commit = "^4.0.0"
+bandit = {extras = ["toml"], version = "^1.7.0"}
 
 [tool.poetry.scripts]
 archive_transcriber = "python.tools.archive_transcriber:main"
@@ -46,14 +45,6 @@ caption_sender = "python.tools.caption_sender:main"
 nllb_vtt_translator = "python.tools.nllb_vtt_translator:main"
 libretranslate_vtt_translator = "python.tools.libretranslate_vtt_translator:main"
 mistral_vtt_translator = "python.tools.mistral_vtt_translator:main"
-
-[tool.black]
-line-length = 120
-target-version = ["py310"]
-
-[tool.isort]
-profile = "black"
-line_length = 120
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -64,12 +55,74 @@ addopts = "-v"
 # Note: To enable coverage reporting, install pytest-cov and add:
 # --cov=src/python --cov-report=term-missing
 
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "ARG", # flake8-unused-arguments
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "B904",  # Allow raising exceptions without from e
+    "B905",  # zip without strict parameter
+    "SIM115",  # Use context manager (tempfile usage is correct)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+"tests/**/*" = ["ARG", "S101", "E402", "SIM117"]  # Allow unused arguments, asserts, imports not at top, nested with
+"main.py" = ["UP036", "SIM108", "SIM117", "SIM102", "SIM105", "W293", "ARG001", "B007"]  # Main live server
+"src/python/tools/archive_transcriber.py" = ["ARG001", "UP036", "B007"]  # Intentional unused args, version check, loop vars
+"src/python/tools/libretranslate_vtt_translator.py" = ["ARG001"]  # batch_size for future use
+"src/python/tools/stream_checker.py" = ["E722"]  # Bare except for broad error handling
+"src/python/tools/test_final_integration.py" = ["B007"]  # Loop variables in test code
+"src/python/tools/ttml_utils.py" = ["UP031", "SIM110", "SIM102", "F841"]  # String formatting style, simplifications
+"src/python/utils/mock_wowza.py" = ["ARG001"]  # request param required by aiohttp
+"src/python/utils/check_wowza.py" = ["E722", "SIM117", "SIM108"]  # Bare except for broad error handling
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+
+# Exclude patterns
+exclude = [
+    "^build/",
+    "^dist/",
+    "^\\.venv/",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", "build", "dist", ".venv"]
+skips = [
+    "B101",  # assert_used (allowed in tests)
+    "B112",  # try_except_continue (acceptable for broad error handling)
+    "B113",  # requests without timeout (user-controlled endpoints)
+    "B310",  # urllib.urlopen (we use it for controlled API calls)
+    "B314",  # xml.etree parse (we control the XML input)
+    "B404",  # subprocess import (we use it safely)
+    "B405",  # xml.etree import (we control the XML input)
+    "B601",  # paramiko/shell (not applicable)
+    "B603",  # subprocess without shell (we use list args, not shell)
+    "B607",  # partial path (we use standard commands like ps, ffmpeg)
+]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

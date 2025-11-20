@@ -15,13 +15,13 @@ public class ModulePublishOnTextData extends ModuleBase
 	class OnTextData
 	{
 		String text = "";
-		
+
 		public OnTextData(String text)
 		{
 			this.text = text;
 		}
 	}
-	
+
 	class PublishThread extends Thread
 	{
 		private boolean running = true;
@@ -40,19 +40,19 @@ public class ModulePublishOnTextData extends ModuleBase
 				this.running = false;
 			}
 		}
-		
+
 		public PublishThread(IApplicationInstance appInstance, IMediaStream stream)
 		{
 			this.appInstance = appInstance;
 			this.stream = stream;
 		}
-		
+
 		public void run()
 		{
 			getLogger().info("ModulePublishOnTextData#PublishThread.run["+stream.getContextStr()+"]: START");
-			
+
 			int index = 0;
-			
+
 			while(true)
 			{
 				try
@@ -61,30 +61,30 @@ public class ModulePublishOnTextData extends ModuleBase
 					if (lastSend < 0 || (currTime - lastSend) > publishInterval)
 					{
 						lastSend = currTime;
-						
+
 						while(true)
 						{
 							if (onTextDataList.size() <= 0)
 								break;
-							
+
 							OnTextData onTextData = onTextDataList.get(index%onTextDataList.size());
 							index++;
-							
+
 							if (onTextData == null)
 								break;
-							
+
 							sendTextDataMessage(stream, onTextData);
 							break;
 						}
 					}
-					
+
 					Thread.sleep(interval);
 				}
 				catch(Exception e)
 				{
 					getLogger().error("ModulePublishOnTextData#PublishThread.run["+stream.getContextStr()+"]: "+e.toString());
 				}
-				
+
 				synchronized(lock)
 				{
 					if (!running)
@@ -105,11 +105,11 @@ public class ModulePublishOnTextData extends ModuleBase
 				//debug  amfData.put("text", new AMFDataItem("T: "+(count++)));
 				amfData.put("text", new AMFDataItem(onTextData.text));
 				amfData.put("language", new AMFDataItem(languageID));
-				amfData.put("trackid", new AMFDataItem(trackNumber));							
+				amfData.put("trackid", new AMFDataItem(trackNumber));
 				stream.sendDirect("onTextData", amfData);
-				((MediaStream)stream).processSendDirectMessages();	
-				
-			
+				((MediaStream)stream).processSendDirectMessages();
+
+
 
 			}
 			catch(Exception e)
@@ -137,7 +137,7 @@ public class ModulePublishOnTextData extends ModuleBase
 		public void onPublish(IMediaStream stream, String streamName, boolean isRecord, boolean isAppend)
 		{
 			IApplicationInstance appInstance = stream.getStreams().getAppInstance();
-			
+
 			if (!stream.isTranscodeResult())
 			{
 				publishThread = new PublishThread(appInstance, stream);
@@ -192,20 +192,20 @@ public class ModulePublishOnTextData extends ModuleBase
 	private boolean charsetTest = false;
 	private String languageID = "eng";
 	private int trackNumber = 99;
-	//private final Charset UTF8_CHARSET = Charset.forName("UTF-8"); 
+	//private final Charset UTF8_CHARSET = Charset.forName("UTF-8");
 	private int publishInterval = 1000;
-	
+
 	public void onAppStart(IApplicationInstance appInstance)
 	{
 		getLogger().info("ModulePublishOnTextData.onAppStart["+appInstance.getContextStr()+"]");
-		
+
 		String onTextDataFile = "${com.wowza.wms.context.VHostConfigHome}/content/ontextdata.txt";
 
 		publishInterval = appInstance.getProperties().getPropertyInt("publishOnTextDataPublishInterval", publishInterval);
 		onTextDataFile = appInstance.getProperties().getPropertyStr("publishOnTextDataFile", onTextDataFile);
 		languageID = appInstance.getProperties().getPropertyStr("publishOnTextDataLanguageID", languageID);
 		trackNumber = appInstance.getProperties().getPropertyInt("publishOnTextDataTrackNumber", trackNumber);
-		
+
 		charsetTest = appInstance.getProperties().getPropertyBoolean("publishOnTextCharsetTest", charsetTest);
 
 		Map<String, String> pathMap = new HashMap<String, String>();
@@ -213,30 +213,30 @@ public class ModulePublishOnTextData extends ModuleBase
 		pathMap.put("com.wowza.wms.context.VHostConfigHome", appInstance.getVHost().getHomePath());
 		pathMap.put("com.wowza.wms.context.Application", appInstance.getApplication().getName());
 		pathMap.put("com.wowza.wms.context.ApplicationInstance", appInstance.getName());
-		
+
 		onTextDataFile =  SystemUtils.expandEnvironmentVariables(onTextDataFile, pathMap);
 
 		File file = new File(onTextDataFile);
-		
+
 		getLogger().info("ModulePublishOnTextData.onAppStart["+appInstance.getContextStr()+"]: sendInterval: "+publishInterval);
-		
+
 		if (charsetTest)
 		{
 			int charCode = 0x20;
 			int lastChar = 0x100;
 			int charsPerLine = 20;
-			
+
 			while(true)
 			{
 				int charsToPublish = lastChar-charCode;
 				if (charsToPublish > charsPerLine)
 					charsToPublish = charsPerLine;
-								
+
 				String bytesStr = "";
 				for(int i=0;i<charsToPublish;i++)
 				{
 					int thisChar = charCode+i;
-					
+
 					// map unicode codepoint to utf-8
 					int myChar = 0;
 					if (thisChar >= 0x020 && thisChar < 0x080)
@@ -254,13 +254,13 @@ public class ModulePublishOnTextData extends ModuleBase
 					{
 					}
 				}
-				
+
 				bytesStr = "0x"+Integer.toHexString(charCode)+":"+bytesStr+":";
-				
+
 				onTextDataList.add(new OnTextData(bytesStr));
-								
+
 				charCode += charsToPublish;
-				
+
 				if (charCode >= lastChar)
 					break;
 			}
@@ -283,9 +283,9 @@ public class ModulePublishOnTextData extends ModuleBase
 							continue;
 						if (line.length() == 0)
 							continue;
-											
+
 						onTextDataList.add(new OnTextData(line));
-						
+
 					}
 				}
 				catch(Exception e)
@@ -293,14 +293,14 @@ public class ModulePublishOnTextData extends ModuleBase
 					getLogger().error("ModulePublishOnTextData.onAppStart[read]: "+ e.toString());
 				}
 			}
-			
+
 			getLogger().info("ModulePublishOnTextData.onAppStart["+appInstance.getContextStr()+"]: onTextDataFileCount: "+onTextDataList.size());
 
 			try
 			{
 				if (inf != null)
 					inf.close();
-				inf = null;	
+				inf = null;
 			}
 			catch(Exception e)
 			{
@@ -308,7 +308,7 @@ public class ModulePublishOnTextData extends ModuleBase
 			}
 		}
 	}
-	
+
 	public void onStreamCreate(IMediaStream stream)
 	{
 		stream.addClientListener(new MyMediaStreamListener());

@@ -13,56 +13,55 @@ And displays them side-by-side for quality comparison.
 
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from python.tools.ttml_utils import parse_vtt_file, SubtitleCue
+from python.tools.ttml_utils import SubtitleCue, parse_vtt_file
 
 
 def print_comparison(
     ru_cue: SubtitleCue,
-    whisper_cue: Optional[SubtitleCue],
-    nllb_cue: Optional[SubtitleCue],
-    libre_cue: Optional[SubtitleCue],
-    mistral_cue: Optional[SubtitleCue],
-    index: int
+    whisper_cue: SubtitleCue | None,
+    nllb_cue: SubtitleCue | None,
+    libre_cue: SubtitleCue | None,
+    mistral_cue: SubtitleCue | None,
+    index: int,
 ):
     """Print a side-by-side comparison of all available translations."""
     print(f"\n{'='*80}")
     print(f"Cue #{index} [{ru_cue.start:.1f}s - {ru_cue.end:.1f}s]")
     print(f"{'='*80}")
 
-    print(f"\n🇷🇺 Russian (source):")
+    print("\n🇷🇺 Russian (source):")
     print(f"   {ru_cue.text}")
 
-    print(f"\n🤖 Whisper translation:")
+    print("\n🤖 Whisper translation:")
     if whisper_cue:
         print(f"   {whisper_cue.text}")
     else:
-        print(f"   [NOT FOUND]")
+        print("   [NOT FOUND]")
 
-    print(f"\n🌍 NLLB-200 translation:")
+    print("\n🌍 NLLB-200 translation:")
     if nllb_cue:
         print(f"   {nllb_cue.text}")
     else:
-        print(f"   [NOT FOUND]")
+        print("   [NOT FOUND]")
 
-    print(f"\n🔄 LibreTranslate translation:")
+    print("\n🔄 LibreTranslate translation:")
     if libre_cue:
         print(f"   {libre_cue.text}")
     else:
-        print(f"   [NOT FOUND]")
+        print("   [NOT FOUND]")
 
-    print(f"\n🧠 Mistral LLM translation:")
+    print("\n🧠 Mistral LLM translation:")
     if mistral_cue:
         print(f"   {mistral_cue.text}")
     else:
-        print(f"   [NOT FOUND]")
+        print("   [NOT FOUND]")
 
 
-def find_matching_cue(cues: List[SubtitleCue], target_start: float, tolerance: float = 0.5) -> Optional[SubtitleCue]:
+def find_matching_cue(cues: list[SubtitleCue], target_start: float, tolerance: float = 0.5) -> SubtitleCue | None:
     """Find a cue with matching start time."""
     for cue in cues:
         if abs(cue.start - target_start) < tolerance:
@@ -101,7 +100,7 @@ def compare_translations(directory: Path, max_cues: int = 20):
     libre_cues = parse_vtt_file(str(libre_vtt)) if libre_vtt.exists() else []
     mistral_cues = parse_vtt_file(str(mistral_vtt)) if mistral_vtt.exists() else []
 
-    print(f"\n📊 Cue counts:")
+    print("\n📊 Cue counts:")
     print(f"   Russian: {len(ru_cues)} cues")
     print(f"   Whisper: {len(whisper_cues)} cues")
     print(f"   NLLB-200: {len(nllb_cues)} cues")
@@ -134,14 +133,9 @@ def main():
     parser.add_argument(
         "directory",
         type=Path,
-        help="Directory containing .ru.vtt, .en.vtt, .nllb.en.vtt, .libretranslate.en.vtt, and .mistral.en.vtt files"
+        help="Directory containing .ru.vtt, .en.vtt, .nllb.en.vtt, .libretranslate.en.vtt, and .mistral.en.vtt files",
     )
-    parser.add_argument(
-        "--max-cues",
-        type=int,
-        default=20,
-        help="Maximum number of cues to display (default: 20)"
-    )
+    parser.add_argument("--max-cues", type=int, default=20, help="Maximum number of cues to display (default: 20)")
 
     args = parser.parse_args()
 

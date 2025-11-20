@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
 # Mock dependencies
-sys.modules['faster_whisper'] = mock.MagicMock()
+sys.modules["faster_whisper"] = mock.MagicMock()
 
 archive_transcriber = importlib.import_module("archive_transcriber")
 
@@ -102,7 +102,6 @@ class TestSMILGeneration:
         assert root.find("body") is not None
         assert root.find("body/switch") is not None
 
-
     def test_smil_video_element(self, video_job, metadata, args):
         """Test that SMIL includes video element with metadata."""
         write_smil(video_job, metadata, args)
@@ -118,11 +117,10 @@ class TestSMILGeneration:
         assert video.get("width") == "1920"
         assert video.get("height") == "1080"
 
-
     def test_smil_textstream_elements(self, video_job, metadata, args):
         """
         Verify the SMIL contains two subtitle textstream elements (Russian and English) with correct src and language attributes.
-        
+
         Asserts that exactly two textstream elements appear under body/switch, one with system-language "rus" and one with "eng", and that their src attributes are "video.ru.vtt" and "video.en.vtt" respectively (no "mp4:" prefix).
         """
         write_smil(video_job, metadata, args)
@@ -149,7 +147,6 @@ class TestSMILGeneration:
         # Textstream elements should NOT have mp4: prefix (unlike video sources)
         assert ru_stream.get("src") == "video.ru.vtt"
         assert en_stream.get("src") == "video.en.vtt"
-
 
     def test_smil_wowza_caption_params(self, video_job, args):
         """Test that textstreams have Wowza caption parameters."""
@@ -181,7 +178,6 @@ class TestSMILGeneration:
             assert wowza_param is not None
             assert wowza_param.get("value") == "true"
             assert wowza_param.get("valuetype") == "data"
-
 
     def test_smil_update_preserves_structure(self, video_job, metadata, args):
         """Test that updating SMIL preserves existing structure."""
@@ -215,7 +211,6 @@ class TestSMILGeneration:
 
         assert len(wowza_textstreams) == 2
 
-
     def test_smil_missing_vtt_warning(self, video_job_missing_vtts, metadata, args):
         """Test that SMIL generation handles missing VTT files."""
         # Should not crash, just skip missing textstreams
@@ -245,7 +240,6 @@ class TestSMILGeneration:
         # No textstreams should be added for missing files
         assert len(wowza_textstreams) == 0
 
-
     def test_smil_codec_params(self, video_job, metadata, args):
         """Test that video codec parameters are included."""
         write_smil(video_job, metadata, args)
@@ -271,7 +265,6 @@ class TestSMILGeneration:
         assert audio_codec_param is not None
         assert audio_codec_param.get("value") == "aac"
 
-
     def test_smil_ttml_bilingual_language(self, video_job, metadata):
         """Test that TTML textstream includes both languages in system-language."""
         # Create TTML file
@@ -294,5 +287,6 @@ class TestSMILGeneration:
                 break
 
         assert ttml_stream is not None, "TTML textstream should be present"
-        assert ttml_stream.get("system-language") == "rus,eng", \
-            "TTML textstream should have bilingual system-language attribute"
+        assert (
+            ttml_stream.get("system-language") == "rus,eng"
+        ), "TTML textstream should have bilingual system-language attribute"

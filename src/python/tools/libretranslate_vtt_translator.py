@@ -12,17 +12,16 @@ translations without modifying the original workflow.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
-import urllib.request
-import urllib.parse
-import json
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -30,8 +29,7 @@ except ImportError:
     tqdm = None
 
 # Import VTT parsing utilities
-from ttml_utils import parse_vtt_file, SubtitleCue, load_filter_words, should_filter_cue
-
+from ttml_utils import SubtitleCue, load_filter_words, parse_vtt_file, should_filter_cue
 
 LOGGER = logging.getLogger("libretranslate_vtt_translator")
 
@@ -42,6 +40,7 @@ DEFAULT_API_URL = "https://libretranslate.com/translate"
 @dataclass
 class TranslationJob:
     """Represents a VTT file to be translated."""
+
     ru_vtt_path: Path
     libre_en_vtt_path: Path
 
@@ -63,7 +62,7 @@ def format_vtt_timestamp(seconds: float) -> str:
     return f"{hours:02}:{minutes:02}:{secs:02}.{ms:03}"
 
 
-def cues_to_webvtt(cues: List[SubtitleCue], filter_words: Optional[List[str]] = None) -> str:
+def cues_to_webvtt(cues: list[SubtitleCue], filter_words: list[str] | None = None) -> str:
     """
     Convert a list of SubtitleCue objects into WebVTT content.
 
@@ -74,7 +73,7 @@ def cues_to_webvtt(cues: List[SubtitleCue], filter_words: Optional[List[str]] = 
     Returns:
         WebVTT-formatted string
     """
-    lines: List[str] = ["WEBVTT", ""]
+    lines: list[str] = ["WEBVTT", ""]
 
     cue_idx = 1
     for cue in cues:
@@ -119,7 +118,7 @@ def translate_text_libretranslate(
     api_url: str,
     source_lang: str = "ru",
     target_lang: str = "en",
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
 ) -> str:
     """
     Translate a single text using LibreTranslate API.
@@ -148,21 +147,19 @@ def translate_text_libretranslate(
         data["api_key"] = api_key
 
     # Encode data
-    encoded_data = urllib.parse.urlencode(data).encode('utf-8')
+    encoded_data = urllib.parse.urlencode(data).encode("utf-8")
 
     # Create request
     req = urllib.request.Request(
-        api_url,
-        data=encoded_data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"}
+        api_url, data=encoded_data, headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
 
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode('utf-8'))
+            result = json.loads(response.read().decode("utf-8"))
             return result.get("translatedText", "")
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8', errors='ignore')
+        error_body = e.read().decode("utf-8", errors="ignore")
         raise Exception(f"LibreTranslate API error {e.code}: {error_body}")
     except urllib.error.URLError as e:
         raise Exception(f"Network error: {e.reason}")
@@ -171,14 +168,14 @@ def translate_text_libretranslate(
 
 
 def translate_batch(
-    texts: List[str],
+    texts: list[str],
     api_url: str,
     source_lang: str = "ru",
     target_lang: str = "en",
-    api_key: Optional[str] = None,
+    api_key: str | None = None,
     batch_size: int = 1,
     delay: float = 0.0,
-) -> List[str]:
+) -> list[str]:
     """
     Translate a batch of texts using LibreTranslate API.
 
@@ -203,13 +200,7 @@ def translate_batch(
             time.sleep(delay)
 
         try:
-            translated = translate_text_libretranslate(
-                text,
-                api_url,
-                source_lang,
-                target_lang,
-                api_key
-            )
+            translated = translate_text_libretranslate(text, api_url, source_lang, target_lang, api_key)
             translations.append(translated)
         except Exception as e:
             LOGGER.warning("Failed to translate text %d: %s. Using original.", i, e)
@@ -221,7 +212,7 @@ def translate_batch(
 def translate_vtt_file(
     job: TranslationJob,
     args: argparse.Namespace,
-    filter_words: Optional[List[str]] = None,
+    filter_words: list[str] | None = None,
 ) -> dict:
     """
     Translate a single VTT file from Russian to English using LibreTranslate.
@@ -267,13 +258,7 @@ def translate_vtt_file(
         # Create English cues with translated text but same timestamps
         en_cues = []
         for ru_cue, en_text in zip(ru_cues, translated_texts):
-            en_cues.append(
-                SubtitleCue(
-                    start=ru_cue.start,
-                    end=ru_cue.end,
-                    text=en_text
-                )
-            )
+            en_cues.append(SubtitleCue(start=ru_cue.start, end=ru_cue.end, text=en_text))
 
         # Generate WebVTT content
         en_vtt_content = cues_to_webvtt(en_cues, filter_words=filter_words)
@@ -306,7 +291,7 @@ def translate_vtt_file(
 def discover_vtt_files(
     input_root: Path,
     force: bool,
-) -> List[TranslationJob]:
+) -> list[TranslationJob]:
     """
     Scan directory for *.ru.vtt files and prepare translation jobs.
 
@@ -319,23 +304,23 @@ def discover_vtt_files(
     """
     LOGGER.info("Scanning for *.ru.vtt files in %s", input_root)
 
-    jobs: List[TranslationJob] = []
+    jobs: list[TranslationJob] = []
 
     for ru_vtt_path in input_root.rglob("*.ru.vtt"):
         # Generate output path: replace .ru.vtt with .libretranslate.en.vtt
-        libre_en_vtt_path = ru_vtt_path.with_name(
-            ru_vtt_path.name.replace(".ru.vtt", ".libretranslate.en.vtt")
-        )
+        libre_en_vtt_path = ru_vtt_path.with_name(ru_vtt_path.name.replace(".ru.vtt", ".libretranslate.en.vtt"))
 
         # Skip if already exists (unless force)
         if libre_en_vtt_path.exists() and not force:
             LOGGER.debug("Skipping %s (output exists)", ru_vtt_path)
             continue
 
-        jobs.append(TranslationJob(
-            ru_vtt_path=ru_vtt_path,
-            libre_en_vtt_path=libre_en_vtt_path,
-        ))
+        jobs.append(
+            TranslationJob(
+                ru_vtt_path=ru_vtt_path,
+                libre_en_vtt_path=libre_en_vtt_path,
+            )
+        )
 
     LOGGER.info("Found %d VTT files to translate", len(jobs))
     return jobs
@@ -344,7 +329,7 @@ def discover_vtt_files(
 def configure_logging(args: argparse.Namespace) -> None:
     """Configure logging based on command-line arguments."""
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if args.log_file:
         handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
     logging.basicConfig(
@@ -354,11 +339,9 @@ def configure_logging(args: argparse.Namespace) -> None:
     )
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Translate Russian VTT files to English using LibreTranslate API"
-    )
+    parser = argparse.ArgumentParser(description="Translate Russian VTT files to English using LibreTranslate API")
     parser.add_argument(
         "input_root",
         type=Path,
@@ -421,7 +404,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run(argv: Optional[List[str]] = None) -> int:
+def run(argv: list[str] | None = None) -> int:
     """Main entry point for the translator."""
     args = parse_args(argv)
     configure_logging(args)
@@ -445,7 +428,7 @@ def run(argv: Optional[List[str]] = None) -> int:
             LOGGER.warning("--max-files must be greater than zero; no work will be performed")
             jobs = []
         else:
-            jobs = jobs[:args.max_files]
+            jobs = jobs[: args.max_files]
 
     if not jobs:
         LOGGER.info("No VTT files to translate. Exiting.")
@@ -455,11 +438,7 @@ def run(argv: Optional[List[str]] = None) -> int:
     LOGGER.info("Testing LibreTranslate API at %s", args.api_url)
     try:
         test_result = translate_text_libretranslate(
-            "Привет",
-            args.api_url,
-            args.source_lang,
-            args.target_lang,
-            args.api_key
+            "Привет", args.api_url, args.source_lang, args.target_lang, args.api_key
         )
         LOGGER.info("API test successful. 'Привет' -> '%s'", test_result)
     except Exception as exc:

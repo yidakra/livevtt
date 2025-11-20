@@ -19,4 +19,4 @@ COPY . .
 # Expose the default port
 EXPOSE 8000
 
-ENTRYPOINT ["python3", "main.py"] 
+ENTRYPOINT ["python3", "main.py"]

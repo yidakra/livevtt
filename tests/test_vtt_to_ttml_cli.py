@@ -10,9 +10,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
 from vtt_to_ttml import (
-    validate_vtt_file,
     convert_vtt_to_ttml,
     parse_args,
+    validate_vtt_file,
 )
 
 
@@ -206,11 +206,16 @@ class TestArgumentParsing:
 
     def test_parse_args_required(self):
         """Test parsing required arguments."""
-        args = parse_args([
-            "--vtt_ru", "test.ru.vtt",
-            "--vtt_en", "test.en.vtt",
-            "--output", "test.ttml",
-        ])
+        args = parse_args(
+            [
+                "--vtt_ru",
+                "test.ru.vtt",
+                "--vtt_en",
+                "test.en.vtt",
+                "--output",
+                "test.ttml",
+            ]
+        )
 
         assert args.vtt_ru == Path("test.ru.vtt")
         assert args.vtt_en == Path("test.en.vtt")
@@ -219,11 +224,16 @@ class TestArgumentParsing:
 
     def test_parse_args_defaults(self):
         """Test default values for optional arguments."""
-        args = parse_args([
-            "--vtt_ru", "test.ru.vtt",
-            "--vtt_en", "test.en.vtt",
-            "--output", "test.ttml",
-        ])
+        args = parse_args(
+            [
+                "--vtt_ru",
+                "test.ru.vtt",
+                "--vtt_en",
+                "test.en.vtt",
+                "--output",
+                "test.ttml",
+            ]
+        )
 
         assert args.lang1 == "ru"
         assert args.lang2 == "en"
@@ -233,13 +243,20 @@ class TestArgumentParsing:
 
     def test_parse_args_custom_languages(self):
         """Test parsing custom language codes."""
-        args = parse_args([
-            "--vtt_ru", "test.es.vtt",
-            "--vtt_en", "test.en.vtt",
-            "--output", "test.ttml",
-            "--lang1", "es",
-            "--lang2", "en",
-        ])
+        args = parse_args(
+            [
+                "--vtt_ru",
+                "test.es.vtt",
+                "--vtt_en",
+                "test.en.vtt",
+                "--output",
+                "test.ttml",
+                "--lang1",
+                "es",
+                "--lang2",
+                "en",
+            ]
+        )
 
         assert args.lang1 == "es"
         assert args.lang2 == "en"
@@ -247,35 +264,51 @@ class TestArgumentParsing:
 
     def test_parse_args_custom_tolerance(self):
         """Test parsing custom tolerance."""
-        args = parse_args([
-            "--vtt_ru", "test.ru.vtt",
-            "--vtt_en", "test.en.vtt",
-            "--output", "test.ttml",
-            "--tolerance", "2.5",
-        ])
+        args = parse_args(
+            [
+                "--vtt_ru",
+                "test.ru.vtt",
+                "--vtt_en",
+                "test.en.vtt",
+                "--output",
+                "test.ttml",
+                "--tolerance",
+                "2.5",
+            ]
+        )
 
         assert args.tolerance == 2.5
         print("✓ test_parse_args_custom_tolerance passed")
 
     def test_parse_args_verbose(self):
         """Test verbose flag."""
-        args = parse_args([
-            "--vtt_ru", "test.ru.vtt",
-            "--vtt_en", "test.en.vtt",
-            "--output", "test.ttml",
-            "--verbose",
-        ])
+        args = parse_args(
+            [
+                "--vtt_ru",
+                "test.ru.vtt",
+                "--vtt_en",
+                "test.en.vtt",
+                "--output",
+                "test.ttml",
+                "--verbose",
+            ]
+        )
 
         assert args.verbose
         print("✓ test_parse_args_verbose passed")
 
     def test_parse_args_alternative_flags(self):
         """Test alternative flag names (with hyphens)."""
-        args = parse_args([
-            "--vtt-ru", "test.ru.vtt",
-            "--vtt-en", "test.en.vtt",
-            "-o", "test.ttml",
-        ])
+        args = parse_args(
+            [
+                "--vtt-ru",
+                "test.ru.vtt",
+                "--vtt-en",
+                "test.en.vtt",
+                "-o",
+                "test.ttml",
+            ]
+        )
 
         assert args.vtt_ru == Path("test.ru.vtt")
         assert args.vtt_en == Path("test.en.vtt")
@@ -302,8 +335,7 @@ def run_all_tests():
         print("-" * 60)
 
         test_methods = [
-            method for method in dir(test_class)
-            if method.startswith("test_") and callable(getattr(test_class, method))
+            method for method in dir(test_class) if method.startswith("test_") and callable(getattr(test_class, method))
         ]
 
         for method_name in test_methods:

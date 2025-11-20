@@ -22,10 +22,8 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
-from ttml_utils import parse_vtt_file, align_bilingual_cues, vtt_files_to_ttml, load_filter_words
-
+from ttml_utils import align_bilingual_cues, load_filter_words, parse_vtt_file, vtt_files_to_ttml
 
 LOGGER = logging.getLogger("vtt_to_ttml")
 
@@ -48,7 +46,7 @@ def validate_vtt_file(path: Path) -> bool:
         return False
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             first_line = f.readline().strip()
             if not first_line.startswith("WEBVTT"):
                 LOGGER.warning("VTT file is missing WEBVTT header: %s", path)
@@ -66,15 +64,15 @@ def convert_vtt_to_ttml(
     lang1: str = "ru",
     lang2: str = "en",
     tolerance: float = 1.0,
-    filter_json_path: Optional[Path] = None,
+    filter_json_path: Path | None = None,
 ) -> bool:
     """
     Create a single TTML file by aligning cues from two WebVTT files.
-    
+
     Validates the input VTT files, aligns their cues within the specified time tolerance,
     optionally applies text filters from a filter.json, and writes the resulting TTML to
     the given output path.
-    
+
     Parameters:
         vtt_file1 (Path): Path to the first-language WebVTT file.
         vtt_file2 (Path): Path to the second-language WebVTT file.
@@ -84,7 +82,7 @@ def convert_vtt_to_ttml(
         tolerance (float): Maximum allowed time difference in seconds when aligning cues.
         filter_json_path (Optional[Path]): Path to a filter.json file to control text filtering;
             if None the function will attempt to auto-discover filter words.
-    
+
     Returns:
         bool: `True` if the TTML file was created successfully, `False` otherwise.
     """
@@ -119,9 +117,7 @@ def convert_vtt_to_ttml(
                 unaligned_count,
                 len(aligned),
             )
-            LOGGER.warning(
-                "Consider adjusting --tolerance if too many cues are unaligned"
-            )
+            LOGGER.warning("Consider adjusting --tolerance if too many cues are unaligned")
 
         # Generate TTML without re-parsing or re-aligning the cues
         LOGGER.info("Generating TTML file")
@@ -170,13 +166,13 @@ def convert_vtt_to_ttml(
         raise
 
 
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """
     Parse and return command-line arguments for the VTT→TTML converter.
-    
+
     Parameters:
         argv (Optional[list[str]]): Optional list of argument strings to parse; when omitted, the process's command-line arguments are used.
-    
+
     Returns:
         argparse.Namespace: Namespace containing parsed options:
             - vtt_ru / vtt_file1: Path to first WebVTT file
@@ -300,13 +296,13 @@ def configure_logging(verbose: bool) -> None:
     )
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """
     Run the command-line interface: parse arguments, configure logging, and perform the VTT→TTML conversion.
-    
+
     Parameters:
         argv (Optional[list[str]]): Optional list of command-line arguments to parse; if omitted, uses sys.argv.
-    
+
     Returns:
         int: 0 on success, 1 on failure.
     """

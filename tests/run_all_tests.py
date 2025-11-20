@@ -6,10 +6,9 @@ Runs all unit tests and reports overall results.
 """
 
 import re
-import sys
 import subprocess
+import sys
 from pathlib import Path
-
 
 RESULT_PATTERN = re.compile(
     r"""(?ix)
@@ -69,7 +68,9 @@ def run_test_file(test_file: Path) -> tuple[int, int]:
         # Exit code 0: no parsed tests but process succeeded
         # Non-zero: treat as failure
         if result.returncode == 0:
-            print(f"WARNING: Could not parse test results from {test_file.name} (exit code 0, but no test output parsed)")
+            print(
+                f"WARNING: Could not parse test results from {test_file.name} (exit code 0, but no test output parsed)"
+            )
             return (0, 0)  # No parsed tests
         else:
             print(f"WARNING: Could not parse test results from {test_file.name} (exit code {result.returncode})")
