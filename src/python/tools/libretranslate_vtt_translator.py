@@ -23,6 +23,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -30,6 +32,9 @@ except ImportError:
 
 # Import VTT parsing utilities
 from ttml_utils import SubtitleCue, load_filter_words, parse_vtt_file, should_filter_cue
+
+# Load environment variables from .env file
+load_dotenv()
 
 LOGGER = logging.getLogger("libretranslate_vtt_translator")
 
@@ -351,13 +356,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--api-url",
         type=str,
-        default=DEFAULT_API_URL,
-        help=f"LibreTranslate API endpoint URL (default: {DEFAULT_API_URL})",
+        default=os.getenv("LIBRETRANSLATE_API_URL", DEFAULT_API_URL),
+        help=f"LibreTranslate API endpoint URL (default: env LIBRETRANSLATE_API_URL or {DEFAULT_API_URL})",
     )
     parser.add_argument(
         "--api-key",
         type=str,
-        help="API key for LibreTranslate (if required by your instance)",
+        default=os.getenv("LIBRETRANSLATE_API_KEY"),
+        help="API key for LibreTranslate (default: env LIBRETRANSLATE_API_KEY)",
     )
     parser.add_argument(
         "--source-lang",

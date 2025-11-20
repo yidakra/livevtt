@@ -86,6 +86,45 @@ python src/python/tools/archive_transcriber.py --max-files 1 --progress
 
 Generates `<hash>.ru.vtt` (source-language transcript), `<hash>.en.vtt` (English translation), and `<hash>.smil` manifest files alongside the source (or under `--output-root`). Uses `/mnt/vod/srv/storage/transcoded/` as the default archive root; pass a path to override.
 
+## Environment Configuration
+
+All translation tools support environment variables via a `.env` file for convenient API key management:
+
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit with your API keys
+nano .env
+```
+
+**Example `.env` file:**
+```bash
+# Mistral AI API
+MISTRAL_API_KEY=your_mistral_api_key_here
+MISTRAL_API_URL=https://api.mistral.ai/v1/chat/completions
+MISTRAL_MODEL=mistral-large-latest
+
+# LibreTranslate API
+LIBRETRANSLATE_API_KEY=your_api_key_here
+LIBRETRANSLATE_API_URL=https://libretranslate.com/translate
+
+# OpenAI API (alternative)
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_API_URL=https://api.openai.com/v1/chat/completions
+```
+
+Once configured, you can run translation tools without command-line flags:
+```bash
+# Automatically uses MISTRAL_API_KEY from .env
+python src/python/tools/mistral_vtt_translator.py /path/to/archive --progress
+
+# Automatically uses LIBRETRANSLATE_API_KEY from .env
+python src/python/tools/libretranslate_vtt_translator.py /path/to/archive --progress
+```
+
+Command-line flags override environment variables when specified.
+
 ### `nllb_vtt_translator`
 **High-quality translation of existing Russian VTT files using Meta's NLLB-200 model**
 
@@ -167,8 +206,11 @@ python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
 ```bash
 # No dependencies required! Uses HTTP API
 
-# Use Mistral API (requires API key) - mistral-large-latest for best quality
-# Note: Includes 1s delay between requests by default to avoid rate limits
+# Simple usage with .env configuration (recommended)
+# Set MISTRAL_API_KEY in .env file, then:
+python src/python/tools/mistral_vtt_translator.py /path/to/archive --progress
+
+# Or use command-line flags (overrides .env)
 python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --api-url https://api.mistral.ai/v1/chat/completions \
   --api-key YOUR_MISTRAL_API_KEY \
@@ -176,12 +218,7 @@ python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --progress
 
 # Adjust delay for rate limiting (increase if you hit 429 errors frequently)
-python src/python/tools/mistral_vtt_translator.py /path/to/archive \
-  --api-url https://api.mistral.ai/v1/chat/completions \
-  --api-key YOUR_MISTRAL_API_KEY \
-  --model mistral-large-latest \
-  --delay 2.0 \
-  --progress
+python src/python/tools/mistral_vtt_translator.py /path/to/archive --delay 2.0 --progress
 
 # Use local inference server (vLLM, llama.cpp, Ollama, etc.)
 # No delay needed for local servers

@@ -23,6 +23,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 try:
     from tqdm import tqdm
 except ImportError:
@@ -30,6 +32,9 @@ except ImportError:
 
 # Import VTT parsing utilities
 from ttml_utils import SubtitleCue, load_filter_words, parse_vtt_file, should_filter_cue
+
+# Load environment variables from .env file
+load_dotenv()
 
 LOGGER = logging.getLogger("mistral_vtt_translator")
 
@@ -389,19 +394,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--api-url",
         type=str,
-        default=DEFAULT_OPENAI_COMPATIBLE_API,
-        help=f"LLM API endpoint URL (default: {DEFAULT_OPENAI_COMPATIBLE_API})",
+        default=os.getenv("MISTRAL_API_URL", os.getenv("OPENAI_API_URL", DEFAULT_OPENAI_COMPATIBLE_API)),
+        help=f"LLM API endpoint URL (default: env MISTRAL_API_URL or {DEFAULT_OPENAI_COMPATIBLE_API})",
     )
     parser.add_argument(
         "--api-key",
         type=str,
-        help="API key for LLM service (required for Mistral API, optional for local)",
+        default=os.getenv("MISTRAL_API_KEY", os.getenv("OPENAI_API_KEY")),
+        help="API key for LLM service (default: env MISTRAL_API_KEY or OPENAI_API_KEY)",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="mistral-large-latest",
-        help="Model name (default: mistral-large-latest for best quality; use mistral-small-latest for faster/cheaper)",
+        default=os.getenv("MISTRAL_MODEL", os.getenv("OPENAI_MODEL", "mistral-large-latest")),
+        help="Model name (default: env MISTRAL_MODEL or mistral-large-latest)",
     )
     parser.add_argument(
         "--system-prompt",
