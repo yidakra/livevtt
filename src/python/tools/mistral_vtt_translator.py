@@ -121,9 +121,10 @@ def translate_with_llm(
     model: str,
     system_prompt: str,
     temperature: float = 0.3,
+    max_retries: int = 5,
 ) -> str:
     """
-    Translate text using Mistral or OpenAI-compatible API.
+    Translate text using Mistral or OpenAI-compatible API with exponential backoff retry.
 
     Args:
         text: Text to translate
@@ -132,12 +133,13 @@ def translate_with_llm(
         model: Model name to use
         system_prompt: System prompt for translation instructions
         temperature: Sampling temperature (lower = more deterministic)
+        max_retries: Maximum number of retries for rate limit errors
 
     Returns:
         Translated text
 
     Raises:
-        Exception: If API request fails
+        Exception: If API request fails after all retries
     """
     # Prepare request data (OpenAI/Mistral chat completions format)
     data = {
@@ -158,27 +160,49 @@ def translate_with_llm(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    req = urllib.request.Request(api_url, data=encoded_data, headers=headers, method="POST")
+    # Retry logic with exponential backoff
+    for attempt in range(max_retries):
+        req = urllib.request.Request(api_url, data=encoded_data, headers=headers, method="POST")
 
-    try:
-        with urllib.request.urlopen(req, timeout=60) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                result = json.loads(response.read().decode("utf-8"))
 
-            # Extract message content from response
-            if "choices" in result and len(result["choices"]) > 0:
-                message = result["choices"][0].get("message", {})
-                content: str = message.get("content", "")
-                return content.strip()
-            else:
-                raise Exception(f"Unexpected API response format: {result}")
+                # Extract message content from response
+                if "choices" in result and len(result["choices"]) > 0:
+                    message = result["choices"][0].get("message", {})
+                    content: str = message.get("content", "")
+                    return content.strip()
+                else:
+                    raise Exception(f"Unexpected API response format: {result}")
 
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8", errors="ignore")
-        raise Exception(f"LLM API error {e.code}: {error_body}")
-    except urllib.error.URLError as e:
-        raise Exception(f"Network error: {e.reason}")
-    except json.JSONDecodeError as e:
-        raise Exception(f"Invalid JSON response: {e}")
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="ignore")
+
+            # Handle rate limiting with exponential backoff
+            if e.code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = (2**attempt) * 1.0  # 1s, 2s, 4s, 8s, 16s
+                    LOGGER.warning(
+                        "Rate limit hit (429). Retrying in %.1f seconds (attempt %d/%d)",
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"Rate limit exceeded after {max_retries} retries: {error_body}")
+
+            # For other errors, raise immediately
+            raise Exception(f"LLM API error {e.code}: {error_body}")
+        except urllib.error.URLError as e:
+            raise Exception(f"Network error: {e.reason}")
+        except json.JSONDecodeError as e:
+            raise Exception(f"Invalid JSON response: {e}")
+
+    # If we get here, all retries failed
+    raise Exception("All retry attempts exhausted")
 
 
 def translate_batch(
@@ -394,8 +418,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--delay",
         type=float,
-        default=0.5,
-        help="Delay between API requests in seconds (default: 0.5, for rate limiting)",
+        default=1.0,
+        help="Delay between API requests in seconds (default: 1.0 for mistral-large-latest to avoid rate limits)",
     )
     parser.add_argument(
         "--max-files",

@@ -168,16 +168,27 @@ python src/python/tools/libretranslate_vtt_translator.py /path/to/archive \
 # No dependencies required! Uses HTTP API
 
 # Use Mistral API (requires API key) - mistral-large-latest for best quality
+# Note: Includes 1s delay between requests by default to avoid rate limits
 python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --api-url https://api.mistral.ai/v1/chat/completions \
   --api-key YOUR_MISTRAL_API_KEY \
   --model mistral-large-latest \
   --progress
 
+# Adjust delay for rate limiting (increase if you hit 429 errors frequently)
+python src/python/tools/mistral_vtt_translator.py /path/to/archive \
+  --api-url https://api.mistral.ai/v1/chat/completions \
+  --api-key YOUR_MISTRAL_API_KEY \
+  --model mistral-large-latest \
+  --delay 2.0 \
+  --progress
+
 # Use local inference server (vLLM, llama.cpp, Ollama, etc.)
+# No delay needed for local servers
 python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --api-url http://localhost:8000/v1/chat/completions \
   --model mistral-7b \
+  --delay 0 \
   --progress
 
 # With custom system prompt for context

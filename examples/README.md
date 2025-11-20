@@ -369,6 +369,7 @@ python examples/compare_translations.py /path/to/archive
 # 1. No installation needed! (uses HTTP API)
 
 # 2. Option A: Use Mistral API (cloud) - mistral-large-latest for best quality
+# Note: Includes 1s delay by default to avoid rate limits (automatically retries on 429)
 export MISTRAL_API_KEY=your_api_key_here
 python src/python/tools/mistral_vtt_translator.py /path/to/archive \
   --api-url https://api.mistral.ai/v1/chat/completions \
