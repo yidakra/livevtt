@@ -205,7 +205,7 @@ python src/python/tools/nllb_vtt_translator.py /tmp/nllb_test_XXXXX --verbose
 
 ### `compare_translations.py`
 
-Compare Whisper, NLLB, LibreTranslate, and Mistral LLM translations side-by-side for quality assessment.
+Compare Whisper, NLLB, LibreTranslate, and OpenAI translations side-by-side for quality assessment.
 
 **Usage:**
 ```bash
@@ -222,7 +222,7 @@ The directory must contain:
 - `*.en.vtt` - Whisper translations (from archive_transcriber)
 - `*.nllb.en.vtt` - NLLB translations (from nllb_vtt_translator) [optional]
 - `*.libretranslate.en.vtt` - LibreTranslate translations (from libretranslate_vtt_translator) [optional]
-- `*.mistral.en.vtt` - Mistral LLM translations (from mistral_vtt_translator) [optional]
+- `*.openai.en.vtt` - OpenAI translations (from openai_vtt_translator) [optional]
 
 **Example workflow:**
 ```bash
@@ -235,10 +235,8 @@ python src/python/tools/nllb_vtt_translator.py . --max-files 1
 # 3. Translate with LibreTranslate
 python src/python/tools/libretranslate_vtt_translator.py . --max-files 1
 
-# 4. Translate with Mistral LLM
-python src/python/tools/mistral_vtt_translator.py . \
-  --api-url http://localhost:8000/v1/chat/completions \
-  --max-files 1
+# 4. Translate with OpenAI
+python src/python/tools/openai_vtt_translator.py . --max-files 1
 
 # 5. Compare all translations
 python examples/compare_translations.py .
@@ -262,7 +260,7 @@ Cue #1 [0.0s - 3.0s]
 🔄 LibreTranslate translation:
    Good afternoon!
 
-🧠 Mistral LLM translation:
+🤖 OpenAI translation:
    Good afternoon!
 ```
 
@@ -363,34 +361,28 @@ python examples/compare_translations.py /path/to/archive
 - Processing locally without network dependency
 - Batch processing large archives
 
-### Quick Start with Mistral LLM
+### Quick Start with OpenAI
 
 ```bash
 # 1. No installation needed! (uses HTTP API)
 
-# 2. Option A: Use Mistral API (cloud) - mistral-large-latest for best quality
-# Note: Default 1.2s delay handles 1 req/sec rate limit (automatically retries on 429)
-export MISTRAL_API_KEY=your_api_key_here
-python src/python/tools/mistral_vtt_translator.py /path/to/archive \
-  --api-url https://api.mistral.ai/v1/chat/completions \
-  --api-key $MISTRAL_API_KEY \
-  --model mistral-large-latest \
+# 2. Set up your API key (get from https://platform.openai.com/api-keys)
+export OPENAI_API_KEY=your_api_key_here
+
+# 3. Translate using GPT-4o (best quality)
+python src/python/tools/openai_vtt_translator.py /path/to/archive \
+  --api-key $OPENAI_API_KEY \
+  --model gpt-4o \
   --max-files 5 \
   --progress
 
-# 2. Option B: Use local inference (vLLM, Ollama, llama.cpp)
-# First, start your inference server:
-vllm serve mistralai/Mistral-7B-Instruct-v0.2 --host 0.0.0.0 --port 8000
-# OR: ollama pull mistral && ollama serve
-
-# Then translate:
-python src/python/tools/mistral_vtt_translator.py /path/to/archive \
-  --api-url http://localhost:8000/v1/chat/completions \
-  --model mistral \
+# Or use faster/cheaper model
+python src/python/tools/openai_vtt_translator.py /path/to/archive \
+  --model gpt-3.5-turbo \
   --max-files 5 \
   --progress
 
-# 3. Compare quality with other translations
+# 4. Compare quality with other translations
 python examples/compare_translations.py /path/to/archive
 ```
 
@@ -399,23 +391,20 @@ python examples/compare_translations.py /path/to/archive
 | Method | Quality | Dependencies | GPU | Self-host | API Cost | Best For |
 |--------|---------|--------------|-----|-----------|----------|----------|
 | **Whisper** | Good | faster-whisper | Recommended | Yes | Free | Built-in convenience |
-| **NLLB-200** | Excellent | transformers, torch | Recommended | Yes | Free | Best translation quality |
+| **NLLB-200** | Excellent | transformers, torch | Recommended | Yes | Free | Best specialized quality |
 | **LibreTranslate** | Good | None (HTTP) | No | Yes (Docker) | Free tier | No GPU, lightweight |
-| **Mistral LLM** | Excellent* | None (HTTP) | No** | Yes (vLLM/Ollama) | Paid/Free** | Context-aware, nuanced |
+| **OpenAI** | Excellent | None (HTTP) | No | No | Paid | Best LLM quality, reliable API |
 
-*Default uses `mistral-large-latest` for best quality. Use `--model mistral-small-latest` for faster/cheaper option.
-**Mistral can run on CPU with llama.cpp, or use cloud API (paid). Free when self-hosted.
+**When to use OpenAI:**
+- Need highest quality context-aware translation
+- Want reliable API with good rate limits (500-5000 RPM depending on tier)
+- Quality is critical and budget allows (gpt-4o: ~$0.005 per subtitle, gpt-3.5-turbo: ~$0.0005)
+- Can't self-host local models
 
-**When to use Mistral:**
-- Need context-aware, nuanced translation
-- Want customizable prompts for specific domains (broadcast, technical, etc.)
-- Have access to Mistral API or can run local LLM inference
-- Quality is critical and budget allows (API costs ~$0.001-0.002 per subtitle)
-
-**When NOT to use Mistral:**
+**When NOT to use OpenAI:**
 - Budget constrained and processing thousands of files (use NLLB or LibreTranslate)
 - Need fastest possible speed (use NLLB with GPU)
-- Want zero-dependency solution (use LibreTranslate)
+- Want free/self-hosted solution (use NLLB or LibreTranslate)
 
 ---
 
