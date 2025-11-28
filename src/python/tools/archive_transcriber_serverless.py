@@ -31,8 +31,7 @@ except ImportError:
     tqdm = None
 
 # Import from archive_transcriber for shared utilities
-import sys
-sys.path.insert(0, str(Path(__file__).parent))
+
 from archive_transcriber import (
     VideoJob,
     Manifest,
@@ -157,7 +156,7 @@ def call_runpod_serverless(
             return segments
 
         # Poll for results using /stream endpoint (for streaming handlers)
-        stream_url = f"https://api.runpod.ai/v2/{endpoint_id}/stream/{job_id}"
+        stream_url = f"{base_url}/v2/{endpoint_id}/stream/{job_id}"
         poll_interval = 2  # Start with 2 seconds
         max_poll_interval = 10
         elapsed = 0
@@ -185,11 +184,10 @@ def call_runpod_serverless(
                 output = {}
                 if stream_data:
                     # Get the last (final) output from stream
-                    for item in stream_data:
+                    for item in reversed(stream_data):
                         if isinstance(item, dict) and "output" in item:
                             output = item["output"]
                             break
-
                 LOGGER.debug("Output type: %s, Output keys: %s", type(output), output.keys() if isinstance(output, dict) else "N/A")
                 LOGGER.debug("Full output: %s", json.dumps(output, indent=2)[:1000])
 
