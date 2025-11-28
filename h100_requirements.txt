@@ -1,2 +1,2 @@
-flask
-faster-whisper
+flask==3.0.0
+faster-whisper==1.0.0
