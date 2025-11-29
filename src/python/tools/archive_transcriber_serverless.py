@@ -314,12 +314,27 @@ def process_job_serverless(job: VideoJob, args: argparse.Namespace, manifest: Ma
                 timeout=args.api_timeout,
             )
 
+            # Validate we got segments
+            if not ru_segments:
+                raise RuntimeError(f"Russian transcription returned no segments for {job.video_path}")
+            if not en_segments:
+                raise RuntimeError(f"English translation returned no segments for {job.video_path}")
+
             # Generate VTT files
+            LOGGER.info("Transcription completed: %d RU segments, %d EN segments", len(ru_segments), len(en_segments))
             ru_content = segments_to_webvtt(ru_segments, filter_words=filter_words)
             en_content = segments_to_webvtt(en_segments, filter_words=filter_words)
+            LOGGER.debug("Generated VTT content: %d RU chars, %d EN chars", len(ru_content), len(en_content))
 
             atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, en_content)
+
+            # Verify files were written successfully
+            if not job.ru_vtt.exists() or not job.en_vtt.exists():
+                raise RuntimeError(f"VTT files not created: ru_exists={job.ru_vtt.exists()}, en_exists={job.en_vtt.exists()}")
+            LOGGER.info("VTT files written successfully: %s (size: %d), %s (size: %d)",
+                       job.ru_vtt.name, job.ru_vtt.stat().st_size,
+                       job.en_vtt.name, job.en_vtt.stat().st_size)
 
             # Generate TTML file
             if not args.no_ttml:

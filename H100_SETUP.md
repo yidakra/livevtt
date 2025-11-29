@@ -1,97 +1,95 @@
-# H100 Setup Guide
+# H100 RunPod Transcription Guide
 
-## 1. Rent H100 GPU on RunPod
+## ⚠️ WARNING: Not Recommended
 
-1. Go to RunPod console
-2. Click "Deploy" → "GPU Cloud"
-3. Search for **H100 80GB**
-4. Configure:
-   - **Container Disk**: 50GB minimum
-   - **Template**: PyTorch 2.1 or Ubuntu + CUDA
-   - **Expose HTTP Ports**: `8000`
-   - **Start pod**
+**Cost**: ~$6,162 to complete all videos
+**Local A2**: $0 and works fine
+**Verdict**: Only use if time is critical
 
-5. Note the **Public IP** and **Port** (e.g., `123.45.67.89:8000`)
+## What Went Wrong ($40 Wasted)
 
-## 2. Connect via SSH
+Our H100 testing revealed:
+- **0 VTT files created** from 888 videos
+- Root cause: Missing debug logging + no validation
+- Base64 encoding adds 33% overhead
+- SSH tunnel instability caused failures
 
+## Fixes Applied
+
+Modified `archive_transcriber_serverless.py`:
+1. ✅ Validates API returns segments (lines 318-321)
+2. ✅ Verifies VTT files exist after write (lines 327-331)
+3. ✅ Logs success confirmations at INFO level (line 324)
+
+## Setup (If You Must)
+
+### 1. SSH Tunnel with Keep-Alive
 ```bash
-ssh root@<pod-ip> -p <ssh-port>
+ssh -f -N -L 8001:localhost:8000 \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o TCPKeepAlive=yes \
+    -i ~/.ssh/id_ed25519rp \
+    root@<pod-ip> -p <ssh-port>
 ```
 
-## 3. Install Dependencies
-
+### 2. Verify H100 Server
 ```bash
-# Update system
-apt-get update && apt-get install -y ffmpeg
-
-# Install Python packages
-pip install flask faster-whisper
+curl -s http://localhost:8001/health
+# Should return: {"status":"healthy"}
 ```
 
-## 4. Upload Server Code
-
-Copy `h100_server.py` to the H100:
-
+### 3. Run with Verbose Logging (CRITICAL!)
 ```bash
-# From your local machine
-scp -P <ssh-port> h100_server.py root@<pod-ip>:/root/
-```
+export H100_URL='http://localhost:8001'
 
-## 5. Start the Server
-
-On the H100:
-
-```bash
-cd /root
-python3 h100_server.py
-```
-
-The server will:
-- Pre-load `large-v3-turbo` and `large-v3` models (takes 2-3 minutes)
-- Start listening on port 8000
-- Accept transcription requests
-
-## 6. Update Local Script
-
-On your local machine, update the endpoint to point to your H100:
-
-```bash
-# In .env file or environment
-export RUNPOD_ENDPOINT_ID="dummy"  # Can be any value
-export H100_URL="http://<pod-public-ip>:<port>"
-```
-
-Then run the transcriber:
-
-```bash
 python3 src/python/tools/archive_transcriber_serverless.py \
-  --endpoint-id dummy \
-  --api-key dummy \
-  --workers 3 \
-  --quick-start \
-  --reverse
+    --endpoint-id dummy \
+    --api-key dummy \
+    --workers 3 \
+    --reverse \
+    --verbose \
+    > logs/h100_run.log 2>&1
 ```
 
-The script will now send audio to your H100 instead of RunPod serverless!
+**MUST use `--verbose`** or you won't see failures!
 
-## 7. Monitor Progress
-
-Watch the H100 server logs to see transcription progress:
-
+### 4. Monitor Success
 ```bash
-# On H100
-tail -f <server-output>
+# Watch for confirmations
+tail -f logs/h100_run.log | grep "VTT files written successfully"
+
+# Count successes
+grep -c "VTT files written successfully" logs/h100_run.log
 ```
-
-## Cost Estimate
-
-- **H100 80GB**: ~$2.89/hour on-demand
-- **Total for 142K videos**: ~19 hours = **~$55-60**
-- Much cheaper than the $135 we originally estimated (that was for a different GPU tier)
 
 ## Troubleshooting
 
-- **Connection refused**: Check firewall rules and exposed ports
-- **CUDA errors**: Ensure the pod has GPU access (`nvidia-smi`)
-- **Out of memory**: Reduce `--workers` on local machine
+**No VTT files?**
+```bash
+grep "returned no segments\|VTT files not created" logs/h100_run.log
+```
+
+**SSH tunnel died?**
+Restart gunicorn on H100:
+```bash
+ssh -i ~/.ssh/id_ed25519rp root@<ip> -p <port> \
+    "pkill -9 -f gunicorn && \
+     python3 -m gunicorn -w 6 -b 0.0.0.0:8000 --timeout 900 --daemon h100_server:app"
+```
+
+## Script Comparison
+
+**`archive_transcriber_serverless.py`** (what you used - wrong choice):
+- For RunPod serverless endpoints using `/v2/{endpoint}/run` API
+- Base64-encodes audio in JSON (33% overhead)
+- You hacked it to work with H100 via `H100_URL` env var
+- Wrong script for a persistent HTTP server!
+
+**`archive_transcriber_remote.py`** (what you should have used):
+- For direct HTTP servers using `/transcribe` endpoint
+- Raw audio via multipart/form-data (no overhead)
+- Designed for servers running `remote_whisper_server.py`
+- Would have avoided 33% base64 overhead
+
+**Recommendation**: Use `archive_transcriber_remote.py` next time!
