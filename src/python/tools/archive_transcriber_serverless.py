@@ -549,16 +549,21 @@ def run(argv: Optional[List[str]] = None) -> int:
         target_count = args.max_files
 
         # Quick scan: just get first videos we find (fast!)
-        import subprocess
         # For reverse order, start from 'ff' subdirectory (near end alphabetically)
         # For forward order, start from '0a' subdirectory (first alphabetically)
         start_dir = input_root / ("ff" if args.reverse else "0a")
         if not start_dir.exists():
             start_dir = input_root
 
-        find_cmd = f"find {start_dir} -name '*_1080p.mp4' -type f | head -{target_count * 3}"
-        result = subprocess.run(find_cmd, shell=True, capture_output=True, text=True, check=True)
-        video_paths = result.stdout.strip().split('\n')
+        # Use subprocess without shell=True for safety and slice results in Python
+        find_result = subprocess.run(
+            ["find", str(start_dir), "-name", "*_1080p.mp4", "-type", "f"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        all_paths = find_result.stdout.strip().split('\n') if find_result.stdout else []
+        video_paths = all_paths[: target_count * 3]
 
         for video_path_str in video_paths:
             if len(jobs) >= target_count:

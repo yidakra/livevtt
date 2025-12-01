@@ -306,17 +306,19 @@ def get_model(
     selected_compute_type = compute_type or args.compute_type
 
     def instantiate(target_device: str, target_compute_type: str) -> WhisperModel:
-        LOGGER.debug(
-            "Loading Whisper model %s (device=%s, compute_type=%s)",
+        LOGGER.info(
+            "Loading Whisper model %s (device=%s, compute_type=%s)...",
             name,
             target_device,
             target_compute_type,
         )
-        return WhisperModel(
+        model = WhisperModel(
             name,
             device=target_device,
             compute_type=target_compute_type,
         )
+        LOGGER.info("Model %s loaded successfully", name)
+        return model
 
     try:
         MODEL_HOLDER.models[name] = instantiate(device, selected_compute_type)
@@ -649,6 +651,12 @@ def discover_video_jobs(
                 stderr = process.stderr.read()
                 raise subprocess.CalledProcessError(return_code, find_args, stderr=stderr)
 
+        except KeyboardInterrupt:
+            LOGGER.warning("Scan interrupted by user. Terminating find process...")
+            process.terminate()
+            process.wait()
+            raise
+
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             LOGGER.error("Failed to scan with find command: %s", e)
             LOGGER.info("Falling back to os.walk()")
@@ -770,6 +778,37 @@ def should_skip(
 
     video_mtime = video_path.stat().st_mtime
     return all(path.stat().st_mtime >= video_mtime for path in required_outputs)
+
+
+def needs_transcription(job: VideoJob) -> bool:
+    """Check if job needs transcription (ru_vtt missing or older than video)."""
+    if not job.ru_vtt.exists():
+        return True
+    try:
+        video_mtime = job.video_path.stat().st_mtime
+        ru_mtime = job.ru_vtt.stat().st_mtime
+        return ru_mtime < video_mtime
+    except OSError:
+        return True
+
+
+def needs_translation(job: VideoJob, ttml_enabled: bool) -> bool:
+    """Check if job needs translation (en_vtt/ttml/smil missing or older than ru_vtt)."""
+    if not job.ru_vtt.exists():
+        return False  # Can't translate without transcription
+
+    required = [job.en_vtt, job.smil]
+    if ttml_enabled:
+        required.append(job.ttml)
+
+    if not all(p.exists() for p in required):
+        return True
+
+    try:
+        ru_mtime = job.ru_vtt.stat().st_mtime
+        return any(p.stat().st_mtime < ru_mtime for p in required)
+    except OSError:
+        return True
 
 
 def extract_audio(video_path: Path, sample_rate: int) -> Path:
@@ -969,6 +1008,180 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                 LOGGER.warning("Failed to delete temp audio file %s", audio_path)
 
 
+def process_transcription_only(job: VideoJob, args: argparse.Namespace) -> Dict:
+    """Phase 1: Transcribe audio to Russian VTT only."""
+    start_time = time.time()
+    LOGGER.info("[Transcription] Processing %s", job.video_path)
+
+    filter_words = load_filter_words()
+    audio_path: Optional[Path] = None
+
+    try:
+        audio_path = extract_audio(job.video_path, args.sample_rate)
+        LOGGER.debug("[Transcription] Loading model %s...", args.model)
+        model = get_model(args)
+        LOGGER.debug("[Transcription] Model loaded, starting transcription...")
+
+        ru_iter, ru_info = model.transcribe(
+            str(audio_path),
+            beam_size=args.beam_size,
+            language=args.source_language,
+            vad_filter=args.vad_filter,
+            task="transcribe",
+        )
+        ru_segments = list(ru_iter)
+        ru_content = segments_to_webvtt(ru_segments, filter_words=filter_words)
+        atomic_write(job.ru_vtt, ru_content)
+
+        duration = ru_info.duration if ru_info else 0.0
+        return {
+            "video_path": str(job.video_path),
+            "ru_vtt": str(job.ru_vtt),
+            "status": "success",
+            "phase": "transcription",
+            "duration": duration,
+            "processed_at": human_time(),
+            "processing_time_sec": round(time.time() - start_time, 2),
+        }
+
+    except Exception as exc:
+        LOGGER.error("[Transcription] Failed %s: %s", job.video_path, exc)
+        return {
+            "video_path": str(job.video_path),
+            "ru_vtt": str(job.ru_vtt),
+            "status": "error",
+            "phase": "transcription",
+            "error": str(exc),
+            "processed_at": human_time(),
+        }
+
+    finally:
+        if audio_path and audio_path.exists():
+            try:
+                audio_path.unlink()
+            except OSError:
+                LOGGER.warning("Failed to delete temp audio file %s", audio_path)
+
+
+def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
+    """Phase 2: Translate audio to English VTT, generate TTML and SMIL."""
+    start_time = time.time()
+    LOGGER.info("[Translation] Processing %s", job.video_path)
+
+    filter_words = load_filter_words()
+    metadata = probe_video_metadata(job.video_path)
+    audio_path: Optional[Path] = None
+
+    try:
+        # Read existing Russian VTT for segment count comparison
+        ru_content = job.ru_vtt.read_text(encoding="utf-8") if job.ru_vtt.exists() else ""
+        ru_cues = parse_vtt_content(ru_content) if ru_content else []
+
+        audio_path = extract_audio(job.video_path, args.sample_rate)
+
+        translation_model_name = args.translation_model or args.model
+        LOGGER.debug("[Translation] Loading model %s...", translation_model_name)
+        translation_model = get_model(args, model_name=translation_model_name)
+        LOGGER.debug("[Translation] Model loaded, starting translation...")
+
+        en_iter, en_info = translation_model.transcribe(
+            str(audio_path),
+            beam_size=args.beam_size,
+            language=args.source_language,
+            vad_filter=args.vad_filter,
+            task="translate",
+        )
+        en_segments = list(en_iter)
+
+        # Build a simple segment-like object for suspect check
+        class _Seg:
+            def __init__(self, text):
+                self.text = text
+        ru_seg_objs = [_Seg(c.get("text", "")) for c in ru_cues]
+
+        fallback_name = (args.translation_fallback_model or "").strip()
+        if fallback_name.lower() == "none":
+            fallback_name = ""
+
+        if (
+            fallback_name
+            and fallback_name != translation_model_name
+            and translation_output_suspect(ru_seg_objs, en_segments, args.translation_language)
+        ):
+            LOGGER.warning(
+                "[Translation] Model %s produced unexpected output; retrying with %s",
+                translation_model_name,
+                fallback_name,
+            )
+            translation_model = get_model(args, model_name=fallback_name)
+            en_iter, en_info = translation_model.transcribe(
+                str(audio_path),
+                beam_size=args.beam_size,
+                language=args.source_language,
+                vad_filter=args.vad_filter,
+                task="translate",
+            )
+            en_segments = list(en_iter)
+
+        en_content = segments_to_webvtt(en_segments, filter_words=filter_words)
+        atomic_write(job.en_vtt, en_content)
+
+        # Generate TTML
+        if not args.no_ttml:
+            en_cues = parse_vtt_content(en_content)
+            ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+            ttml_lang2 = LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
+            ttml_content = cues_to_ttml(
+                ru_cues,
+                en_cues,
+                lang1=ttml_lang1,
+                lang2=ttml_lang2,
+                filter_words=filter_words,
+            )
+            atomic_write(job.ttml, ttml_content)
+
+        write_smil(job, metadata, args)
+
+        duration = en_info.duration if en_info else (metadata.duration or 0.0)
+        record = {
+            "video_path": str(job.video_path),
+            "ru_vtt": str(job.ru_vtt),
+            "en_vtt": str(job.en_vtt),
+            "ttml": str(job.ttml) if not args.no_ttml else None,
+            "smil": str(job.smil),
+            "status": "success",
+            "phase": "translation",
+            "duration": duration,
+            "processed_at": human_time(),
+            "processing_time_sec": round(time.time() - start_time, 2),
+        }
+        manifest.append(record)
+        return record
+
+    except Exception as exc:
+        LOGGER.error("[Translation] Failed %s: %s", job.video_path, exc)
+        record = {
+            "video_path": str(job.video_path),
+            "ru_vtt": str(job.ru_vtt),
+            "en_vtt": str(job.en_vtt),
+            "ttml": str(job.ttml) if not args.no_ttml else None,
+            "smil": str(job.smil),
+            "status": "error",
+            "phase": "translation",
+            "error": str(exc),
+            "processed_at": human_time(),
+        }
+        manifest.append(record)
+        return record
+
+    finally:
+        if audio_path and audio_path.exists():
+            try:
+                audio_path.unlink()
+            except OSError:
+                LOGGER.warning("Failed to delete temp audio file %s", audio_path)
+
+
 def configure_logging(args: argparse.Namespace) -> None:
     log_level = logging.DEBUG if args.verbose else logging.INFO
     handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
@@ -1023,6 +1236,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
     parser.add_argument("--scan-cache", type=Path, default=Path("logs/scan_cache.json"), help="Path to scan cache file (default: logs/scan_cache.json)")
     parser.add_argument("--force-scan", action="store_true", help="Force a fresh scan even if cache exists")
+    parser.add_argument("--two-phase", action="store_true", help="Run transcriptions first (all), then translations (all) in separate phases")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args(argv)
 
@@ -1045,16 +1259,24 @@ def run(argv: Optional[List[str]] = None) -> int:
     # Prepare scan cache path
     scan_cache_path = args.scan_cache.resolve() if args.scan_cache else None
 
-    jobs = discover_video_jobs(
-        input_root,
-        output_root,
-        manifest,
-        args.force or args.smil_only,
-        extensions,
-        not args.no_ttml,
-        scan_cache_path=scan_cache_path,
-        force_scan=args.force_scan,
-    )
+    # Two-phase mode: discover all jobs, then filter separately for each phase
+    if args.two_phase:
+        return run_two_phase(args, input_root, output_root, manifest, extensions, scan_cache_path)
+
+    try:
+        jobs = discover_video_jobs(
+            input_root,
+            output_root,
+            manifest,
+            args.force or args.smil_only,
+            extensions,
+            not args.no_ttml,
+            scan_cache_path=scan_cache_path,
+            force_scan=args.force_scan,
+        )
+    except KeyboardInterrupt:
+        LOGGER.warning("Aborted during scan via Ctrl+C")
+        return 130
 
     if args.max_files is not None:
         if args.max_files <= 0:
@@ -1124,6 +1346,197 @@ def run(argv: Optional[List[str]] = None) -> int:
     )
 
     return 0 if failures == 0 else 1
+
+
+def run_two_phase(
+    args: argparse.Namespace,
+    input_root: Path,
+    output_root: Optional[Path],
+    manifest: Manifest,
+    extensions: List[str],
+    scan_cache_path: Optional[Path],
+) -> int:
+    """Run transcriptions first, then translations in separate phases."""
+    ttml_enabled = not args.no_ttml
+
+    # Discover ALL video jobs (force=True to get full list, we filter ourselves)
+    try:
+        all_jobs = discover_video_jobs(
+            input_root,
+            output_root,
+            manifest,
+            force=True,  # Get all candidates, we filter by phase
+            extensions=extensions,
+            ttml_enabled=ttml_enabled,
+            scan_cache_path=scan_cache_path,
+            force_scan=args.force_scan,
+        )
+    except KeyboardInterrupt:
+        LOGGER.warning("Aborted during scan via Ctrl+C")
+        return 130
+
+    if args.max_files is not None:
+        if args.max_files <= 0:
+            LOGGER.warning("--max-files must be greater than zero; no work will be performed")
+            all_jobs = []
+        else:
+            all_jobs = all_jobs[:args.max_files]
+
+    # Filter jobs for each phase in a SINGLE pass (respecting existing outputs)
+    LOGGER.info("Filtering jobs for both phases... checking %d files", len(all_jobs))
+    transcription_jobs = []
+    translation_jobs = []
+    last_log_time = time.time()
+    try:
+        for i, j in enumerate(all_jobs):
+            if needs_transcription(j):
+                transcription_jobs.append(j)
+            if needs_translation(j, ttml_enabled):
+                translation_jobs.append(j)
+            if time.time() - last_log_time >= 5:
+                LOGGER.info("  Filtering: checked %d/%d (%d transcription, %d translation)",
+                           i + 1, len(all_jobs), len(transcription_jobs), len(translation_jobs))
+                last_log_time = time.time()
+    except KeyboardInterrupt:
+        LOGGER.warning("Interrupted during filtering")
+        return 130
+
+    LOGGER.info(
+        "Two-phase mode: %d transcriptions needed, %d translations needed (from %d total videos)",
+        len(transcription_jobs),
+        len(translation_jobs),
+        len(all_jobs),
+    )
+
+    total_successes = 0
+    total_failures = 0
+
+    # Phase 1: Transcriptions
+    if transcription_jobs:
+        LOGGER.info("=== PHASE 1: Transcriptions (%d jobs) ===", len(transcription_jobs))
+        phase1_successes = 0
+        phase1_failures = 0
+
+        progress_bar = None
+        if args.progress and tqdm is not None:
+            progress_bar = tqdm(total=len(transcription_jobs), desc="Transcribing", unit="video")
+        elif args.progress and tqdm is None:
+            LOGGER.warning("tqdm is not installed; progress bar disabled")
+
+        try:
+            if args.workers > 1:
+                with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                    futures = [executor.submit(process_transcription_only, job, args) for job in transcription_jobs]
+                    try:
+                        for future in as_completed(futures):
+                            record = future.result()
+                            if record.get("status") == "success":
+                                phase1_successes += 1
+                            else:
+                                phase1_failures += 1
+                            if progress_bar is not None:
+                                progress_bar.update(1)
+                    except KeyboardInterrupt:
+                        LOGGER.warning("Interrupted. Cancelling remaining transcription jobs...")
+                        for future in futures:
+                            future.cancel()
+                        raise
+            else:
+                for job in transcription_jobs:
+                    record = process_transcription_only(job, args)
+                    if record.get("status") == "success":
+                        phase1_successes += 1
+                    else:
+                        phase1_failures += 1
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+        except KeyboardInterrupt:
+            if progress_bar is not None:
+                progress_bar.close()
+            LOGGER.warning("Phase 1 aborted via Ctrl+C")
+            return 130
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        LOGGER.info(
+            "Phase 1 complete: %d success, %d failures",
+            phase1_successes,
+            phase1_failures,
+        )
+        total_successes += phase1_successes
+        total_failures += phase1_failures
+
+        # Re-evaluate translation jobs after transcription phase
+        # (newly transcribed files may now be ready for translation)
+        translation_jobs = [j for j in all_jobs if needs_translation(j, ttml_enabled)]
+        LOGGER.info("After Phase 1: %d translations now needed", len(translation_jobs))
+    else:
+        LOGGER.info("=== PHASE 1: No transcriptions needed ===")
+
+    # Phase 2: Translations
+    if translation_jobs:
+        LOGGER.info("=== PHASE 2: Translations (%d jobs) ===", len(translation_jobs))
+        phase2_successes = 0
+        phase2_failures = 0
+
+        progress_bar = None
+        if args.progress and tqdm is not None:
+            progress_bar = tqdm(total=len(translation_jobs), desc="Translating", unit="video")
+
+        try:
+            if args.workers > 1:
+                with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                    futures = [executor.submit(process_translation_only, job, args, manifest) for job in translation_jobs]
+                    try:
+                        for future in as_completed(futures):
+                            record = future.result()
+                            if record.get("status") == "success":
+                                phase2_successes += 1
+                            else:
+                                phase2_failures += 1
+                            if progress_bar is not None:
+                                progress_bar.update(1)
+                    except KeyboardInterrupt:
+                        LOGGER.warning("Interrupted. Cancelling remaining translation jobs...")
+                        for future in futures:
+                            future.cancel()
+                        raise
+            else:
+                for job in translation_jobs:
+                    record = process_translation_only(job, args, manifest)
+                    if record.get("status") == "success":
+                        phase2_successes += 1
+                    else:
+                        phase2_failures += 1
+                    if progress_bar is not None:
+                        progress_bar.update(1)
+        except KeyboardInterrupt:
+            if progress_bar is not None:
+                progress_bar.close()
+            LOGGER.warning("Phase 2 aborted via Ctrl+C")
+            return 130
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        LOGGER.info(
+            "Phase 2 complete: %d success, %d failures",
+            phase2_successes,
+            phase2_failures,
+        )
+        total_successes += phase2_successes
+        total_failures += phase2_failures
+    else:
+        LOGGER.info("=== PHASE 2: No translations needed ===")
+
+    LOGGER.info(
+        "Two-phase processing complete: %d total success, %d total failures",
+        total_successes,
+        total_failures,
+    )
+
+    return 0 if total_failures == 0 else 1
 
 
 def main() -> None:
