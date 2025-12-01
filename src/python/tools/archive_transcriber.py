@@ -1008,10 +1008,11 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                 LOGGER.warning("Failed to delete temp audio file %s", audio_path)
 
 
-def process_transcription_only(job: VideoJob, args: argparse.Namespace) -> Dict:
+def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: bool = False) -> Dict:
     """Phase 1: Transcribe audio to Russian VTT only."""
     start_time = time.time()
-    LOGGER.info("[Transcription] Processing %s", job.video_path)
+    if not quiet:
+        LOGGER.info("[Transcription] Processing %s", job.video_path)
 
     filter_words = load_filter_words()
     audio_path: Optional[Path] = None
@@ -1063,10 +1064,11 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace) -> Dict:
                 LOGGER.warning("Failed to delete temp audio file %s", audio_path)
 
 
-def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
+def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: Manifest, quiet: bool = False) -> Dict:
     """Phase 2: Translate audio to English VTT, generate TTML and SMIL."""
     start_time = time.time()
-    LOGGER.info("[Translation] Processing %s", job.video_path)
+    if not quiet:
+        LOGGER.info("[Translation] Processing %s", job.video_path)
 
     filter_words = load_filter_words()
     metadata = probe_video_metadata(job.video_path)
@@ -1413,9 +1415,10 @@ def run_two_phase(
 
     # Phase 1: Transcriptions
     if transcription_jobs:
-        LOGGER.info("=== PHASE 1: Transcriptions (%d jobs) ===", len(transcription_jobs))
+        LOGGER.info("=== PHASE 1: Transcriptions (%d jobs, %d workers) ===", len(transcription_jobs), args.workers)
         phase1_successes = 0
         phase1_failures = 0
+        quiet_mode = args.workers > 1  # Reduce log noise with multiple workers
 
         progress_bar = None
         if args.progress and tqdm is not None:
@@ -1423,19 +1426,26 @@ def run_two_phase(
         elif args.progress and tqdm is None:
             LOGGER.warning("tqdm is not installed; progress bar disabled")
 
+        def update_progress(record: Dict) -> None:
+            nonlocal phase1_successes, phase1_failures
+            if record.get("status") == "success":
+                phase1_successes += 1
+            else:
+                phase1_failures += 1
+                # Always log errors even in quiet mode
+                if quiet_mode:
+                    LOGGER.error("[Transcription] Failed: %s", record.get("error", "unknown"))
+            if progress_bar is not None:
+                progress_bar.set_postfix(ok=phase1_successes, fail=phase1_failures, refresh=False)
+                progress_bar.update(1)
+
         try:
             if args.workers > 1:
                 with ThreadPoolExecutor(max_workers=args.workers) as executor:
-                    futures = [executor.submit(process_transcription_only, job, args) for job in transcription_jobs]
+                    futures = [executor.submit(process_transcription_only, job, args, quiet_mode) for job in transcription_jobs]
                     try:
                         for future in as_completed(futures):
-                            record = future.result()
-                            if record.get("status") == "success":
-                                phase1_successes += 1
-                            else:
-                                phase1_failures += 1
-                            if progress_bar is not None:
-                                progress_bar.update(1)
+                            update_progress(future.result())
                     except KeyboardInterrupt:
                         LOGGER.warning("Interrupted. Cancelling remaining transcription jobs...")
                         for future in futures:
@@ -1443,13 +1453,8 @@ def run_two_phase(
                         raise
             else:
                 for job in transcription_jobs:
-                    record = process_transcription_only(job, args)
-                    if record.get("status") == "success":
-                        phase1_successes += 1
-                    else:
-                        phase1_failures += 1
-                    if progress_bar is not None:
-                        progress_bar.update(1)
+                    record = process_transcription_only(job, args, quiet_mode)
+                    update_progress(record)
         except KeyboardInterrupt:
             if progress_bar is not None:
                 progress_bar.close()
@@ -1476,27 +1481,35 @@ def run_two_phase(
 
     # Phase 2: Translations
     if translation_jobs:
-        LOGGER.info("=== PHASE 2: Translations (%d jobs) ===", len(translation_jobs))
+        LOGGER.info("=== PHASE 2: Translations (%d jobs, %d workers) ===", len(translation_jobs), args.workers)
         phase2_successes = 0
         phase2_failures = 0
+        quiet_mode = args.workers > 1  # Reduce log noise with multiple workers
 
         progress_bar = None
         if args.progress and tqdm is not None:
             progress_bar = tqdm(total=len(translation_jobs), desc="Translating", unit="video")
 
+        def update_progress2(record: Dict) -> None:
+            nonlocal phase2_successes, phase2_failures
+            if record.get("status") == "success":
+                phase2_successes += 1
+            else:
+                phase2_failures += 1
+                # Always log errors even in quiet mode
+                if quiet_mode:
+                    LOGGER.error("[Translation] Failed: %s", record.get("error", "unknown"))
+            if progress_bar is not None:
+                progress_bar.set_postfix(ok=phase2_successes, fail=phase2_failures, refresh=False)
+                progress_bar.update(1)
+
         try:
             if args.workers > 1:
                 with ThreadPoolExecutor(max_workers=args.workers) as executor:
-                    futures = [executor.submit(process_translation_only, job, args, manifest) for job in translation_jobs]
+                    futures = [executor.submit(process_translation_only, job, args, manifest, quiet_mode) for job in translation_jobs]
                     try:
                         for future in as_completed(futures):
-                            record = future.result()
-                            if record.get("status") == "success":
-                                phase2_successes += 1
-                            else:
-                                phase2_failures += 1
-                            if progress_bar is not None:
-                                progress_bar.update(1)
+                            update_progress2(future.result())
                     except KeyboardInterrupt:
                         LOGGER.warning("Interrupted. Cancelling remaining translation jobs...")
                         for future in futures:
@@ -1504,13 +1517,8 @@ def run_two_phase(
                         raise
             else:
                 for job in translation_jobs:
-                    record = process_translation_only(job, args, manifest)
-                    if record.get("status") == "success":
-                        phase2_successes += 1
-                    else:
-                        phase2_failures += 1
-                    if progress_bar is not None:
-                        progress_bar.update(1)
+                    record = process_translation_only(job, args, manifest, quiet_mode)
+                    update_progress2(record)
         except KeyboardInterrupt:
             if progress_bar is not None:
                 progress_bar.close()
