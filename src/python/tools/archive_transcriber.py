@@ -1428,13 +1428,15 @@ def run_two_phase(
 
         def update_progress(record: Dict) -> None:
             nonlocal phase1_successes, phase1_failures
+            video_path = record.get("video_path", "unknown")
             if record.get("status") == "success":
                 phase1_successes += 1
+                if quiet_mode:
+                    LOGGER.info("[Transcription] Done: %s", video_path)
             else:
                 phase1_failures += 1
-                # Always log errors even in quiet mode
-                if quiet_mode:
-                    LOGGER.error("[Transcription] Failed: %s", record.get("error", "unknown"))
+                # Always log errors with full path
+                LOGGER.error("[Transcription] Failed %s: %s", video_path, record.get("error", "unknown"))
             if progress_bar is not None:
                 progress_bar.set_postfix(ok=phase1_successes, fail=phase1_failures, refresh=False)
                 progress_bar.update(1)
@@ -1492,13 +1494,15 @@ def run_two_phase(
 
         def update_progress2(record: Dict) -> None:
             nonlocal phase2_successes, phase2_failures
+            video_path = record.get("video_path", "unknown")
             if record.get("status") == "success":
                 phase2_successes += 1
+                if quiet_mode:
+                    LOGGER.info("[Translation] Done: %s", video_path)
             else:
                 phase2_failures += 1
-                # Always log errors even in quiet mode
-                if quiet_mode:
-                    LOGGER.error("[Translation] Failed: %s", record.get("error", "unknown"))
+                # Always log errors with full path
+                LOGGER.error("[Translation] Failed %s: %s", video_path, record.get("error", "unknown"))
             if progress_bar is not None:
                 progress_bar.set_postfix(ok=phase2_successes, fail=phase2_failures, refresh=False)
                 progress_bar.update(1)
