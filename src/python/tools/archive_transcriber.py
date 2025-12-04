@@ -287,9 +287,59 @@ class WhisperModelHolder(threading.local):
     def __init__(self) -> None:
         super().__init__()
         self.models: Dict[str, WhisperModel] = {}
+        self.assigned_gpu: Optional[int] = None
+        self.worker_id: Optional[int] = None
 
 
 MODEL_HOLDER = WhisperModelHolder()
+
+
+class GPUAssigner:
+    """Round-robin GPU assignment for worker threads."""
+
+    def __init__(self, gpu_ids: List[int]):
+        self.gpu_ids = gpu_ids
+        self.counter = 0
+        self.lock = threading.Lock()
+
+    def _ensure_assigned(self) -> None:
+        """Ensure current thread has a GPU assignment."""
+        if MODEL_HOLDER.assigned_gpu is None:
+            with self.lock:
+                worker_id = self.counter
+                gpu_idx = self.gpu_ids[self.counter % len(self.gpu_ids)]
+                self.counter += 1
+            MODEL_HOLDER.assigned_gpu = gpu_idx
+            MODEL_HOLDER.worker_id = worker_id
+            LOGGER.info("Worker %d assigned to GPU %d", worker_id, gpu_idx)
+
+    def get_gpu_index(self) -> int:
+        """Get the GPU index (int) for the current thread. Used by faster-whisper."""
+        self._ensure_assigned()
+        return MODEL_HOLDER.assigned_gpu
+
+
+GPU_ASSIGNER: Optional[GPUAssigner] = None
+
+
+def get_worker_info() -> str:
+    """Get worker/GPU info string for logging."""
+    if MODEL_HOLDER.worker_id is not None and MODEL_HOLDER.assigned_gpu is not None:
+        return f"W{MODEL_HOLDER.worker_id}/GPU{MODEL_HOLDER.assigned_gpu}"
+    return ""
+
+
+def init_gpu_assigner(args: argparse.Namespace) -> None:
+    """Initialize GPU_ASSIGNER if --gpus is specified."""
+    global GPU_ASSIGNER
+    if args.gpus:
+        try:
+            gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
+            if gpu_ids:
+                GPU_ASSIGNER = GPUAssigner(gpu_ids)
+                LOGGER.info("Multi-GPU mode enabled: using GPUs %s with %d workers", gpu_ids, args.workers)
+        except ValueError as e:
+            LOGGER.warning("Invalid --gpus value '%s': %s. Using single GPU.", args.gpus, e)
 
 
 def get_model(
@@ -302,26 +352,37 @@ def get_model(
     if name in MODEL_HOLDER.models:
         return MODEL_HOLDER.models[name]
 
-    device = "cuda" if args.use_cuda else "cpu"
+    # Determine device and device_index for multi-GPU support
+    # faster-whisper expects device="cuda" and device_index=<int> for specific GPU
+    device_index = 0
+    if args.use_cuda and GPU_ASSIGNER is not None:
+        device = "cuda"
+        device_index = GPU_ASSIGNER.get_gpu_index()
+    elif args.use_cuda:
+        device = "cuda"
+    else:
+        device = "cpu"
     selected_compute_type = compute_type or args.compute_type
 
-    def instantiate(target_device: str, target_compute_type: str) -> WhisperModel:
+    def instantiate(target_device: str, target_device_index: int, target_compute_type: str) -> WhisperModel:
         LOGGER.info(
-            "Loading Whisper model %s (device=%s, compute_type=%s)...",
+            "Loading Whisper model %s (device=%s, device_index=%d, compute_type=%s)...",
             name,
             target_device,
+            target_device_index,
             target_compute_type,
         )
         model = WhisperModel(
             name,
             device=target_device,
+            device_index=target_device_index,
             compute_type=target_compute_type,
         )
-        LOGGER.info("Model %s loaded successfully", name)
+        LOGGER.info("Model %s loaded successfully on GPU %d", name, target_device_index)
         return model
 
     try:
-        MODEL_HOLDER.models[name] = instantiate(device, selected_compute_type)
+        MODEL_HOLDER.models[name] = instantiate(device, device_index, selected_compute_type)
     except RuntimeError as exc:
         if args.use_cuda:
             LOGGER.warning(
@@ -329,7 +390,7 @@ def get_model(
                 name,
                 exc,
             )
-            MODEL_HOLDER.models[name] = instantiate("cpu", "float32")
+            MODEL_HOLDER.models[name] = instantiate("cpu", 0, "float32")
         else:
             raise
 
@@ -1043,6 +1104,7 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
             "duration": duration,
             "processed_at": human_time(),
             "processing_time_sec": round(time.time() - start_time, 2),
+            "worker_info": get_worker_info(),
         }
 
     except Exception as exc:
@@ -1054,6 +1116,7 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
             "phase": "transcription",
             "error": str(exc),
             "processed_at": human_time(),
+            "worker_info": get_worker_info(),
         }
 
     finally:
@@ -1156,6 +1219,7 @@ def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: 
             "duration": duration,
             "processed_at": human_time(),
             "processing_time_sec": round(time.time() - start_time, 2),
+            "worker_info": get_worker_info(),
         }
         manifest.append(record)
         return record
@@ -1172,6 +1236,7 @@ def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: 
             "phase": "translation",
             "error": str(exc),
             "processed_at": human_time(),
+            "worker_info": get_worker_info(),
         }
         manifest.append(record)
         return record
@@ -1229,6 +1294,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--vad-filter", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=False, help="Enable Silero VAD filtering")
     parser.add_argument("--extensions", type=str, default=",".join(sorted(VIDEO_EXTENSIONS)), help="Comma-separated list of video extensions to include")
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
+    parser.add_argument("--gpus", type=str, default=None, help="Comma-separated GPU IDs to use (e.g., '0,1'). Workers are distributed round-robin across GPUs.")
     parser.add_argument("--max-files", type=int, help="Limit the number of videos processed in this run")
     parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL manifests without creating or updating VTT files")
     parser.add_argument("--no-ttml", action="store_true", help="Skip TTML file generation (generate only VTT files)")
@@ -1254,6 +1320,9 @@ def run(argv: Optional[List[str]] = None) -> int:
     if not input_root.exists():
         LOGGER.error("Input root %s does not exist", input_root)
         return 2
+
+    # Initialize multi-GPU support if requested
+    init_gpu_assigner(args)
 
     manifest = Manifest(args.manifest.resolve())
     extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
@@ -1429,14 +1498,16 @@ def run_two_phase(
         def update_progress(record: Dict) -> None:
             nonlocal phase1_successes, phase1_failures
             video_path = record.get("video_path", "unknown")
+            worker_info = record.get("worker_info", "")
+            worker_tag = f"[{worker_info}] " if worker_info else ""
             if record.get("status") == "success":
                 phase1_successes += 1
                 if quiet_mode:
-                    LOGGER.info("[Transcription] Done: %s", video_path)
+                    LOGGER.info("%s[Transcription] Done: %s", worker_tag, video_path)
             else:
                 phase1_failures += 1
                 # Always log errors with full path
-                LOGGER.error("[Transcription] Failed %s: %s", video_path, record.get("error", "unknown"))
+                LOGGER.error("%s[Transcription] Failed %s: %s", worker_tag, video_path, record.get("error", "unknown"))
             if progress_bar is not None:
                 progress_bar.set_postfix(ok=phase1_successes, fail=phase1_failures, refresh=False)
                 progress_bar.update(1)
@@ -1495,14 +1566,16 @@ def run_two_phase(
         def update_progress2(record: Dict) -> None:
             nonlocal phase2_successes, phase2_failures
             video_path = record.get("video_path", "unknown")
+            worker_info = record.get("worker_info", "")
+            worker_tag = f"[{worker_info}] " if worker_info else ""
             if record.get("status") == "success":
                 phase2_successes += 1
                 if quiet_mode:
-                    LOGGER.info("[Translation] Done: %s", video_path)
+                    LOGGER.info("%s[Translation] Done: %s", worker_tag, video_path)
             else:
                 phase2_failures += 1
                 # Always log errors with full path
-                LOGGER.error("[Translation] Failed %s: %s", video_path, record.get("error", "unknown"))
+                LOGGER.error("%s[Translation] Failed %s: %s", worker_tag, video_path, record.get("error", "unknown"))
             if progress_bar is not None:
                 progress_bar.set_postfix(ok=phase2_successes, fail=phase2_failures, refresh=False)
                 progress_bar.update(1)
