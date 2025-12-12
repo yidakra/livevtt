@@ -912,6 +912,109 @@ def atomic_write(path: Path, content: str) -> None:
     tmp_path.replace(path)
 
 
+def detect_audio_start_time(audio_path: Path, segments: list = None, threshold: float = -40.0) -> float:
+    """
+    Detect when audio actually starts using either FFmpeg silence detection or segment analysis.
+
+    Args:
+        audio_path: Path to audio/video file
+        segments: Optional list of Whisper segments to analyze
+        threshold: Silence threshold in dB for FFmpeg detection
+
+    Returns:
+        Time in seconds when non-silent audio begins, or 0.0 if detection fails
+    """
+    # First try FFmpeg silence detection
+    cmd = [
+        "ffmpeg", "-i", str(audio_path),
+        "-af", f"silencedetect=noise={threshold}dB:d=0.5",
+        "-f", "null", "-"
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # Parse FFmpeg output for silence end times
+        silence_end_times = []
+        for line in result.stderr.split('\n'):
+            if 'silence_end:' in line:
+                # Extract the time value
+                parts = line.split('silence_end:')
+                if len(parts) > 1:
+                    time_str = parts[1].split()[0]
+                    try:
+                        silence_end_times.append(float(time_str))
+                    except ValueError:
+                        continue
+
+        # If we found silence periods at the very beginning (< 5 seconds), trim by that amount
+        # This helps with videos that have 1-2 seconds of silence before speech starts
+        if silence_end_times:
+            earliest_silence_end = min(silence_end_times)
+            if earliest_silence_end < 5.0:  # Only trim if silence ends within first 5 seconds
+                return earliest_silence_end
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    # Fallback: Analyze Whisper segments for unusually long first segment
+    # Only apply if FFmpeg detection failed AND first segment is extremely problematic
+    if segments and len(segments) > 2:  # Need at least 3 segments for reliable analysis
+        first_segment = segments[0]
+        avg_duration = sum(s.end - s.start for s in segments[1:]) / len(segments[1:])  # Exclude first segment from average
+
+        # Very conservative: only trim if first segment is > 45 seconds (extremely long)
+        # AND much longer than the average of other segments
+        first_duration = first_segment.end - first_segment.start
+        if first_duration > 45.0 and first_duration > avg_duration * 4:
+            # Estimate where actual speech starts - use a larger offset for very long segments
+            offset = min(8.0, first_duration * 0.2)  # 20% of segment or 8 seconds max
+            estimated_start = max(0, first_segment.start + offset)
+            return min(estimated_start, first_segment.end - 5.0)  # Don't trim too close to end
+
+    return 0.0
+
+
+def adjust_vtt_timestamps(vtt_content: str, offset_seconds: float) -> str:
+    """
+    Adjust all VTT timestamps by subtracting an offset.
+    Only adjusts timestamps that are after the offset to avoid negative times.
+    """
+    if offset_seconds <= 0:
+        return vtt_content
+
+    def adjust_timestamp(ts: str) -> str:
+        # Convert HH:MM:SS.mmm to seconds, subtract offset, convert back
+        parts = ts.split(':')
+        if len(parts) == 3:
+            hours, minutes, seconds = parts
+            total_seconds = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+            adjusted = max(0, total_seconds - offset_seconds)
+
+            # Convert back to HH:MM:SS.mmm
+            h = int(adjusted // 3600)
+            m = int((adjusted % 3600) // 60)
+            s = adjusted % 60
+            return f"{h:02}:{m:02}:{s:06.3f}"
+        return ts
+
+    lines = vtt_content.split('\n')
+    adjusted_lines = []
+
+    for line in lines:
+        if '-->' in line:
+            # This is a timestamp line like "00:00:05.340 --> 00:00:10.360"
+            parts = line.split(' --> ')
+            if len(parts) == 2:
+                start_ts = adjust_timestamp(parts[0].strip())
+                end_ts = adjust_timestamp(parts[1].strip())
+                adjusted_lines.append(f"{start_ts} --> {end_ts}")
+            else:
+                adjusted_lines.append(line)
+        else:
+            adjusted_lines.append(line)
+
+    return '\n'.join(adjusted_lines)
+
+
 def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
     """
     Process a single VideoJob: transcribe/translate audio if needed, write VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
@@ -991,6 +1094,17 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
             ru_content = segments_to_webvtt(ru_segments, filter_words=filter_words)
             en_content = segments_to_webvtt(en_segments, filter_words=filter_words)
+
+            # Optionally trim silence from beginning of VTT files
+            if args.trim_silence:
+                # Use the longer segment list for better detection
+                if len(ru_segments) >= len(en_segments):
+                    audio_start = detect_audio_start_time(audio_path, ru_segments)
+                else:
+                    audio_start = detect_audio_start_time(audio_path, en_segments)
+                if audio_start > 0:
+                    ru_content = adjust_vtt_timestamps(ru_content, audio_start)
+                    en_content = adjust_vtt_timestamps(en_content, audio_start)
 
             atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, en_content)
@@ -1093,6 +1207,16 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
         )
         ru_segments = list(ru_iter)
         ru_content = segments_to_webvtt(ru_segments, filter_words=filter_words)
+
+        # Optionally trim silence from beginning of VTT
+        if args.trim_silence:
+            audio_start = detect_audio_start_time(audio_path, ru_segments)
+            if audio_start > 0:
+                LOGGER.info(f"[Transcription] Detected audio start at {audio_start:.2f}s, adjusting timestamps")
+                ru_content = adjust_vtt_timestamps(ru_content, audio_start)
+            else:
+                LOGGER.info(f"[Transcription] No silence trimming needed (audio_start={audio_start:.2f})")
+
         atomic_write(job.ru_vtt, ru_content)
 
         duration = ru_info.duration if ru_info else 0.0
@@ -1189,6 +1313,18 @@ def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: 
             en_segments = list(en_iter)
 
         en_content = segments_to_webvtt(en_segments, filter_words=filter_words)
+
+        # Optionally trim silence from beginning of VTT files
+        if args.trim_silence:
+            audio_start = detect_audio_start_time(audio_path, en_segments)
+            if audio_start > 0:
+                en_content = adjust_vtt_timestamps(en_content, audio_start)
+                # Also adjust Russian VTT for consistency
+                if job.ru_vtt.exists():
+                    ru_content = job.ru_vtt.read_text(encoding="utf-8")
+                    ru_content = adjust_vtt_timestamps(ru_content, audio_start)
+                    atomic_write(job.ru_vtt, ru_content)
+
         atomic_write(job.en_vtt, en_content)
 
         # Generate TTML
@@ -1291,7 +1427,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
     parser.add_argument("--sample-rate", type=int, default=16000, help="Audio sample rate for extraction")
-    parser.add_argument("--vad-filter", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=False, help="Enable Silero VAD filtering")
+    parser.add_argument("--vad-filter", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=True, help="Enable Silero VAD filtering (default: enabled)")
+    parser.add_argument("--trim-silence", action="store_true", help="Trim silence from beginning of VTT files (experimental)")
     parser.add_argument("--extensions", type=str, default=",".join(sorted(VIDEO_EXTENSIONS)), help="Comma-separated list of video extensions to include")
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument("--gpus", type=str, default=None, help="Comma-separated GPU IDs to use (e.g., '0,1'). Workers are distributed round-robin across GPUs.")
