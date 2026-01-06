@@ -1286,7 +1286,7 @@ def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: 
         class _Seg:
             def __init__(self, text):
                 self.text = text
-        ru_seg_objs = [_Seg(c.get("text", "")) for c in ru_cues]
+        ru_seg_objs = [_Seg(c.text) for c in ru_cues]
 
         fallback_name = (args.translation_fallback_model or "").strip()
         if fallback_name.lower() == "none":
