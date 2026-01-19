@@ -2,6 +2,7 @@
 """Unit tests for SMIL manifest generation."""
 
 import importlib
+import logging
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -216,15 +217,14 @@ class TestSMILGeneration:
         assert len(wowza_textstreams) == 2
 
 
-    def test_smil_missing_vtt_warning(self, video_job_missing_vtts, metadata, args):
+    def test_smil_missing_vtt_warning(self, video_job_missing_vtts, metadata, args, caplog):
         """Test that SMIL generation handles missing VTT files."""
-        # Should not crash, just skip missing textstreams
-        original_level = archive_transcriber.LOGGER.level
-        archive_transcriber.LOGGER.setLevel("ERROR")
-        try:
+        # Should not crash, just skip missing textstreams and emit warnings
+        with caplog.at_level(logging.WARNING):
             write_smil(video_job_missing_vtts, metadata, args)
-        finally:
-            archive_transcriber.LOGGER.setLevel(original_level)
+
+        # Should have emitted a warning about missing VTT
+        assert any("vtt" in r.message.lower() for r in caplog.records)
 
         # SMIL should still be created with video element
         assert video_job_missing_vtts.smil.exists()
