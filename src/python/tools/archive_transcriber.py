@@ -1571,10 +1571,10 @@ def run(argv: Optional[List[str]] = None) -> int:
                             LOGGER.warning(
                                 "Shutdown requested during processing. Finishing current batch..."
                             )
-                            executor.shutdown(wait=False)
-                            for pending_future in futures:
-                                if not pending_future.done():
-                                    pending_future.cancel()
+                            # Cancel pending futures - completed ones will no-op
+                            for f in futures:
+                                f.cancel()
+                            # Note: exiting the with-block will wait for running tasks
                             break
                 except KeyboardInterrupt:
                     LOGGER.warning("Interrupted by user. Cancelling remaining jobs...")
