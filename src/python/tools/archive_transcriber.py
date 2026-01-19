@@ -48,9 +48,6 @@ def signal_handler(signum, frame):
         LOGGER.warning("Force shutdown requested. Exiting immediately...")
         sys.exit(130)
 
-# Register signal handler for graceful shutdown
-signal.signal(signal.SIGINT, signal_handler)
-
 try:  # Optional progress feedback
     from tqdm import tqdm  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
@@ -71,6 +68,9 @@ RESOLUTION_TOKEN_PATTERN = re.compile(r"([_.-])(\d{3,4})p(?=([_.-]|$))", re.IGNO
 
 
 LOGGER = logging.getLogger("archive_transcriber")
+
+# Register signal handler for graceful shutdown
+signal.signal(signal.SIGINT, signal_handler)
 
 # ISO 639-1 (2-letter) to ISO 639-2 (3-letter) language code mapping for TTML
 LANG_CODE_2_TO_3 = {
@@ -385,14 +385,16 @@ def get_model(
             if torch.cuda.is_available():
                 gpu_memory = torch.cuda.get_device_properties(device_index).total_memory
                 allocated_memory = torch.cuda.memory_allocated(device_index)
-                free_memory = gpu_memory - allocated_memory
+                reserved_memory = torch.cuda.memory_reserved(device_index)
+                free_memory = gpu_memory - (allocated_memory + reserved_memory)
 
                 # Warn if less than 2GB free
                 if free_memory < 2 * 1024**3:
-                    LOGGER.warning(f"Low GPU memory: {free_memory / 1024**3:.1f}GB free. "
-                                 f"Consider using --no-cuda or processing smaller files.")
+                    LOGGER.warning("Low GPU memory: %.1fGB free. "
+                                 "Consider using --no-cuda or processing smaller files.",
+                                 free_memory / 1024**3)
         except Exception as e:
-            LOGGER.debug(f"Could not check GPU memory: {e}")
+            LOGGER.debug("Could not check GPU memory: %s", e)
 
     def instantiate(target_device: str, target_device_index: int, target_compute_type: str) -> WhisperModel:
         LOGGER.info(
@@ -1195,7 +1197,8 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
         error_type = type(exc).__name__
 
         # Handle CUDA out of memory specifically
-        if "out of memory" in error_msg.lower() or "CUDA" in error_msg:
+        lower_msg = error_msg.lower()
+        if "out of memory" in lower_msg or "cuda out of memory" in lower_msg or "unable to allocate" in lower_msg or "memory allocation" in lower_msg:
             LOGGER.error("CUDA error processing %s: %s", job.video_path, exc)
             LOGGER.info("Consider: --no-cuda flag, smaller batch size, or processing on CPU")
             error_msg = f"CUDA memory error: {error_msg}"
@@ -1564,15 +1567,20 @@ def run(argv: Optional[List[str]] = None) -> int:
                             failures += 1
                         if progress_bar is not None:
                             progress_bar.update(1)
+                        if shutdown_requested:
+                            LOGGER.warning(
+                                "Shutdown requested during processing. Finishing current batch..."
+                            )
+                            executor.shutdown(wait=False)
+                            for pending_future in futures:
+                                if not pending_future.done():
+                                    pending_future.cancel()
+                            break
                 except KeyboardInterrupt:
                     LOGGER.warning("Interrupted by user. Cancelling remaining jobs...")
                     for future in futures:
                         future.cancel()
                     raise
-                # Check for shutdown signal between jobs
-                if shutdown_requested:
-                    LOGGER.warning("Shutdown requested during processing. Finishing current batch...")
-                    executor.shutdown(wait=False)
         else:
             for job in jobs:
                 if shutdown_requested:
