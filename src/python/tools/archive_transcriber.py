@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -31,16 +32,29 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from faster_whisper import WhisperModel  # type: ignore
+from ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words, should_filter_cue  # type: ignore
+
+# Global flag for graceful shutdown
+shutdown_requested = False
+
+def signal_handler(signum, frame):
+    """Handle SIGINT (Ctrl+C) gracefully."""
+    global shutdown_requested
+    if not shutdown_requested:
+        shutdown_requested = True
+        LOGGER.warning("Shutdown requested. Finishing current jobs...")
+    else:
+        LOGGER.warning("Force shutdown requested. Exiting immediately...")
+        sys.exit(130)
+
+# Register signal handler for graceful shutdown
+signal.signal(signal.SIGINT, signal_handler)
 
 try:  # Optional progress feedback
     from tqdm import tqdm  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
     tqdm = None
-
-from faster_whisper import WhisperModel  # type: ignore
-
-# Import TTML utilities
-from ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words, should_filter_cue
 
 
 VIDEO_EXTENSIONS = {
@@ -363,6 +377,22 @@ def get_model(
     else:
         device = "cpu"
     selected_compute_type = compute_type or args.compute_type
+
+    # Check GPU memory before loading CUDA model
+    if device == "cuda":
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_memory = torch.cuda.get_device_properties(device_index).total_memory
+                allocated_memory = torch.cuda.memory_allocated(device_index)
+                free_memory = gpu_memory - allocated_memory
+
+                # Warn if less than 2GB free
+                if free_memory < 2 * 1024**3:
+                    LOGGER.warning(f"Low GPU memory: {free_memory / 1024**3:.1f}GB free. "
+                                 f"Consider using --no-cuda or processing smaller files.")
+        except Exception as e:
+            LOGGER.debug(f"Could not check GPU memory: {e}")
 
     def instantiate(target_device: str, target_device_index: int, target_compute_type: str) -> WhisperModel:
         LOGGER.info(
@@ -1161,7 +1191,17 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
         return record
 
     except Exception as exc:
-        LOGGER.error("Failed to process %s: %s", job.video_path, exc)
+        error_msg = str(exc)
+        error_type = type(exc).__name__
+
+        # Handle CUDA out of memory specifically
+        if "out of memory" in error_msg.lower() or "CUDA" in error_msg:
+            LOGGER.error("CUDA error processing %s: %s", job.video_path, exc)
+            LOGGER.info("Consider: --no-cuda flag, smaller batch size, or processing on CPU")
+            error_msg = f"CUDA memory error: {error_msg}"
+        else:
+            LOGGER.error("Failed to process %s (%s): %s", job.video_path, error_type, exc)
+
         record = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
@@ -1169,7 +1209,8 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             "ttml": str(job.ttml) if not args.no_ttml else None,
             "smil": str(job.smil),
             "status": "error",
-            "error": str(exc),
+            "error": error_msg,
+            "error_type": error_type,
             "processed_at": human_time(),
         }
         manifest.append(record)
@@ -1528,8 +1569,15 @@ def run(argv: Optional[List[str]] = None) -> int:
                     for future in futures:
                         future.cancel()
                     raise
+                # Check for shutdown signal between jobs
+                if shutdown_requested:
+                    LOGGER.warning("Shutdown requested during processing. Finishing current batch...")
+                    executor.shutdown(wait=False)
         else:
             for job in jobs:
+                if shutdown_requested:
+                    LOGGER.warning("Shutdown requested during sequential processing. Stopping...")
+                    break
                 record = process_job(job, args, manifest)
                 if record.get("status") == "success":
                     successes += 1
