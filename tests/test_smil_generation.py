@@ -219,7 +219,12 @@ class TestSMILGeneration:
     def test_smil_missing_vtt_warning(self, video_job_missing_vtts, metadata, args):
         """Test that SMIL generation handles missing VTT files."""
         # Should not crash, just skip missing textstreams
-        write_smil(video_job_missing_vtts, metadata, args)
+        original_level = archive_transcriber.LOGGER.level
+        archive_transcriber.LOGGER.setLevel("ERROR")
+        try:
+            write_smil(video_job_missing_vtts, metadata, args)
+        finally:
+            archive_transcriber.LOGGER.setLevel(original_level)
 
         # SMIL should still be created with video element
         assert video_job_missing_vtts.smil.exists()

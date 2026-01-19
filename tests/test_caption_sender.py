@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for caption_sender.py utility."""
 
+import logging
 import sys
 from pathlib import Path
 from unittest import mock
@@ -37,12 +38,17 @@ class TestSendCaption:
         mock_response.status_code = 404
         mock_response.text = "Stream not found"
 
-        with mock.patch('caption_sender.requests.post', return_value=mock_response):
-            result = caption_sender.send_caption(
-                "localhost", 8086, "nonexistent", "Test caption"
-            )
-            # 404 is considered successful API test
-            assert result is True
+        original_level = caption_sender.logger.level
+        caption_sender.logger.setLevel(logging.ERROR)
+        try:
+            with mock.patch('caption_sender.requests.post', return_value=mock_response):
+                result = caption_sender.send_caption(
+                    "localhost", 8086, "nonexistent", "Test caption"
+                )
+                # 404 is considered successful API test
+                assert result is True
+        finally:
+            caption_sender.logger.setLevel(original_level)
         print("✓ test_send_caption_stream_not_found passed")
 
     def test_send_caption_server_error(self):
