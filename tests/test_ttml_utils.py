@@ -1,52 +1,46 @@
 #!/usr/bin/env python3
 """Unit tests for TTML generation and conversion utilities."""
 
-import importlib
-import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 from unittest import mock
 
 import pytest
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
-
-ttml_utils = importlib.import_module("ttml_utils")
-
-SubtitleCue = ttml_utils.SubtitleCue
-format_ttml_timestamp: Callable[[float], str] = ttml_utils.format_ttml_timestamp
-parse_vtt_timestamp: Callable[[str], float] = ttml_utils.parse_vtt_timestamp
-parse_vtt_file: Callable[[str], List[Any]] = ttml_utils.parse_vtt_file
-align_bilingual_cues: Callable[
-    [List[Any], List[Any], float], List[Tuple[Optional[Any], List[Any]]]
-] = ttml_utils.align_bilingual_cues
-create_ttml_document: Callable[..., ET.Element] = ttml_utils.create_ttml_document
-segments_to_ttml: Callable[..., str] = ttml_utils.segments_to_ttml
-vtt_files_to_ttml: Callable[..., str] = ttml_utils.vtt_files_to_ttml
+from src.python.tools.ttml_utils import (
+    SegmentLike,
+    SubtitleCue,
+    align_bilingual_cues,
+    create_ttml_document,
+    format_ttml_timestamp,
+    parse_vtt_file,
+    parse_vtt_timestamp,
+    segments_to_ttml,
+    vtt_files_to_ttml,
+)
 
 
 class TestTimestampFormatting:
     """Tests for timestamp formatting functions."""
 
-    def test_format_ttml_timestamp_zero(self):
+    def test_format_ttml_timestamp_zero(self) -> None:
         """Test formatting zero seconds."""
         result = format_ttml_timestamp(0.0)
         assert result == "00:00:00.000"
 
-    def test_format_ttml_timestamp_simple(self):
+    def test_format_ttml_timestamp_simple(self) -> None:
         """Test formatting simple timestamp."""
         result = format_ttml_timestamp(65.5)
         assert result == "00:01:05.500"
 
-    def test_format_ttml_timestamp_hours(self):
+    def test_format_ttml_timestamp_hours(self) -> None:
         """Test formatting timestamp with hours."""
         result = format_ttml_timestamp(3661.123)
         assert result == "01:01:01.123"
 
-    def test_format_ttml_timestamp_long(self):
+    def test_format_ttml_timestamp_long(self) -> None:
         """Test formatting long timestamp."""
         result = format_ttml_timestamp(7384.456)
         assert result == "02:03:04.456"
@@ -55,27 +49,27 @@ class TestTimestampFormatting:
 class TestTimestampParsing:
     """Tests for VTT timestamp parsing."""
 
-    def test_parse_vtt_timestamp_short_format(self):
+    def test_parse_vtt_timestamp_short_format(self) -> None:
         """Test parsing short format (MM:SS.mmm)."""
         result = parse_vtt_timestamp("01:23.456")
         assert abs(result - 83.456) < 0.001
 
-    def test_parse_vtt_timestamp_long_format(self):
+    def test_parse_vtt_timestamp_long_format(self) -> None:
         """Test parsing long format (HH:MM:SS.mmm)."""
         result = parse_vtt_timestamp("01:02:03.456")
         assert abs(result - 3723.456) < 0.001
 
-    def test_parse_vtt_timestamp_no_milliseconds(self):
+    def test_parse_vtt_timestamp_no_milliseconds(self) -> None:
         """Test parsing timestamp without milliseconds."""
         result = parse_vtt_timestamp("01:30")
         assert abs(result - 90.0) < 0.001
 
-    def test_parse_vtt_timestamp_zero(self):
+    def test_parse_vtt_timestamp_zero(self) -> None:
         """Test parsing zero timestamp."""
         result = parse_vtt_timestamp("00:00.000")
         assert abs(result - 0.0) < 0.001
 
-    def test_parse_vtt_timestamp_with_spaces(self):
+    def test_parse_vtt_timestamp_with_spaces(self) -> None:
         """Test parsing timestamp with spaces."""
         result = parse_vtt_timestamp("  01:23.456  ")
         assert abs(result - 83.456) < 0.001
@@ -84,7 +78,7 @@ class TestTimestampParsing:
 class TestVTTFileParsing:
     """Tests for VTT file parsing."""
 
-    def test_parse_simple_vtt_file(self):
+    def test_parse_simple_vtt_file(self) -> None:
         """Test parsing a simple VTT file."""
         vtt_content = """WEBVTT
 
@@ -103,7 +97,7 @@ Second subtitle
             vtt_path = f.name
 
         try:
-            cues: List[Any] = parse_vtt_file(vtt_path)
+            cues: List[SubtitleCue] = parse_vtt_file(vtt_path)
             assert len(cues) == 2
 
             assert abs(cues[0].start - 5.0) < 0.001
@@ -116,7 +110,7 @@ Second subtitle
         finally:
             Path(vtt_path).unlink()
 
-    def test_parse_vtt_file_multiline_text(self):
+    def test_parse_vtt_file_multiline_text(self) -> None:
         """Test parsing VTT with multiline text."""
         vtt_content = """WEBVTT
 
@@ -133,13 +127,13 @@ Third line
             vtt_path = f.name
 
         try:
-            cues: List[Any] = parse_vtt_file(vtt_path)
+            cues: List[SubtitleCue] = parse_vtt_file(vtt_path)
             assert len(cues) == 1
             assert cues[0].text == "First line\nSecond line\nThird line"
         finally:
             Path(vtt_path).unlink()
 
-    def test_parse_vtt_file_empty_lines(self):
+    def test_parse_vtt_file_empty_lines(self) -> None:
         """Test parsing VTT with empty lines."""
         vtt_content = """WEBVTT
 
@@ -161,7 +155,7 @@ World
             vtt_path = f.name
 
         try:
-            cues: List[Any] = parse_vtt_file(vtt_path)
+            cues: List[SubtitleCue] = parse_vtt_file(vtt_path)
             assert len(cues) == 2
         finally:
             Path(vtt_path).unlink()
@@ -170,19 +164,19 @@ World
 class TestBilingualCueAlignment:
     """Tests for bilingual cue alignment."""
 
-    def test_align_perfect_match(self):
+    def test_align_perfect_match(self) -> None:
         """Test alignment with perfect timestamp matches."""
-        cues_lang1: List[Any] = [
+        cues_lang1: List[SubtitleCue] = [
             SubtitleCue(start=5.0, end=7.0, text="Привет"),
             SubtitleCue(start=10.0, end=12.0, text="Мир"),
         ]
-        cues_lang2: List[Any] = [
+        cues_lang2: List[SubtitleCue] = [
             SubtitleCue(start=5.0, end=7.0, text="Hello"),
             SubtitleCue(start=10.0, end=12.0, text="World"),
         ]
 
-        aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
-            cues_lang1, cues_lang2, 1.0
+        aligned: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = (
+            align_bilingual_cues(cues_lang1, cues_lang2, 1.0)
         )
 
         assert len(aligned) == 2
@@ -195,17 +189,17 @@ class TestBilingualCueAlignment:
         assert len(aligned[1][1]) == 1
         assert aligned[1][1][0].text == "World"
 
-    def test_align_with_tolerance(self):
+    def test_align_with_tolerance(self) -> None:
         """Test alignment with slight timestamp differences."""
-        cues_lang1: List[Any] = [
+        cues_lang1: List[SubtitleCue] = [
             SubtitleCue(start=5.0, end=7.0, text="Привет"),
         ]
-        cues_lang2: List[Any] = [
+        cues_lang2: List[SubtitleCue] = [
             SubtitleCue(start=5.5, end=7.5, text="Hello"),
         ]
 
-        aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
-            cues_lang1, cues_lang2, 1.0
+        aligned: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = (
+            align_bilingual_cues(cues_lang1, cues_lang2, 1.0)
         )
 
         assert len(aligned) == 1
@@ -214,18 +208,18 @@ class TestBilingualCueAlignment:
         assert len(aligned[0][1]) == 1
         assert aligned[0][1][0].text == "Hello"
 
-    def test_align_unmatched_cues(self):
+    def test_align_unmatched_cues(self) -> None:
         """Test alignment with unmatched cues."""
-        cues_lang1: List[Any] = [
+        cues_lang1: List[SubtitleCue] = [
             SubtitleCue(start=5.0, end=7.0, text="Привет"),
             SubtitleCue(start=15.0, end=17.0, text="Пока"),
         ]
-        cues_lang2: List[Any] = [
+        cues_lang2: List[SubtitleCue] = [
             SubtitleCue(start=5.5, end=7.5, text="Hello"),
         ]
 
-        aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
-            cues_lang1, cues_lang2, 1.0
+        aligned: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = (
+            align_bilingual_cues(cues_lang1, cues_lang2, 1.0)
         )
 
         assert len(aligned) == 2
@@ -237,18 +231,18 @@ class TestBilingualCueAlignment:
         assert aligned[1][0].text == "Пока"
         assert aligned[1][1] == []
 
-    def test_align_extra_lang2_cues(self):
+    def test_align_extra_lang2_cues(self) -> None:
         """Test alignment when lang2 has extra cues."""
-        cues_lang1: List[Any] = [
+        cues_lang1: List[SubtitleCue] = [
             SubtitleCue(start=5.0, end=7.0, text="Привет"),
         ]
-        cues_lang2: List[Any] = [
+        cues_lang2: List[SubtitleCue] = [
             SubtitleCue(start=5.0, end=7.0, text="Hello"),
             SubtitleCue(start=10.0, end=12.0, text="Extra"),
         ]
 
-        aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
-            cues_lang1, cues_lang2, 1.0
+        aligned: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = (
+            align_bilingual_cues(cues_lang1, cues_lang2, 1.0)
         )
 
         assert len(aligned) == 2
@@ -264,9 +258,9 @@ class TestBilingualCueAlignment:
 class TestTTMLDocumentCreation:
     """Tests for TTML document creation."""
 
-    def test_create_simple_ttml_document(self):
+    def test_create_simple_ttml_document(self) -> None:
         """Test creating a simple TTML document with new two-div structure."""
-        aligned_cues: List[Tuple[Optional[Any], List[Any]]] = [
+        aligned_cues: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = [
             (
                 SubtitleCue(start=5.0, end=7.0, text="Привет"),
                 [SubtitleCue(start=5.0, end=7.0, text="Hello")],
@@ -323,9 +317,9 @@ class TestTTMLDocumentCreation:
         assert p_ru.get("end") == "00:00:07.000"
         assert p_ru.text == "Привет"
 
-    def test_create_ttml_document_with_unmatched_cues(self):
+    def test_create_ttml_document_with_unmatched_cues(self) -> None:
         """Test creating TTML with unmatched cues."""
-        aligned_cues: List[Tuple[Optional[Any], List[Any]]] = [
+        aligned_cues: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = [
             (
                 SubtitleCue(start=5.0, end=7.0, text="Привет"),
                 [],
@@ -360,7 +354,7 @@ class TestTTMLDocumentCreation:
 class TestSegmentsToTTML:
     """Tests for converting Whisper segments to TTML."""
 
-    def test_segments_to_ttml_basic(self):
+    def test_segments_to_ttml_basic(self) -> None:
         """
         Verify conversion of parallel speech segments into a bilingual TTML string containing an XML declaration, a TTML root with `xml:lang="en"`, a head section, two language-specific `div` elements (`eng` and `rus`), and `p` elements with correct `begin`/`end` timestamps and texts.
         """
@@ -383,7 +377,10 @@ class TestSegmentsToTTML:
         ]
 
         ttml_content = segments_to_ttml(
-            segments_ru, segments_en, lang1="rus", lang2="eng"
+            cast(List[SegmentLike], segments_ru),
+            cast(List[SegmentLike], segments_en),
+            lang1="rus",
+            lang2="eng",
         )
 
         assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
@@ -405,7 +402,7 @@ class TestSegmentsToTTML:
 class TestVTTFilesToTTML:
     """Tests for converting VTT files to TTML."""
 
-    def test_vtt_files_to_ttml_integration(self):
+    def test_vtt_files_to_ttml_integration(self) -> None:
         """Test full conversion from VTT files to TTML."""
         vtt_ru_content = """WEBVTT
 
@@ -492,11 +489,14 @@ How are you?
             Path(vtt_ru_path).unlink()
             Path(vtt_en_path).unlink()
 
-    def test_vtt_files_to_ttml_uses_pre_aligned_cues(self):
+    def test_vtt_files_to_ttml_uses_pre_aligned_cues(self) -> None:
         """Ensure pre-aligned cues are used without re-parsing files."""
         cue_lang1 = SubtitleCue(start=5.0, end=7.0, text="Привет, мир!")
         cue_lang2 = SubtitleCue(start=5.0, end=7.0, text="Hello, world!")
-        aligned = [(cue_lang1, [cue_lang2])]
+        aligned = cast(
+            List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]],
+            [(cue_lang1, [cue_lang2])],
+        )
 
         with mock.patch("ttml_utils.parse_vtt_file") as mock_parse:
             ttml_content = vtt_files_to_ttml(

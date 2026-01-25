@@ -6,7 +6,7 @@ Subtitle generation tools for live and archived streams. LiveVTT focuses on prod
 
 ### Requirements
 - Python 3.10+
-- FFmpeg + FFprobe
+- FFmpeg + FFprobe: FFprobe is included with FFmpeg. Download from the [official FFmpeg site](https://ffmpeg.org/download.html). Install via `apt install ffmpeg` (Linux), `brew install ffmpeg` (macOS), or `choco install ffmpeg` (Windows).
 
 ### Install dependencies
 ```bash
@@ -17,12 +17,12 @@ pip install -r requirements.txt
 
 ### Transcribe archived media
 ```bash
-python src/python/tools/archive_transcriber.py --max-files 1 --progress
+python src/python/tools/archive_transcriber.py /path/to/media --max-files 1 --progress  # Example: transcribe media in directory, process up to 1 file with progress display
 ```
 
 ### Run the polling service
 ```bash
-python src/python/services/subtitle_autogen.py /mnt/vod/srv/storage/transcoded/ --batch-size 5 --interval 300
+python src/python/services/subtitle_autogen.py /path/to/watch --batch-size 5 --interval 300  # Example: watch directory for new files, batch size 5, poll every 300 seconds
 ```
 
 ## 🛠️ Core Tools

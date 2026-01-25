@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
 
 def configure_logging(args: argparse.Namespace) -> None:
     level = logging.DEBUG if args.verbose else logging.INFO
-    handlers = [logging.StreamHandler(sys.stdout)]
+    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if args.log_file:
         handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
     logging.basicConfig(

@@ -12,7 +12,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Protocol, Tuple
+from typing import List, Optional, Protocol, Tuple, cast
 
 
 @dataclass
@@ -33,7 +33,7 @@ class SegmentLike(Protocol):
 
 
 # Global filter words cache: (path, filter_words)
-filter_cache: Optional[Tuple[Optional[Path], List[str]]] = None
+_filter_cache: Optional[Tuple[Optional[Path], List[str]]] = None
 
 
 def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
@@ -48,7 +48,7 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
     Returns:
         List[str]: The list of filter words; an empty list if no valid file is found or loading fails.
     """
-    global filter_cache
+    global _filter_cache
 
     # Resolve the path to use
     resolved_path = filter_json_path
@@ -66,24 +66,31 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
                 break
 
     # Check if we have a cached result for this path
-    if filter_cache is not None:
-        cached_path, cached_words = filter_cache
+    if _filter_cache is not None:
+        cached_path, cached_words = _filter_cache
         if cached_path == resolved_path:
             return cached_words
 
     # Load filter words from the resolved path
     if resolved_path is None or not resolved_path.exists():
-        filter_cache = (resolved_path, [])
+        _filter_cache = (resolved_path, [])
         return []
 
     try:
         with open(resolved_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            filter_words = data.get("filter_words", [])
-            filter_cache = (resolved_path, filter_words)
+            raw_filter_words = data.get("filter_words", [])
+            if isinstance(raw_filter_words, list):
+                raw_filter_words = cast(List[object], raw_filter_words)
+                filter_words = [
+                    word for word in raw_filter_words if isinstance(word, str)
+                ]
+            else:
+                filter_words = []
+            _filter_cache = (resolved_path, filter_words)
             return filter_words
     except (json.JSONDecodeError, OSError):
-        filter_cache = (resolved_path, [])
+        _filter_cache = (resolved_path, [])
         return []
 
 
@@ -101,9 +108,10 @@ def should_filter_cue(text: str, filter_words: List[str]) -> bool:
     if not filter_words or not text:
         return False
 
+    text_lower = text.lower()
     for word in filter_words:
         # Check if the word appears in the text (case-insensitive)
-        if re.search(re.escape(word), text, flags=re.IGNORECASE):
+        if word.lower() in text_lower:
             return True
 
     return False

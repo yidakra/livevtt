@@ -4,9 +4,8 @@ import logging
 import signal
 import socket
 import json
-import os.path
 
-import aiofiles.tempfile
+import aiofiles.tempfile  # type: ignore[import-untyped]
 import aiohttp
 import m3u8
 import os
@@ -325,7 +324,12 @@ def should_filter_segment(text: str) -> bool:
     if not filter_dict:
         return False
     text = text.lower()
-    filter_words = cast(list[str], filter_dict.get("filter_words", []))
+    raw_filter_words = filter_dict.get("filter_words", [])
+    if not isinstance(raw_filter_words, list):
+        return False
+    filter_words = [
+        word for word in cast(list[object], raw_filter_words) if isinstance(word, str)
+    ]
     return any(word.lower() in text for word in filter_words)
 
 
@@ -336,6 +340,7 @@ async def transcribe_chunk(
     segment_uri: str,
     chunk_name: str,
 ) -> Tuple[str, str]:
+    global init_segment_created, init_segment_path
     ts_probe_proc = await asyncio.create_subprocess_exec(
         "ffprobe",
         "-i",
@@ -603,7 +608,6 @@ async def transcribe_chunk(
                     logger.info(f"FFmpeg completed for {segment_uri}")
                     # Generate init.mp4 only once when using fragmented MP4 segments
                     if args.mp4_container:
-                        global init_segment_created, init_segment_path
                         if not init_segment_created:
                             try:
                                 init_segment_path = os.path.join(chunk_dir, "init.mp4")
@@ -704,7 +708,7 @@ async def transcribe_chunk(
                         "eng" if not args.transcribe else (args.language or "eng")
                     )
 
-                    ffmpeg_cmd: list[str] = [
+                    ffmpeg_cmd_embedded: list[str] = [
                         "ffmpeg",
                         "-hwaccel",
                         "auto",
@@ -769,14 +773,14 @@ async def transcribe_chunk(
 
                     if args.debug:
                         logger.debug(
-                            f"🔧 Full single track FFmpeg command: {' '.join(ffmpeg_cmd)}"
+                            f"🔧 Full single track FFmpeg command: {' '.join(ffmpeg_cmd_embedded)}"
                         )
                     else:
                         logger.info(
-                            f"🔧 Executing single track FFmpeg: {' '.join(ffmpeg_cmd[:8])}..."
+                            f"🔧 Executing single track FFmpeg: {' '.join(ffmpeg_cmd_embedded[:8])}..."
                         )
                     ffmpeg_proc = await asyncio.create_subprocess_exec(
-                        *ffmpeg_cmd, stderr=asyncio.subprocess.PIPE
+                        *ffmpeg_cmd_embedded, stderr=asyncio.subprocess.PIPE
                     )
                     _, stderr = await ffmpeg_proc.communicate()
                     if ffmpeg_proc.returncode != 0:
@@ -791,13 +795,12 @@ async def transcribe_chunk(
                         logger.info(f"Single track FFmpeg completed for {segment_uri}")
                         # Generate init.mp4 only once when using fragmented MP4 segments
                         if args.mp4_container:
-                            global init_segment_created, init_segment_path
                             if not init_segment_created:
                                 try:
                                     init_segment_path = os.path.join(
                                         chunk_dir, "init.mp4"
                                     )
-                                    init_cmd: list[str] = [
+                                    init_cmd_embedded: list[str] = [
                                         "ffmpeg",
                                         "-i",
                                         embedded_chunk_name,
@@ -818,10 +821,10 @@ async def transcribe_chunk(
                                     ]
                                     if args.debug:
                                         logger.debug(
-                                            f"Generating init.mp4: {' '.join(init_cmd)}"
+                                            f"Generating init.mp4: {' '.join(init_cmd_embedded)}"
                                         )
                                     init_proc = await asyncio.create_subprocess_exec(
-                                        *init_cmd
+                                        *init_cmd_embedded
                                     )
                                     await init_proc.communicate()
                                     if init_proc.returncode == 0 and init_segment_path:
@@ -933,7 +936,6 @@ def get_local_ip():
 
 async def main():
     check_bindeps_present()
-    load_filter_dict()  # Load filter dictionary at startup
 
     parser = argparse.ArgumentParser(prog="livevtt")
     parser.add_argument(
@@ -1064,6 +1066,12 @@ async def main():
     )
 
     args = parser.parse_args()
+
+    # Apply CLI-provided config paths before loading filters
+    global filter_file_path, vocabulary_file_path
+    filter_file_path = args.filter_file
+    vocabulary_file_path = args.vocabulary_file
+    load_filter_dict()  # Load filter dictionary at startup
 
     # Validate subtitle mode options
     subtitle_modes = sum([args.hard_subs, args.embedded_subs])
@@ -1243,8 +1251,13 @@ async def main():
         prev_cwd = os.getcwd()
         os.chdir(chunk_dir)
 
-        def schedule_cleanup() -> asyncio.Task[None]:
-            return asyncio.create_task(
+        cleanup_task: Optional[asyncio.Task[None]] = None
+
+        def schedule_cleanup() -> None:
+            nonlocal cleanup_task
+            if cleanup_task is not None and not cleanup_task.done():
+                return
+            cleanup_task = asyncio.create_task(
                 cleanup(session, chunk_dir, prev_cwd, stop_event)
             )
 
@@ -1415,14 +1428,11 @@ async def main():
         except asyncio.CancelledError:
             logger.info("Received termination signal")
         finally:
-            await cleanup(session, chunk_dir, prev_cwd, stop_event)
+            if cleanup_task is not None:
+                await cleanup_task
+            else:
+                await cleanup(session, chunk_dir, prev_cwd, stop_event)
             http_thread.join(timeout=5)  # Wait for HTTP server to stop
-
-    # Update filter file path if provided
-    global filter_file_path, vocabulary_file_path
-    filter_file_path = args.filter_file
-    vocabulary_file_path = args.vocabulary_file
-    load_filter_dict()
 
 
 if __name__ == "__main__":

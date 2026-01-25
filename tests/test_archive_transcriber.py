@@ -6,7 +6,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import Callable, Optional, Protocol
+from typing import Callable, Optional
 from unittest import mock
 
 # Mock faster_whisper before importing archive_transcriber
@@ -15,33 +15,6 @@ sys.modules["faster_whisper"] = mock.MagicMock()
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
 archive_transcriber = importlib.import_module("archive_transcriber")
-
-
-class ManifestProto(Protocol):
-    path: Path
-    records: dict[str, object]
-
-    def append(self, record: dict[str, object]) -> None: ...
-
-    def get(self, video_path: Path) -> Optional[dict[str, object]]: ...
-
-
-class VideoJobProto(Protocol):
-    video_path: Path
-    normalized_name: str
-    ru_vtt: Path
-    en_vtt: Path
-    ttml: Path
-    smil: Path
-
-
-class VideoMetadataProto(Protocol):
-    duration: Optional[float]
-    width: Optional[int]
-    height: Optional[int]
-    video_codec_id: Optional[str]
-    audio_codec_id: Optional[str]
-    bitrate: Optional[int]
 
 
 segments_to_webvtt: Callable[..., str] = archive_transcriber.segments_to_webvtt
@@ -263,17 +236,17 @@ class TestVariantSelection:
     def test_select_highest_resolution(self):
         """Test selecting highest resolution variant."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+            tmpdir_path = Path(tmpdir)
 
             # Create test files with different resolutions
-            (tmpdir / "video_480p.ts").write_text("small")
-            (tmpdir / "video_720p.ts").write_text("medium content")
-            (tmpdir / "video_1080p.ts").write_text("large")
+            (tmpdir_path / "video_480p.ts").write_text("small")
+            (tmpdir_path / "video_720p.ts").write_text("medium content")
+            (tmpdir_path / "video_1080p.ts").write_text("large")
 
             candidates = [
-                tmpdir / "video_480p.ts",
-                tmpdir / "video_720p.ts",
-                tmpdir / "video_1080p.ts",
+                tmpdir_path / "video_480p.ts",
+                tmpdir_path / "video_720p.ts",
+                tmpdir_path / "video_1080p.ts",
             ]
 
             best = select_best_variant(candidates)
@@ -284,14 +257,14 @@ class TestVariantSelection:
     def test_select_by_size_when_same_resolution(self):
         """Test selecting larger file when resolution is same."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+            tmpdir_path = Path(tmpdir)
 
-            (tmpdir / "video_1080p_v1.ts").write_text("x" * 100)
-            (tmpdir / "video_1080p_v2.ts").write_text("x" * 200)
+            (tmpdir_path / "video_1080p_v1.ts").write_text("x" * 100)
+            (tmpdir_path / "video_1080p_v2.ts").write_text("x" * 200)
 
             candidates = [
-                tmpdir / "video_1080p_v1.ts",
-                tmpdir / "video_1080p_v2.ts",
+                tmpdir_path / "video_1080p_v1.ts",
+                tmpdir_path / "video_1080p_v2.ts",
             ]
 
             best = select_best_variant(candidates)
@@ -307,14 +280,14 @@ class TestVariantSelection:
     def test_no_resolution_info(self):
         """Test files without resolution info."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+            tmpdir_path = Path(tmpdir)
 
-            (tmpdir / "video1.ts").write_text("x" * 50)
-            (tmpdir / "video2.ts").write_text("x" * 150)
+            (tmpdir_path / "video1.ts").write_text("x" * 50)
+            (tmpdir_path / "video2.ts").write_text("x" * 150)
 
             candidates = [
-                tmpdir / "video1.ts",
-                tmpdir / "video2.ts",
+                tmpdir_path / "video1.ts",
+                tmpdir_path / "video2.ts",
             ]
 
             # Should select by size

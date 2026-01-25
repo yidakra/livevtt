@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import FrameType
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Dict,
@@ -40,8 +41,12 @@ from typing import (
     Protocol,
     Sequence,
     Tuple,
+    TypedDict,
     cast,
 )
+
+if TYPE_CHECKING:
+    from .ttml_utils import SubtitleCue
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from faster_whisper import WhisperModel  # type: ignore
@@ -49,8 +54,14 @@ from faster_whisper import WhisperModel  # type: ignore
 _ttml_utils: Any
 try:
     from . import ttml_utils as _ttml_utils  # type: ignore
+
+    if not TYPE_CHECKING:
+        SubtitleCue = _ttml_utils.SubtitleCue
 except ImportError:  # pragma: no cover - fallback for script execution
     import ttml_utils as _ttml_utils  # type: ignore
+
+    if not TYPE_CHECKING:
+        SubtitleCue = _ttml_utils.SubtitleCue
 
 
 def cues_to_ttml(*args: Any, **kwargs: Any) -> str:
@@ -58,8 +69,8 @@ def cues_to_ttml(*args: Any, **kwargs: Any) -> str:
     return func(*args, **kwargs)
 
 
-def parse_vtt_content(vtt_content: str) -> List[Any]:
-    func = cast(Callable[[str], List[Any]], _ttml_utils.parse_vtt_content)
+def parse_vtt_content(vtt_content: str) -> List[SubtitleCue]:
+    func = cast(Callable[[str], List[SubtitleCue]], _ttml_utils.parse_vtt_content)
     return func(vtt_content)
 
 
@@ -118,7 +129,31 @@ class SegmentLike(Protocol):
     text: str
 
 
-ManifestRecord = Dict[str, Any]
+class ManifestProtocol(Protocol):
+    """Protocol for Manifest interface used in this module."""
+
+    def get(self, video_path: Path) -> Optional[ManifestRecord]: ...
+
+    def append(self, record: ManifestRecord) -> None: ...
+
+
+class ManifestRecord(TypedDict, total=False):
+    """TypedDict for manifest records."""
+
+    video_path: str
+    ru_vtt: str
+    en_vtt: str
+    ttml: Optional[str]
+    smil: str
+    status: str
+    processed_at: str
+    duration: float
+    processing_time_sec: float
+    error: str
+    error_type: str
+    phase: str
+    worker_info: str
+
 
 # Register signal handler for graceful shutdown
 signal.signal(signal.SIGINT, signal_handler)
@@ -611,7 +646,7 @@ def write_smil(
     """
     job.smil.parent.mkdir(parents=True, exist_ok=True)
 
-    tree = ET.ElementTree()
+    tree: ET.ElementTree[ET.Element] = ET.ElementTree()
     root: Optional[ET.Element] = None
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -764,7 +799,7 @@ def write_smil(
 def discover_video_jobs(
     input_root: Path,
     output_root: Optional[Path],
-    manifest: Manifest,
+    manifest: ManifestProtocol,
     force: bool,
     extensions: Iterable[str],
     ttml_enabled: bool,
@@ -922,7 +957,7 @@ def discover_video_jobs(
     skipped_count = 0
     last_log_time = time.time()
 
-    for _, candidates in grouped.items():
+    for candidates in grouped.values():
         best_path = select_best_variant(candidates)
         if not best_path:
             continue
@@ -1307,15 +1342,11 @@ def process_job(
                 ru_cues: List[Any] = parse_vtt_content(ru_content)
                 en_cues: List[Any] = parse_vtt_content(en_content)
                 # Convert 2-letter language codes to 3-letter for TTML
-                ttml_lang1 = (
-                    LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
-                    or args.source_language
+                ttml_lang1 = LANG_CODE_2_TO_3.get(
+                    args.source_language, args.source_language
                 )
-                ttml_lang2 = (
-                    LANG_CODE_2_TO_3.get(
-                        args.translation_language, args.translation_language
-                    )
-                    or args.translation_language
+                ttml_lang2 = LANG_CODE_2_TO_3.get(
+                    args.translation_language, args.translation_language
                 )
                 ttml_content = cues_to_ttml(
                     ru_cues,
@@ -1391,7 +1422,7 @@ def process_job(
                 "Failed to process %s (%s): %s", job.video_path, error_type, exc
             )
 
-        record: ManifestRecord = {
+        error_record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -1402,8 +1433,8 @@ def process_job(
             "error_type": error_type,
             "processed_at": human_time(),
         }
-        manifest.append(record)
-        return record
+        manifest.append(error_record)
+        return error_record
 
     finally:
         if audio_path and audio_path.exists():
@@ -1575,15 +1606,11 @@ def process_translation_only(
         # Generate TTML
         if not args.no_ttml:
             en_cues: List[Any] = parse_vtt_content(en_content)
-            ttml_lang1 = (
-                LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
-                or args.source_language
+            ttml_lang1 = LANG_CODE_2_TO_3.get(
+                args.source_language, args.source_language
             )
-            ttml_lang2 = (
-                LANG_CODE_2_TO_3.get(
-                    args.translation_language, args.translation_language
-                )
-                or args.translation_language
+            ttml_lang2 = LANG_CODE_2_TO_3.get(
+                args.translation_language, args.translation_language
             )
             ttml_content = cues_to_ttml(
                 ru_cues,
@@ -1615,7 +1642,7 @@ def process_translation_only(
 
     except Exception as exc:
         LOGGER.error("[Translation] Failed %s: %s", job.video_path, exc)
-        record: ManifestRecord = {
+        error_record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -1627,8 +1654,8 @@ def process_translation_only(
             "processed_at": human_time(),
             "worker_info": get_worker_info(),
         }
-        manifest.append(record)
-        return record
+        manifest.append(error_record)
+        return error_record
 
     finally:
         if audio_path and audio_path.exists():

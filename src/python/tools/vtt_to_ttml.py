@@ -22,28 +22,36 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Callable, List, Optional, Tuple, cast
 
-try:
-    from . import ttml_utils as _ttml_utils  # type: ignore
-except ImportError:  # pragma: no cover - fallback for script execution
-    import ttml_utils as _ttml_utils  # type: ignore
+if TYPE_CHECKING:
+    from .ttml_utils import SubtitleCue
+else:
+    try:
+        from . import ttml_utils as _ttml_utils  # type: ignore
 
-_ttml_utils: Any = _ttml_utils
+        SubtitleCue = _ttml_utils.SubtitleCue
+    except ImportError:  # pragma: no cover - fallback for script execution
+        import ttml_utils as _ttml_utils  # type: ignore
+
+        SubtitleCue = _ttml_utils.SubtitleCue
 
 
-def parse_vtt_file(path: str) -> List[Any]:
-    func = cast(Callable[[str], List[Any]], _ttml_utils.parse_vtt_file)
+def parse_vtt_file(path: str) -> List[SubtitleCue]:
+    func = cast(Callable[[str], List[SubtitleCue]], _ttml_utils.parse_vtt_file)  # type: ignore
     return func(path)
 
 
 def align_bilingual_cues(
-    cues_lang1: List[Any], cues_lang2: List[Any], tolerance: float = 2.5
-) -> List[Tuple[Optional[Any], List[Any]]]:
+    cues_lang1: List[SubtitleCue], cues_lang2: List[SubtitleCue], tolerance: float = 1.0
+) -> List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]:
     func = cast(
-        Callable[[List[Any], List[Any], float], List[Tuple[Optional[Any], List[Any]]]],
-        _ttml_utils.align_bilingual_cues,
-    )
+        Callable[
+            [List[SubtitleCue], List[SubtitleCue], float],
+            List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]],
+        ],
+        _ttml_utils.align_bilingual_cues,  # type: ignore
+    )  # type: ignore
     return func(cues_lang1, cues_lang2, tolerance)
 
 
@@ -51,13 +59,15 @@ def vtt_files_to_ttml(
     vtt_file1: str,
     vtt_file2: str,
     *,
-    lang1: str = "rus",
-    lang2: str = "eng",
-    tolerance: float = 2.5,
-    aligned_cues: Optional[List[Tuple[Optional[Any], List[Any]]]] = None,
+    lang1: str = "ru",
+    lang2: str = "en",
+    tolerance: float = 1.0,
+    aligned_cues: Optional[
+        List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]
+    ] = None,
     filter_words: Optional[List[str]] = None,
 ) -> str:
-    func = cast(Callable[..., str], _ttml_utils.vtt_files_to_ttml)
+    func = cast(Callable[..., str], _ttml_utils.vtt_files_to_ttml)  # type: ignore
     return func(
         vtt_file1,
         vtt_file2,
@@ -70,7 +80,7 @@ def vtt_files_to_ttml(
 
 
 def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
-    func = cast(Callable[[Optional[Path]], List[str]], _ttml_utils.load_filter_words)
+    func = cast(Callable[[Optional[Path]], List[str]], _ttml_utils.load_filter_words)  # type: ignore
     return func(filter_json_path)
 
 
@@ -147,17 +157,17 @@ def convert_vtt_to_ttml(
     try:
         # Parse VTT files
         LOGGER.info("Parsing %s", vtt_file1)
-        cues_lang1: List[Any] = parse_vtt_file(str(vtt_file1))
+        cues_lang1: List[SubtitleCue] = parse_vtt_file(str(vtt_file1))
         LOGGER.info("Found %d cues in %s", len(cues_lang1), vtt_file1)
 
         LOGGER.info("Parsing %s", vtt_file2)
-        cues_lang2: List[Any] = parse_vtt_file(str(vtt_file2))
+        cues_lang2: List[SubtitleCue] = parse_vtt_file(str(vtt_file2))
         LOGGER.info("Found %d cues in %s", len(cues_lang2), vtt_file2)
 
         # Align cues
         LOGGER.info("Aligning cues with tolerance of %.1f seconds", tolerance)
-        aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
-            cues_lang1, cues_lang2, tolerance=tolerance
+        aligned: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = (
+            align_bilingual_cues(cues_lang1, cues_lang2, tolerance=tolerance)
         )
 
         # Validate alignment

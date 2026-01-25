@@ -6,7 +6,7 @@ import sys
 import tempfile
 import traceback
 from pathlib import Path
-from typing import Callable, List, Protocol
+from typing import Callable, List, Optional, Protocol
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
@@ -14,7 +14,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"
 vtt_to_ttml = importlib.import_module("vtt_to_ttml")
 
 validate_vtt_file: Callable[[Path], bool] = vtt_to_ttml.validate_vtt_file
-convert_vtt_to_ttml: Callable[..., bool] = vtt_to_ttml.convert_vtt_to_ttml
+
+
+class ConvertVttToTtmlProtocol(Protocol):
+    def __call__(
+        self,
+        vtt_file1: Path,
+        vtt_file2: Path,
+        output: Path,
+        lang1: str = "ru",
+        lang2: str = "en",
+        tolerance: float = 1.0,
+        filter_json_path: Optional[Path] = None,
+    ) -> bool: ...
+
+
+convert_vtt_to_ttml: ConvertVttToTtmlProtocol = vtt_to_ttml.convert_vtt_to_ttml
 
 
 class ArgsLike(Protocol):
@@ -81,12 +96,12 @@ class TestConvertVTTtoTTML:
     def test_successful_conversion(self):
         """Test successful conversion of two VTT files."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+            tmpdir_path = Path(tmpdir)
 
             # Create test VTT files
-            ru_vtt = tmpdir / "test.ru.vtt"
-            en_vtt = tmpdir / "test.en.vtt"
-            output = tmpdir / "test.ttml"
+            ru_vtt = tmpdir_path / "test.ru.vtt"
+            en_vtt = tmpdir_path / "test.en.vtt"
+            output = tmpdir_path / "test.ttml"
 
             ru_vtt.write_text("""WEBVTT
 
@@ -127,11 +142,11 @@ Hello
     def test_conversion_missing_input(self):
         """Test conversion with missing input file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+            tmpdir_path = Path(tmpdir)
 
-            ru_vtt = tmpdir / "missing.ru.vtt"
-            en_vtt = tmpdir / "test.en.vtt"
-            output = tmpdir / "test.ttml"
+            ru_vtt = tmpdir_path / "missing.ru.vtt"
+            en_vtt = tmpdir_path / "test.en.vtt"
+            output = tmpdir_path / "test.ttml"
 
             en_vtt.write_text("WEBVTT\n")
 
@@ -151,11 +166,11 @@ Hello
     def test_conversion_creates_output_directory(self):
         """Test that conversion creates output directory if needed."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+            tmpdir_path = Path(tmpdir)
 
-            ru_vtt = tmpdir / "test.ru.vtt"
-            en_vtt = tmpdir / "test.en.vtt"
-            output = tmpdir / "subdir" / "nested" / "test.ttml"
+            ru_vtt = tmpdir_path / "test.ru.vtt"
+            en_vtt = tmpdir_path / "test.en.vtt"
+            output = tmpdir_path / "subdir" / "nested" / "test.ttml"
 
             ru_vtt.write_text("WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\nRU\n")
             en_vtt.write_text("WEBVTT\n\n1\n00:00:00.000 --> 00:00:02.000\nEN\n")
@@ -178,11 +193,11 @@ Hello
     def test_conversion_with_custom_tolerance(self):
         """Test conversion with custom timestamp tolerance."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
+            tmpdir_path = Path(tmpdir)
 
-            ru_vtt = tmpdir / "test.ru.vtt"
-            en_vtt = tmpdir / "test.en.vtt"
-            output = tmpdir / "test.ttml"
+            ru_vtt = tmpdir_path / "test.ru.vtt"
+            en_vtt = tmpdir_path / "test.en.vtt"
+            output = tmpdir_path / "test.ttml"
 
             # Different timestamps within 2 seconds
             ru_vtt.write_text("""WEBVTT

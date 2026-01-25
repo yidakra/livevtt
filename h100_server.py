@@ -6,26 +6,30 @@ Compatible with RunPod API format for easy client integration
 """
 
 import base64
+import binascii
 import os
 import tempfile
-from typing import Any, Callable, Iterable, Optional, Protocol, cast
+from typing import Any, Iterable, Optional, Protocol, cast
 
 from flask import Flask, jsonify, request  # type: ignore
 from faster_whisper import WhisperModel  # type: ignore
 
 
-class FlaskLike(Protocol):
-    def route(
-        self, rule: str, methods: Optional[list[str]] = None
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
-
-    def run(self, host: str, port: int, debug: bool) -> None: ...
-
-
-app: FlaskLike = cast(FlaskLike, Flask(__name__))
+app: Flask = Flask(__name__)  # type: ignore
 
 # Pre-load models to avoid loading on each request
 MODELS: dict[str, WhisperModel] = {}
+SUPPORTED_MODELS: dict[str, str] = {
+    "large-v3-turbo": "large-v3-turbo",
+    "large-v3": "large-v3",
+    "large": "large",
+    "medium": "medium",
+    "small": "small",
+    "base": "base",
+    "tiny": "tiny",
+}
+MIN_BEAM_SIZE = 1
+MAX_BEAM_SIZE = 10
 
 
 class SegmentLike(Protocol):
@@ -49,14 +53,26 @@ def get_model(model_name: str = "large-v3-turbo") -> WhisperModel:
     return MODELS[model_name]
 
 
-@app.route("/health", methods=["GET"])
+def parse_beam_size(value: Any) -> int:
+    try:
+        beam_size = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("beam_size must be an integer") from exc
+    if beam_size < MIN_BEAM_SIZE or beam_size > MAX_BEAM_SIZE:
+        raise ValueError(
+            f"beam_size must be between {MIN_BEAM_SIZE} and {MAX_BEAM_SIZE}"
+        )
+    return beam_size
+
+
+@app.route("/health", methods=["GET"])  # type: ignore
 def health() -> Any:
     """Health check endpoint"""
     return cast(Any, jsonify({"status": "healthy"}))
 
 
-@app.route("/v2/<endpoint_id>/run", methods=["POST"])
-def transcribe(endpoint_id: str) -> Any:
+@app.route("/v2/<endpoint_id>/run", methods=["POST"])  # type: ignore
+def transcribe(_endpoint_id: str) -> Any:
     """
     Transcribe audio using faster-whisper
     Compatible with RunPod API format
@@ -68,16 +84,35 @@ def transcribe(endpoint_id: str) -> Any:
 
         # Extract parameters
         audio_b64 = cast(Optional[str], input_data.get("audio_base_64"))
-        model_name = cast(str, input_data.get("model", "large-v3-turbo"))
+        model_name_raw = cast(str, input_data.get("model", "large-v3-turbo"))
         translate = bool(input_data.get("translate", False))
         language = cast(str, input_data.get("language", "auto"))
-        beam_size = int(input_data.get("beam_size", 5))
+        try:
+            beam_size = parse_beam_size(input_data.get("beam_size", 5))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         if not audio_b64:
             return jsonify({"error": "No audio_base_64 provided"}), 400
 
+        model_name_key = model_name_raw.strip().lower()
+        model_name = SUPPORTED_MODELS.get(model_name_key)
+        if model_name is None:
+            return (
+                jsonify(
+                    {
+                        "error": "Unsupported model",
+                        "supported_models": sorted(SUPPORTED_MODELS.keys()),
+                    }
+                ),
+                400,
+            )
+
         # Decode audio from base64
-        audio_data = base64.b64decode(audio_b64)
+        try:
+            audio_data = base64.b64decode(audio_b64)
+        except binascii.Error:
+            return jsonify({"error": "invalid base64 audio payload"}), 400
 
         # Write to temporary file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
@@ -142,4 +177,4 @@ if __name__ == "__main__":
     get_model("large-v3-turbo")
     get_model("large-v3")
     print("Models loaded. Starting server...", flush=True)
-    app.run(host="0.0.0.0", port=8000, debug=False)
+    app.run(host="0.0.0.0", port=8000, debug=False)  # type: ignore

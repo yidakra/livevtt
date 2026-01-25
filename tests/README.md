@@ -164,8 +164,7 @@ class TestNewFeature:
         assert result == "expected"
         print("✓ test_basic_case passed")
 
-
-
+```python
 def test_new_feature_basic_case():
     """Test basic functionality."""
     result = some_function("input")

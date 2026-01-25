@@ -15,6 +15,8 @@ from pathlib import Path
 from .archive_transcriber import (
     configure_logging,
     Manifest,
+    ManifestProtocol,
+    ManifestRecord,
     discover_video_jobs,
     extract_audio,
     atomic_write,
@@ -30,21 +32,12 @@ from .ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Optional, Protocol, TypedDict, cast
+from typing import Any, Dict, Optional, TypedDict, cast
 
 try:
     from tqdm import tqdm
 except ImportError:
     tqdm = None
-
-
-ManifestRecord = Dict[str, Any]
-
-
-class ManifestProtocol(Protocol):
-    def __init__(self, path: Path) -> None: ...
-
-    def append(self, record: ManifestRecord) -> None: ...
 
 
 class _RemoteRequestData(TypedDict):
@@ -56,15 +49,15 @@ class _RemoteRequestData(TypedDict):
     vad_filter: str
 
 
-ManifestCtor = cast(type[ManifestProtocol], Manifest)
+ManifestCtor = Manifest
 
 
 def process_job_remote(
     job: VideoJob,
     args: argparse.Namespace,
-    manifest: ManifestProtocol,
+    manifest: ManifestProtocol,  # type: ignore
     remote_url: str,
-) -> ManifestRecord:
+) -> ManifestRecord:  # type: ignore
     """
     Process a single job using remote GPU inference.
 
@@ -120,9 +113,36 @@ def process_job_remote(
                     f"Remote transcription failed: {result.get('error')}"
                 )
 
-            ru_content = cast(str, result["ru_vtt"])
-            en_content = cast(str, result["en_vtt"])
-            duration = cast(float, result.get("duration", duration))
+            ru_vtt_data = result.get("ru_vtt")
+            if (
+                not ru_vtt_data
+                or not isinstance(ru_vtt_data, str)
+                or not ru_vtt_data.strip()
+            ):
+                raise RuntimeError(
+                    f"Remote transcription response missing or invalid 'ru_vtt' field. Status: {result.get('status')}, Response: {result}"
+                )
+            ru_content = ru_vtt_data
+
+            en_vtt_data = result.get("en_vtt")
+            if (
+                not en_vtt_data
+                or not isinstance(en_vtt_data, str)
+                or not en_vtt_data.strip()
+            ):
+                raise RuntimeError(
+                    f"Remote transcription response missing or invalid 'en_vtt' field. Status: {result.get('status')}, Response: {result}"
+                )
+            en_content = en_vtt_data
+
+            duration_value = result.get("duration")
+            if duration_value is not None:
+                if not isinstance(duration_value, (int, float)):
+                    raise RuntimeError(
+                        f"Invalid duration type in remote response: {type(duration_value)}. Expected int or float."
+                    )
+                duration = float(duration_value)
+            # else keep the existing duration value
 
             # Step 4: Save VTT files locally
             atomic_write(job.ru_vtt, ru_content)
@@ -133,15 +153,15 @@ def process_job_remote(
                 filter_words = load_filter_words()
                 ru_cues = parse_vtt_content(ru_content)
                 en_cues = parse_vtt_content(en_content)
-                ttml_lang1 = (
-                    LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
-                    or args.source_language
+                ttml_lang1 = cast(
+                    str,
+                    LANG_CODE_2_TO_3.get(args.source_language, args.source_language),
                 )
-                ttml_lang2 = (
+                ttml_lang2 = cast(
+                    str,
                     LANG_CODE_2_TO_3.get(
                         args.translation_language, args.translation_language
-                    )
-                    or args.translation_language
+                    ),
                 )
                 ttml_content = cues_to_ttml(
                     ru_cues,
@@ -172,7 +192,7 @@ def process_job_remote(
         # Step 6: Generate SMIL locally
         write_smil(job, metadata, args)
 
-        record: ManifestRecord = {
+        record: ManifestRecord = {  # type: ignore
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -183,18 +203,18 @@ def process_job_remote(
             "processed_at": human_time(),
             "processing_time_sec": round(time.time() - start_time, 2),
         }
-        manifest.append(record)
+        manifest.append(record)  # type: ignore
         return record
 
     except Exception as exc:
         LOGGER.error("Failed to process %s: %s", job.video_path, exc)
-        record: ManifestRecord = {
+        record: ManifestRecord = {  # type: ignore
             "video_path": str(job.video_path),
             "status": "error",
             "error": str(exc),
             "processed_at": human_time(),
         }
-        manifest.append(record)
+        manifest.append(record)  # type: ignore
         return record
 
     finally:
@@ -283,7 +303,7 @@ def main():
         LOGGER.error("Input root %s does not exist", input_root)
         return 2
 
-    manifest: ManifestProtocol = ManifestCtor(args.manifest.resolve())
+    manifest: ManifestProtocol = ManifestCtor(args.manifest.resolve())  # type: ignore
     extensions = [
         ext if ext.startswith(".") else f".{ext}"
         for ext in args.extensions.split(",")
@@ -293,7 +313,7 @@ def main():
     jobs = discover_video_jobs(
         input_root,
         output_root,
-        cast(Manifest, manifest),
+        manifest,
         args.force or args.smil_only,
         extensions,
         not args.no_ttml,

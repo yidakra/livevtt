@@ -8,14 +8,14 @@ returns VTT transcriptions and translations.
 
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Protocol, cast
+from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, cast
 
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
 
 try:
     from faster_whisper import WhisperModel  # type: ignore
-except Exception:  # pragma: no cover - typing fallback when stubs are missing
+except ImportError:  # pragma: no cover - typing fallback when stubs are missing
     WhisperModel = Any  # type: ignore
 import uvicorn
 
@@ -28,7 +28,7 @@ models: Dict[str, Any] = {}
 class SegmentLike(Protocol):
     start: float
     end: float
-    text: str
+    text: Optional[str]
 
 
 def get_model(

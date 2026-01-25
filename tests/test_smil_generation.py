@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """Unit tests for SMIL manifest generation."""
 
-import importlib
+from __future__ import annotations
+
 import logging
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
+import argparse
 from unittest import mock
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
+from pytest import LogCaptureFixture
 
 # Mock dependencies
 sys.modules["faster_whisper"] = mock.MagicMock()
 
-archive_transcriber = importlib.import_module("archive_transcriber")
+from src.python.tools.archive_transcriber import (  # noqa: E402
+    VideoJob,
+    VideoMetadata,
+    write_smil,
+)
 
-write_smil = archive_transcriber.write_smil
-VideoJob = archive_transcriber.VideoJob
-VideoMetadata = archive_transcriber.VideoMetadata
 
-
-class MockArgs:
+class MockArgs(argparse.Namespace):
     """Mock command-line arguments."""
 
     def __init__(
@@ -32,6 +32,7 @@ class MockArgs:
         vtt_in_smil: bool = False,
         no_ttml: bool = False,
     ) -> None:
+        super().__init__()
         self.smil_only = smil_only
         self.vtt_in_smil = vtt_in_smil
         self.no_ttml = no_ttml
@@ -45,7 +46,7 @@ def tmpdir_with_vtts(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def video_job(tmpdir_with_vtts: Path) -> Any:
+def video_job(tmpdir_with_vtts: Path) -> VideoJob:
     return VideoJob(
         video_path=tmpdir_with_vtts / "video.ts",
         normalized_name="video.ts",
@@ -57,7 +58,7 @@ def video_job(tmpdir_with_vtts: Path) -> Any:
 
 
 @pytest.fixture
-def metadata() -> Any:
+def metadata() -> VideoMetadata:
     return VideoMetadata(
         duration=120.0,
         width=1920,
@@ -74,7 +75,7 @@ def args() -> MockArgs:
 
 
 @pytest.fixture
-def video_job_missing_vtts(tmp_path: Path) -> Any:
+def video_job_missing_vtts(tmp_path: Path) -> VideoJob:
     return VideoJob(
         video_path=tmp_path / "video.ts",
         normalized_name="video.ts",
@@ -88,7 +89,9 @@ def video_job_missing_vtts(tmp_path: Path) -> Any:
 class TestSMILGeneration:
     """Tests for SMIL manifest generation."""
 
-    def test_smil_basic_structure(self, video_job: Any, metadata: Any, args: MockArgs):
+    def test_smil_basic_structure(
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
+    ) -> None:
         """Test basic SMIL structure generation."""
         write_smil(video_job, metadata, args)
 
@@ -104,7 +107,9 @@ class TestSMILGeneration:
         assert root.find("body") is not None
         assert root.find("body/switch") is not None
 
-    def test_smil_video_element(self, video_job: Any, metadata: Any, args: MockArgs):
+    def test_smil_video_element(
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
+    ) -> None:
         """Test that SMIL includes video element with metadata."""
         write_smil(video_job, metadata, args)
 
@@ -121,8 +126,8 @@ class TestSMILGeneration:
         assert video.get("height") == "1080"
 
     def test_smil_textstream_elements(
-        self, video_job: Any, metadata: Any, args: MockArgs
-    ):
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
+    ) -> None:
         """
         Verify the SMIL contains two subtitle textstream elements (Russian and English) with correct src and language attributes.
 
@@ -155,8 +160,8 @@ class TestSMILGeneration:
         assert en_stream.get("src") == "video.en.vtt"
 
     def test_smil_update_preserves_structure(
-        self, video_job: Any, metadata: Any, args: MockArgs
-    ):
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
+    ) -> None:
         """Test that updating SMIL preserves existing structure."""
         # Generate SMIL first time
         write_smil(video_job, metadata, args)
@@ -183,11 +188,11 @@ class TestSMILGeneration:
 
     def test_smil_missing_vtt_warning(
         self,
-        video_job_missing_vtts: Any,
-        metadata: Any,
+        video_job_missing_vtts: VideoJob,
+        metadata: VideoMetadata,
         args: MockArgs,
-        caplog: Any,
-    ):
+        caplog: LogCaptureFixture,
+    ) -> None:
         """Test that SMIL generation handles missing VTT files."""
         # Should not crash, just skip missing textstreams and emit warnings
         with caplog.at_level(logging.WARNING):
@@ -214,7 +219,9 @@ class TestSMILGeneration:
         # No textstreams should be added for missing files
         assert len(textstreams) == 0
 
-    def test_smil_codec_params(self, video_job: Any, metadata: Any, args: MockArgs):
+    def test_smil_codec_params(
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
+    ) -> None:
         """Test that video codec parameters are included."""
         write_smil(video_job, metadata, args)
 
@@ -241,7 +248,9 @@ class TestSMILGeneration:
         assert audio_codec_param is not None
         assert audio_codec_param.get("value") == "aac"
 
-    def test_smil_ttml_bilingual_language(self, video_job: Any, metadata: Any):
+    def test_smil_ttml_bilingual_language(
+        self, video_job: VideoJob, metadata: VideoMetadata
+    ) -> None:
         """Test that TTML textstream includes both languages in system-language."""
         # Create TTML file
         video_job.ttml.write_text("<?xml version='1.0' encoding='UTF-8'?><tt></tt>")
