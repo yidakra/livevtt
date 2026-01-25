@@ -1398,6 +1398,7 @@ def process_job(
             "duration": duration,
             "processed_at": human_time(),
             "processing_time_sec": round(time.time() - start_time, 2),
+            "processing_mode": "local",
         }
         manifest.append(record)
         return record
@@ -1434,6 +1435,7 @@ def process_job(
             "error": error_msg,
             "error_type": error_type,
             "processed_at": human_time(),
+            "processing_mode": "local",
         }
         manifest.append(error_record)
         return error_record
@@ -1638,6 +1640,7 @@ def process_translation_only(
             "processed_at": human_time(),
             "processing_time_sec": round(time.time() - start_time, 2),
             "worker_info": get_worker_info(),
+            "processing_mode": "local",
         }
         manifest.append(record)
         return record
@@ -1655,6 +1658,7 @@ def process_translation_only(
             "error": str(exc),
             "processed_at": human_time(),
             "worker_info": get_worker_info(),
+            "processing_mode": "local",
         }
         manifest.append(error_record)
         return error_record

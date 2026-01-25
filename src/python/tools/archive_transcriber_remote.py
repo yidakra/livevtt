@@ -89,18 +89,25 @@ def process_job_remote(
 
             # Step 2: Send to remote GPU server
             LOGGER.debug("Sending audio to remote GPU: %s", remote_url)
-            
+
             # Create session with retry logic for transient failures
             retry_strategy = urllib3.util.retry.Retry(
                 total=3,  # Total number of retries
                 backoff_factor=1,  # Exponential backoff: 1, 2, 4 seconds
-                status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes to retry on
+                status_forcelist=[
+                    429,
+                    500,
+                    502,
+                    503,
+                    504,
+                ],  # HTTP status codes to retry on
+                allowed_methods=frozenset({"POST", "GET", "HEAD", "OPTIONS"}),
             )
             adapter = HTTPAdapter(max_retries=retry_strategy)
             with requests.Session() as session:
                 session.mount("http://", adapter)
                 session.mount("https://", adapter)
-                
+
                 with open(audio_path, "rb") as audio_file:
                     files = {"audio": audio_file}
                     data: _RemoteRequestData = {
@@ -133,7 +140,9 @@ def process_job_remote(
                 or not isinstance(ru_vtt_data, str)
                 or not ru_vtt_data.strip()
             ):
-                safe_preview = result.get("ru_vtt") or result.get("en_vtt") or repr(result)
+                safe_preview = (
+                    result.get("en_vtt") or result.get("ru_vtt") or repr(result)
+                )
                 preview_text = str(safe_preview)[:500]
                 raise RuntimeError(
                     "Remote transcription response missing or invalid 'ru_vtt' field. "
@@ -147,7 +156,9 @@ def process_job_remote(
                 or not isinstance(en_vtt_data, str)
                 or not en_vtt_data.strip()
             ):
-                safe_preview = result.get("en_vtt") or result.get("ru_vtt") or repr(result)
+                safe_preview = (
+                    result.get("ru_vtt") or result.get("en_vtt") or repr(result)
+                )
                 preview_text = str(safe_preview)[:500]
                 raise RuntimeError(
                     "Remote transcription response missing or invalid 'en_vtt' field. "
@@ -222,6 +233,7 @@ def process_job_remote(
             "duration": duration,
             "processed_at": human_time(),
             "processing_time_sec": round(time.time() - start_time, 2),
+            "processing_mode": "remote",
         }
         manifest.append(record)
         return record
@@ -233,6 +245,7 @@ def process_job_remote(
             "status": "error",
             "error": str(exc),
             "processed_at": human_time(),
+            "processing_mode": "remote",
         }
         manifest.append(error_record)
         return error_record

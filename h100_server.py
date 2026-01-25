@@ -87,7 +87,6 @@ def transcribe(_endpoint_id: str) -> Any:
         model_raw = input_data.get("model", "large-v3-turbo")
         if not isinstance(model_raw, str):
             return jsonify({"error": "Invalid model type, expected string"}), 400
-        model_name_raw = model_raw
         translate = bool(input_data.get("translate", False))
         language = cast(str, input_data.get("language", "auto"))
         try:
@@ -98,7 +97,7 @@ def transcribe(_endpoint_id: str) -> Any:
         if not audio_b64:
             return jsonify({"error": "No audio_base_64 provided"}), 400
 
-        model_name_key = model_name_raw.strip().lower()
+        model_name_key = model_raw.strip().lower()
         model_name = model_name_key if model_name_key in SUPPORTED_MODELS else None
         if model_name is None:
             return (
