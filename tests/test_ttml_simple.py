@@ -49,7 +49,9 @@ Second subtitle
 """
     vtt_path = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".vtt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".vtt", delete=False, encoding="utf-8"
+        ) as f:
             f.write(vtt_content)
             vtt_path = f.name
 
@@ -99,22 +101,28 @@ Hello, world!
 """
 
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8") as f_ru:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8"
+        ) as f_ru:
             f_ru.write(vtt_ru_content)
             vtt_ru_path = f_ru.name
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".en.vtt", delete=False, encoding="utf-8") as f_en:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".en.vtt", delete=False, encoding="utf-8"
+        ) as f_en:
             f_en.write(vtt_en_content)
             vtt_en_path = f_en.name
 
-        ttml_content = vtt_files_to_ttml(vtt_ru_path, vtt_en_path, lang1="ru", lang2="en")
+        ttml_content = vtt_files_to_ttml(
+            vtt_ru_path, vtt_en_path, lang1="ru", lang2="en"
+        )
 
         # Validate XML structure
         assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
         assert '<tt xmlns="http://www.w3.org/ns/ttml"' in ttml_content
         assert 'xml:lang="ru"' in ttml_content
-        assert 'Привет, мир!' in ttml_content
-        assert 'Hello, world!' in ttml_content
+        assert "Привет, мир!" in ttml_content
+        assert "Hello, world!" in ttml_content
 
         # Parse XML to validate structure
         xml_content = ttml_content.split("\n", 1)[1]

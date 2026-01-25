@@ -18,8 +18,9 @@ from typing import List, Optional, Protocol, Tuple
 @dataclass
 class SubtitleCue:
     """Represents a single subtitle cue with timing and text."""
+
     start: float  # Start time in seconds
-    end: float    # End time in seconds
+    end: float  # End time in seconds
     text: str
 
 
@@ -38,12 +39,12 @@ _FILTER_CACHE: Optional[Tuple[Optional[Path], List[str]]] = None
 def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
     """
     Load and return the list of filter words from a filter.json file.
-    
+
     If filter_json_path is None the function searches standard locations relative to the package for a filter.json file. The result is cached per-resolved path; if the file is missing or contains invalid JSON, an empty list is returned and cached.
-    
+
     Parameters:
         filter_json_path (Optional[Path]): Optional path to a filter.json file. If omitted, standard locations are searched.
-    
+
     Returns:
         List[str]: The list of filter words; an empty list if no valid file is found or loading fails.
     """
@@ -89,11 +90,11 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
 def should_filter_cue(text: str, filter_words: List[str]) -> bool:
     """
     Determine whether a cue's text contains any of the provided filter words.
-    
+
     Parameters:
         text (str): Cue text to inspect.
         filter_words (List[str]): Substrings to search for; matching is case-insensitive.
-    
+
     Returns:
         `True` if any filter word appears in `text`, `False` otherwise.
     """
@@ -111,13 +112,13 @@ def should_filter_cue(text: str, filter_words: List[str]) -> bool:
 def format_ttml_timestamp(seconds: float) -> str:
     """
     Format a non-negative time value as a TTML timestamp in HH:MM:SS.mmm.
-    
+
     Parameters:
         seconds: Non-negative time value; fractional seconds are supported and are truncated to milliseconds.
-    
+
     Returns:
         TTML timestamp string in the form "HH:MM:SS.mmm".
-    
+
     Raises:
         ValueError: If `seconds` is negative.
     """
@@ -240,9 +241,7 @@ def parse_vtt_content(vtt_content: str) -> List[SubtitleCue]:
 
 
 def align_bilingual_cues(
-    cues_lang1: List[SubtitleCue],
-    cues_lang2: List[SubtitleCue],
-    tolerance: float = 2.5
+    cues_lang1: List[SubtitleCue], cues_lang2: List[SubtitleCue], tolerance: float = 2.5
 ) -> List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]:
     """Align two lists of subtitle cues by timestamp.
 
@@ -266,13 +265,6 @@ def align_bilingual_cues(
         while en_index < total_en and cues_lang2[en_index].end + tolerance < cue1.start:
             aligned.append((None, [cues_lang2[en_index]]))
             en_index += 1
-
-        next_start = (
-            cues_lang1[idx + 1].start if idx + 1 < len(cues_lang1) else float("inf")
-        )
-        limit = (
-            (cue1.start + next_start) / 2.0 if next_start != float("inf") else float("inf")
-        )
 
         matched: List[SubtitleCue] = []
         while en_index < total_en:
@@ -302,18 +294,18 @@ def create_ttml_document(
     lang1: str = "rus",
     lang2: str = "eng",
     default_lang: str = "en",
-    filter_words: Optional[List[str]] = None
+    filter_words: Optional[List[str]] = None,
 ) -> ET.Element:
     """
     Builds a namespaced TTML <tt> element containing two language-specific <div> sections with styled and regioned subtitle cues.
-    
+
     Parameters:
         aligned_cues (List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]): Sequence of tuples where the first element is an optional cue from the first language and the second element is a list of cues from the second language aligned to it.
         lang1 (str): Language code assigned to the second div (defaults to "rus").
         lang2 (str): Language code assigned to the first div (defaults to "eng").
         default_lang (str): Language code set on the root xml:lang attribute (defaults to "en").
         filter_words (Optional[List[str]]): If provided, cues whose text contains any of these words (case-insensitive) will be omitted.
-    
+
     Returns:
         ET.Element: The root <tt> element of the constructed TTML document.
     """
@@ -396,24 +388,26 @@ def aligned_cues_to_ttml(
     aligned_cues: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]],
     lang1: str = "rus",
     lang2: str = "eng",
-    filter_words: Optional[List[str]] = None
+    filter_words: Optional[List[str]] = None,
 ) -> str:
     """
     Builds a TTML document string from aligned bilingual subtitle cues.
-    
+
     Converts the provided alignment (pairs of an optional cue from language 1 and a list of cues from language 2) into a complete TTML XML string. If `filter_words` is provided, any cue whose text contains any of those words (case-insensitive) will be omitted from the output.
-    
+
     Parameters:
         aligned_cues (List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]): Alignment where each item is a tuple of an optional cue for language 1 and a list of cues for language 2.
         lang1 (str): Language tag to apply to spans derived from the first-language cues.
         lang2 (str): Language tag to apply to spans derived from the second-language cues.
         filter_words (Optional[List[str]]): Optional list of words; cues containing any of these words (case-insensitive) will be skipped.
-    
+
     Returns:
         str: A TTML XML document as a string, including an XML declaration.
     """
 
-    tt = create_ttml_document(aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words)
+    tt = create_ttml_document(
+        aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words
+    )
 
     if hasattr(ET, "indent"):
         ET.indent(tt, space="  ")
@@ -429,14 +423,16 @@ def cues_to_ttml(
     lang2: str = "eng",
     *,
     tolerance: float = 2.5,
-    aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
+    aligned_cues: Optional[
+        List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]
+    ] = None,
     filter_words: Optional[List[str]] = None,
 ) -> str:
     """
     Convert two lists of SubtitleCue into a TTML document string.
-    
+
     If `aligned_cues` is not provided, cues are aligned using `tolerance` before conversion.
-    
+
     Parameters:
         cues_lang1 (List[SubtitleCue]): Cues for the first language.
         cues_lang2 (List[SubtitleCue]): Cues for the second language.
@@ -445,7 +441,7 @@ def cues_to_ttml(
         tolerance (float): Maximum time difference in seconds used when aligning cues.
         aligned_cues (Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]]): Optional precomputed alignment to use instead of computing it.
         filter_words (Optional[List[str]]): Optional list of words; any cue whose text contains any of these words (case-insensitive) will be omitted from the output.
-    
+
     Returns:
         str: Complete TTML XML document as a string.
     """
@@ -453,7 +449,9 @@ def cues_to_ttml(
     if aligned_cues is None:
         aligned_cues = align_bilingual_cues(cues_lang1, cues_lang2, tolerance=tolerance)
 
-    return aligned_cues_to_ttml(aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words)
+    return aligned_cues_to_ttml(
+        aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words
+    )
 
 
 def segments_to_ttml(
@@ -467,17 +465,17 @@ def segments_to_ttml(
 ) -> str:
     """
     Convert segment-like objects for two languages into a TTML document string.
-    
+
     Parameters:
-    	segments_lang1 (List[SegmentLike]): Segments for the first language; each item must have `start`, `end`, and `text` attributes.
-    	segments_lang2 (List[SegmentLike]): Segments for the second language.
-    	lang1 (str): Language code to assign to first-language text.
-    	lang2 (str): Language code to assign to second-language text.
-    	tolerance (float): Maximum time difference in seconds used when aligning segments into bilingual cues.
-    	filter_words (Optional[List[str]]): Optional list of substrings (case-insensitive). Segments whose text contains any of these substrings will be omitted from the output.
-    
+        segments_lang1 (List[SegmentLike]): Segments for the first language; each item must have `start`, `end`, and `text` attributes.
+        segments_lang2 (List[SegmentLike]): Segments for the second language.
+        lang1 (str): Language code to assign to first-language text.
+        lang2 (str): Language code to assign to second-language text.
+        tolerance (float): Maximum time difference in seconds used when aligning segments into bilingual cues.
+        filter_words (Optional[List[str]]): Optional list of substrings (case-insensitive). Segments whose text contains any of these substrings will be omitted from the output.
+
     Returns:
-    	str: TTML XML content as a string.
+        str: TTML XML content as a string.
     """
 
     cues_lang1 = [
@@ -511,12 +509,14 @@ def vtt_files_to_ttml(
     tolerance: float = 2.5,
     cues_lang1: Optional[List[SubtitleCue]] = None,
     cues_lang2: Optional[List[SubtitleCue]] = None,
-    aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
+    aligned_cues: Optional[
+        List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]
+    ] = None,
     filter_words: Optional[List[str]] = None,
 ) -> str:
     """
     Convert two WebVTT files (or pre-parsed/aligned cues) into a single TTML document string with aligned subtitles.
-    
+
     Parameters:
         vtt_path_lang1 (str): Path to the first-language VTT file; used only if `cues_lang1` is not provided.
         vtt_path_lang2 (str): Path to the second-language VTT file; used only if `cues_lang2` is not provided.
@@ -527,13 +527,15 @@ def vtt_files_to_ttml(
         cues_lang2 (Optional[List[SubtitleCue]]): Pre-parsed cues for the second language; if provided, file at `vtt_path_lang2` is not read.
         aligned_cues (Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]]): Pre-aligned cue groups to convert directly; if provided, parsing and alignment are skipped.
         filter_words (Optional[List[str]]): Optional list of words; cues containing any of these (case-insensitive) will be omitted from the output.
-    
+
     Returns:
         str: The TTML XML document as a string.
     """
 
     if aligned_cues is not None:
-        return aligned_cues_to_ttml(aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words)
+        return aligned_cues_to_ttml(
+            aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words
+        )
 
     if cues_lang1 is None:
         cues_lang1 = parse_vtt_file(str(vtt_path_lang1))

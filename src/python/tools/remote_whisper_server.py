@@ -6,10 +6,8 @@ Receives audio files via HTTP, runs Faster-Whisper inference,
 returns VTT transcriptions and translations.
 """
 
-import io
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
@@ -25,21 +23,18 @@ models = {}
 def get_model(
     model_name: str = "large-v3-turbo",
     device: str = "cuda",
-    compute_type: str = "float16"
+    compute_type: str = "float16",
 ) -> WhisperModel:
     """Get or load Whisper model (cached)."""
     key = f"{model_name}_{device}_{compute_type}"
     if key not in models:
-        models[key] = WhisperModel(
-            model_name,
-            device=device,
-            compute_type=compute_type
-        )
+        models[key] = WhisperModel(model_name, device=device, compute_type=compute_type)
     return models[key]
 
 
 def segments_to_vtt(segments, prepend_header: bool = True) -> str:
     """Convert segments to WebVTT format."""
+
     def format_timestamp(seconds: float) -> str:
         total_ms = int(seconds * 1000)
         hours, remainder = divmod(total_ms, 3_600_000)
@@ -123,22 +118,20 @@ async def transcribe(
         Path(tmp_path).unlink()
 
         duration = max(
-            ru_info.duration if ru_info else 0.0,
-            en_info.duration if en_info else 0.0
+            ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0
         )
 
-        return JSONResponse({
-            "status": "success",
-            "ru_vtt": ru_vtt,
-            "en_vtt": en_vtt,
-            "duration": duration,
-        })
+        return JSONResponse(
+            {
+                "status": "success",
+                "ru_vtt": ru_vtt,
+                "en_vtt": en_vtt,
+                "duration": duration,
+            }
+        )
 
     except Exception as e:
-        return JSONResponse(
-            {"status": "error", "error": str(e)},
-            status_code=500
-        )
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
 
 @app.get("/health")

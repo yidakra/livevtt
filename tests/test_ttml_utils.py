@@ -92,7 +92,9 @@ Hello, world!
 00:00:10.000 --> 00:00:12.500
 Second subtitle
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".vtt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".vtt", delete=False, encoding="utf-8"
+        ) as f:
             f.write(vtt_content)
             vtt_path = f.name
 
@@ -120,7 +122,9 @@ First line
 Second line
 Third line
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".vtt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".vtt", delete=False, encoding="utf-8"
+        ) as f:
             f.write(vtt_content)
             vtt_path = f.name
 
@@ -146,7 +150,9 @@ Hello
 World
 
 """
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".vtt", delete=False, encoding="utf-8") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".vtt", delete=False, encoding="utf-8"
+        ) as f:
             f.write(vtt_content)
             vtt_path = f.name
 
@@ -254,7 +260,10 @@ class TestTTMLDocumentCreation:
         # Check root element with namespaces
         assert root.tag == "{http://www.w3.org/ns/ttml}tt"
         assert root.get("{http://www.w3.org/XML/1998/namespace}lang") == "en"
-        assert root.get("{http://www.w3.org/ns/ttml#parameter}profile") == "ttml2-presentation"
+        assert (
+            root.get("{http://www.w3.org/ns/ttml#parameter}profile")
+            == "ttml2-presentation"
+        )
 
         # Check head with styling and layout
         head = root.find("{http://www.w3.org/ns/ttml}head")
@@ -337,6 +346,7 @@ class TestSegmentsToTTML:
         """
         Verify conversion of parallel speech segments into a bilingual TTML string containing an XML declaration, a TTML root with `xml:lang="en"`, a head section, two language-specific `div` elements (`eng` and `rus`), and `p` elements with correct `begin`/`end` timestamps and texts.
         """
+
         # Mock Whisper segment objects
         class MockSegment:
             def __init__(self, start, end, text):
@@ -354,16 +364,24 @@ class TestSegmentsToTTML:
             MockSegment(10.0, 12.0, "How are you?"),
         ]
 
-        ttml_content = segments_to_ttml(segments_ru, segments_en, lang1="rus", lang2="eng")
+        ttml_content = segments_to_ttml(
+            segments_ru, segments_en, lang1="rus", lang2="eng"
+        )
 
         assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
         assert '<tt xmlns="http://www.w3.org/ns/ttml"' in ttml_content
         assert 'xml:lang="en"' in ttml_content  # Root lang is en
-        assert '<head>' in ttml_content
+        assert "<head>" in ttml_content
         assert '<div xml:lang="eng">' in ttml_content
         assert '<div xml:lang="rus">' in ttml_content
-        assert '<p begin="00:00:05.000" end="00:00:07.000">Привет, мир!</p>' in ttml_content
-        assert '<p begin="00:00:05.000" end="00:00:07.000">Hello, world!</p>' in ttml_content
+        assert (
+            '<p begin="00:00:05.000" end="00:00:07.000">Привет, мир!</p>'
+            in ttml_content
+        )
+        assert (
+            '<p begin="00:00:05.000" end="00:00:07.000">Hello, world!</p>'
+            in ttml_content
+        )
 
 
 class TestVTTFilesToTTML:
@@ -393,16 +411,22 @@ Hello, world!
 How are you?
 """
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8") as f_ru:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8"
+        ) as f_ru:
             f_ru.write(vtt_ru_content)
             vtt_ru_path = f_ru.name
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".en.vtt", delete=False, encoding="utf-8") as f_en:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".en.vtt", delete=False, encoding="utf-8"
+        ) as f_en:
             f_en.write(vtt_en_content)
             vtt_en_path = f_en.name
 
         try:
-            ttml_content = vtt_files_to_ttml(vtt_ru_path, vtt_en_path, lang1="rus", lang2="eng")
+            ttml_content = vtt_files_to_ttml(
+                vtt_ru_path, vtt_en_path, lang1="rus", lang2="eng"
+            )
 
             # Validate XML structure
             assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content

@@ -49,7 +49,9 @@ def check_progress(manifest_path="logs/archive_transcriber_manifest.jsonl"):
     latest_time = latest.get("processed_at", "unknown")
 
     # Calculate processing times
-    processing_times = [r.get("processing_time", 0) for r in records if r.get("status") == "success"]
+    processing_times = [
+        r.get("processing_time", 0) for r in records if r.get("status") == "success"
+    ]
     avg_time = sum(processing_times) / len(processing_times) if processing_times else 0
 
     # Display results
@@ -91,7 +93,9 @@ def check_progress(manifest_path="logs/archive_transcriber_manifest.jsonl"):
         for record in records:
             if record.get("status") == "error":
                 video_path = record.get("video_path", "unknown")
-                filename = Path(video_path).name if video_path != "unknown" else "unknown"
+                filename = (
+                    Path(video_path).name if video_path != "unknown" else "unknown"
+                )
                 error_msg = record.get("error", "unknown error")
                 print(f"❌ {filename}")
                 print(f"   {error_msg[:70]}")
@@ -99,5 +103,7 @@ def check_progress(manifest_path="logs/archive_transcriber_manifest.jsonl"):
 
 
 if __name__ == "__main__":
-    manifest_path = sys.argv[1] if len(sys.argv) > 1 else "logs/archive_transcriber_manifest.jsonl"
+    manifest_path = (
+        sys.argv[1] if len(sys.argv) > 1 else "logs/archive_transcriber_manifest.jsonl"
+    )
     check_progress(manifest_path)

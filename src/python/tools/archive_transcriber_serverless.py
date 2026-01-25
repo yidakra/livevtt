@@ -18,9 +18,8 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -35,7 +34,6 @@ except ImportError:
 from archive_transcriber import (
     VideoJob,
     Manifest,
-    VideoMetadata,
     probe_video_metadata,
     write_smil,
     discover_video_jobs,
@@ -56,6 +54,7 @@ LOGGER = logging.getLogger("archive_transcriber_serverless")
 @dataclass
 class WhisperSegment:
     """Compatible segment structure for existing VTT generation"""
+
     start: float
     end: float
     text: str
@@ -88,9 +87,9 @@ def call_runpod_serverless(
         List of WhisperSegment objects
     """
     # Read and encode audio file
-    with open(audio_path, 'rb') as f:
+    with open(audio_path, "rb") as f:
         audio_data = f.read()
-    audio_b64 = base64.b64encode(audio_data).decode('utf-8')
+    audio_b64 = base64.b64encode(audio_data).decode("utf-8")
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -117,14 +116,16 @@ def call_runpod_serverless(
     start_time = time.time()
 
     # Support custom base URL (for H100) or RunPod
-    base_url = os.getenv("H100_URL", f"https://api.runpod.ai")
+    base_url = os.getenv("H100_URL", "https://api.runpod.ai")
 
     try:
         # Submit job to /run endpoint
         submit_url = f"{base_url}/v2/{endpoint_id}/run"
         # For H100 synchronous mode, use longer timeout to wait for transcription to complete
         http_timeout = 600  # 10 minutes
-        response = requests.post(submit_url, headers=headers, json=payload, timeout=http_timeout)
+        response = requests.post(
+            submit_url, headers=headers, json=payload, timeout=http_timeout
+        )
         response.raise_for_status()
         submit_result = response.json()
 
@@ -152,7 +153,11 @@ def call_runpod_serverless(
                 )
 
             elapsed = time.time() - start_time
-            LOGGER.debug("Job completed synchronously in %.2f seconds with %d segments", elapsed, len(segments))
+            LOGGER.debug(
+                "Job completed synchronously in %.2f seconds with %d segments",
+                elapsed,
+                len(segments),
+            )
             return segments
 
         # Poll for results using /stream endpoint (for streaming handlers)
@@ -174,11 +179,17 @@ def call_runpod_serverless(
 
             if status == "COMPLETED":
                 # DEBUG: Log the FULL response structure
-                LOGGER.debug("Full API response: %s", json.dumps(result, indent=2)[:2000])
+                LOGGER.debug(
+                    "Full API response: %s", json.dumps(result, indent=2)[:2000]
+                )
 
                 # For streaming endpoints, output is in the 'stream' field
                 stream_data = result.get("stream", [])
-                LOGGER.debug("Stream data type: %s, length: %d", type(stream_data), len(stream_data) if isinstance(stream_data, list) else 0)
+                LOGGER.debug(
+                    "Stream data type: %s, length: %d",
+                    type(stream_data),
+                    len(stream_data) if isinstance(stream_data, list) else 0,
+                )
 
                 # Aggregate stream data - each item should have the output
                 output = {}
@@ -188,11 +199,19 @@ def call_runpod_serverless(
                         if isinstance(item, dict) and "output" in item:
                             output = item["output"]
                             break
-                LOGGER.debug("Output type: %s, Output keys: %s", type(output), output.keys() if isinstance(output, dict) else "N/A")
+                LOGGER.debug(
+                    "Output type: %s, Output keys: %s",
+                    type(output),
+                    output.keys() if isinstance(output, dict) else "N/A",
+                )
                 LOGGER.debug("Full output: %s", json.dumps(output, indent=2)[:1000])
 
                 segments_data = output.get("segments", [])
-                LOGGER.debug("Segments data type: %s, length: %d", type(segments_data), len(segments_data) if isinstance(segments_data, list) else 0)
+                LOGGER.debug(
+                    "Segments data type: %s, length: %d",
+                    type(segments_data),
+                    len(segments_data) if isinstance(segments_data, list) else 0,
+                )
 
                 # Convert to WhisperSegment objects
                 segments = []
@@ -205,7 +224,11 @@ def call_runpod_serverless(
                         )
                     )
 
-                LOGGER.debug("Job completed in %.2f seconds with %d segments", elapsed, len(segments))
+                LOGGER.debug(
+                    "Job completed in %.2f seconds with %d segments",
+                    elapsed,
+                    len(segments),
+                )
                 return segments
 
             elif status == "FAILED":
@@ -256,14 +279,16 @@ def extract_audio(video_path: Path, sample_rate: int) -> Path:
     if result.returncode != 0:
         stderr_preview = (result.stderr or "").splitlines()[-5:]
         raise RuntimeError(
-            f"FFmpeg failed for {video_path}: return code {result.returncode}\n" +
-            "\n".join(stderr_preview)
+            f"FFmpeg failed for {video_path}: return code {result.returncode}\n"
+            + "\n".join(stderr_preview)
         )
 
     return tmp_file_path
 
 
-def process_job_serverless(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
+def process_job_serverless(
+    job: VideoJob, args: argparse.Namespace, manifest: Manifest
+) -> Dict:
     """
     Process a single VideoJob using RunPod Serverless API.
 
@@ -316,32 +341,54 @@ def process_job_serverless(job: VideoJob, args: argparse.Namespace, manifest: Ma
 
             # Validate we got segments
             if not ru_segments:
-                raise RuntimeError(f"Russian transcription returned no segments for {job.video_path}")
+                raise RuntimeError(
+                    f"Russian transcription returned no segments for {job.video_path}"
+                )
             if not en_segments:
-                raise RuntimeError(f"English translation returned no segments for {job.video_path}")
+                raise RuntimeError(
+                    f"English translation returned no segments for {job.video_path}"
+                )
 
             # Generate VTT files
-            LOGGER.info("Transcription completed: %d RU segments, %d EN segments", len(ru_segments), len(en_segments))
+            LOGGER.info(
+                "Transcription completed: %d RU segments, %d EN segments",
+                len(ru_segments),
+                len(en_segments),
+            )
             ru_content = segments_to_webvtt(ru_segments, filter_words=filter_words)
             en_content = segments_to_webvtt(en_segments, filter_words=filter_words)
-            LOGGER.debug("Generated VTT content: %d RU chars, %d EN chars", len(ru_content), len(en_content))
+            LOGGER.debug(
+                "Generated VTT content: %d RU chars, %d EN chars",
+                len(ru_content),
+                len(en_content),
+            )
 
             atomic_write(job.ru_vtt, ru_content)
             atomic_write(job.en_vtt, en_content)
 
             # Verify files were written successfully
             if not job.ru_vtt.exists() or not job.en_vtt.exists():
-                raise RuntimeError(f"VTT files not created: ru_exists={job.ru_vtt.exists()}, en_exists={job.en_vtt.exists()}")
-            LOGGER.info("VTT files written successfully: %s (size: %d), %s (size: %d)",
-                       job.ru_vtt.name, job.ru_vtt.stat().st_size,
-                       job.en_vtt.name, job.en_vtt.stat().st_size)
+                raise RuntimeError(
+                    f"VTT files not created: ru_exists={job.ru_vtt.exists()}, en_exists={job.en_vtt.exists()}"
+                )
+            LOGGER.info(
+                "VTT files written successfully: %s (size: %d), %s (size: %d)",
+                job.ru_vtt.name,
+                job.ru_vtt.stat().st_size,
+                job.en_vtt.name,
+                job.en_vtt.stat().st_size,
+            )
 
             # Generate TTML file
             if not args.no_ttml:
                 ru_cues = parse_vtt_content(ru_content)
                 en_cues = parse_vtt_content(en_content)
-                ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
-                ttml_lang2 = LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
+                ttml_lang1 = LANG_CODE_2_TO_3.get(
+                    args.source_language, args.source_language
+                )
+                ttml_lang2 = LANG_CODE_2_TO_3.get(
+                    args.translation_language, args.translation_language
+                )
                 ttml_content = cues_to_ttml(
                     ru_cues,
                     en_cues,
@@ -357,7 +404,10 @@ def process_job_serverless(job: VideoJob, args: argparse.Namespace, manifest: Ma
                 duration = max(seg.end for seg in ru_segments)
         else:
             if not job.ru_vtt.exists() or not job.en_vtt.exists():
-                LOGGER.warning("Expected caption files missing for %s; skipping SMIL update", job.video_path)
+                LOGGER.warning(
+                    "Expected caption files missing for %s; skipping SMIL update",
+                    job.video_path,
+                )
                 return {
                     "video_path": str(job.video_path),
                     "ru_vtt": str(job.ru_vtt),
@@ -369,7 +419,9 @@ def process_job_serverless(job: VideoJob, args: argparse.Namespace, manifest: Ma
                     "processed_at": human_time(),
                     "processing_mode": "serverless",
                 }
-            LOGGER.info("VTT already present for %s; generating SMIL only.", job.video_path)
+            LOGGER.info(
+                "VTT already present for %s; generating SMIL only.", job.video_path
+            )
 
         write_smil(job, metadata, args)
 
@@ -435,7 +487,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=Path,
         help="Root directory of archived video chunks",
     )
-    parser.add_argument("--output-root", type=Path, help="Optional output root for VTT files")
+    parser.add_argument(
+        "--output-root", type=Path, help="Optional output root for VTT files"
+    )
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -477,8 +531,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default="en",
         help="Target language code",
     )
-    parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
-    parser.add_argument("--sample-rate", type=int, default=16000, help="Audio sample rate")
+    parser.add_argument(
+        "--beam-size", type=int, default=5, help="Beam size for decoding"
+    )
+    parser.add_argument(
+        "--sample-rate", type=int, default=16000, help="Audio sample rate"
+    )
     parser.add_argument(
         "--api-timeout",
         type=int,
@@ -491,11 +549,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=",".join(sorted(VIDEO_EXTENSIONS)),
         help="Video extensions",
     )
-    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers")
-    parser.add_argument("--max-files", type=int, help="Limit number of videos processed")
+    parser.add_argument(
+        "--workers", type=int, default=8, help="Number of parallel workers"
+    )
+    parser.add_argument(
+        "--max-files", type=int, help="Limit number of videos processed"
+    )
     parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL only")
     parser.add_argument("--no-ttml", action="store_true", help="Skip TTML generation")
-    parser.add_argument("--vtt-in-smil", action="store_true", help="Use VTT in SMIL instead of TTML")
+    parser.add_argument(
+        "--vtt-in-smil", action="store_true", help="Use VTT in SMIL instead of TTML"
+    )
     parser.add_argument("--log-file", type=Path, help="Log file path")
     parser.add_argument("--progress", action="store_true", help="Show progress bar")
     parser.add_argument("--force", action="store_true", help="Reprocess existing files")
@@ -507,8 +571,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--force-scan", action="store_true", help="Force fresh scan")
     parser.add_argument("--verbose", action="store_true", help="Debug logging")
-    parser.add_argument("--reverse", action="store_true", default=True, help="Process in reverse alphabetical order (default: True)")
-    parser.add_argument("--quick-start", action="store_true", help="Skip full job discovery, start processing immediately (faster for testing)")
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        default=True,
+        help="Process in reverse alphabetical order (default: True)",
+    )
+    parser.add_argument(
+        "--quick-start",
+        action="store_true",
+        help="Skip full job discovery, start processing immediately (faster for testing)",
+    )
     return parser.parse_args(argv)
 
 
@@ -519,7 +592,9 @@ def run(argv: Optional[List[str]] = None) -> int:
     # Get API key from args or environment
     api_key = args.api_key or os.getenv("RUNPOD_API_KEY")
     if not api_key:
-        LOGGER.error("RunPod API key not provided. Use --api-key or set RUNPOD_API_KEY environment variable")
+        LOGGER.error(
+            "RunPod API key not provided. Use --api-key or set RUNPOD_API_KEY environment variable"
+        )
         return 2
     args.api_key = api_key
 
@@ -531,16 +606,21 @@ def run(argv: Optional[List[str]] = None) -> int:
         return 2
 
     manifest = Manifest(args.manifest.resolve())
-    extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
+    extensions = [
+        ext if ext.startswith(".") else f".{ext}"
+        for ext in args.extensions.split(",")
+        if ext
+    ]
 
     scan_cache_path = args.scan_cache.resolve() if args.scan_cache else None
 
     # Quick start mode: find first N videos without full scan
     if args.quick_start and args.max_files:
-        LOGGER.info("Quick-start mode: finding first %d unprocessed videos", args.max_files)
+        LOGGER.info(
+            "Quick-start mode: finding first %d unprocessed videos", args.max_files
+        )
         from archive_transcriber import (
             normalise_variant_name,
-            select_best_variant,
             build_output_artifacts,
             should_skip,
         )
@@ -562,7 +642,7 @@ def run(argv: Optional[List[str]] = None) -> int:
             text=True,
             check=True,
         )
-        all_paths = find_result.stdout.strip().split('\n') if find_result.stdout else []
+        all_paths = find_result.stdout.strip().split("\n") if find_result.stdout else []
         video_paths = all_paths[: target_count * 3]
 
         for video_path_str in video_paths:
@@ -579,7 +659,15 @@ def run(argv: Optional[List[str]] = None) -> int:
             )
 
             # Skip if already processed
-            if should_skip(video_path, ru_vtt, en_vtt, ttml_path, smil_path, args.force, not args.no_ttml):
+            if should_skip(
+                video_path,
+                ru_vtt,
+                en_vtt,
+                ttml_path,
+                smil_path,
+                args.force,
+                not args.no_ttml,
+            ):
                 continue
 
             jobs.append(
@@ -610,7 +698,9 @@ def run(argv: Optional[List[str]] = None) -> int:
         # REVERSE ALPHABETICAL ORDER (to avoid conflicts with local transcriber)
         if args.reverse:
             jobs.sort(key=lambda job: job.video_path, reverse=True)
-            LOGGER.info("Processing in REVERSE alphabetical order to avoid conflicts with local transcriber")
+            LOGGER.info(
+                "Processing in REVERSE alphabetical order to avoid conflicts with local transcriber"
+            )
         else:
             jobs.sort(key=lambda job: job.video_path)
 
@@ -619,7 +709,7 @@ def run(argv: Optional[List[str]] = None) -> int:
                 LOGGER.warning("--max-files must be greater than zero")
                 jobs = []
             else:
-                jobs = jobs[:args.max_files]
+                jobs = jobs[: args.max_files]
 
     if not jobs:
         LOGGER.info("No videos to process. Exiting.")
@@ -641,7 +731,10 @@ def run(argv: Optional[List[str]] = None) -> int:
         if args.workers > 1:
             LOGGER.info("Using %d parallel workers", args.workers)
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
-                futures = [executor.submit(process_job_serverless, job, args, manifest) for job in jobs]
+                futures = [
+                    executor.submit(process_job_serverless, job, args, manifest)
+                    for job in jobs
+                ]
                 try:
                     for future in as_completed(futures):
                         record = future.result()

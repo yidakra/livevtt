@@ -22,16 +22,44 @@ LOGGER = logging.getLogger("subtitle_service")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Automatic subtitle generation service")
-    parser.add_argument("root", type=Path, help="Root directory to monitor for video chunks")
-    parser.add_argument("--output-root", type=Path, help="Optional output root for generated assets")
-    parser.add_argument("--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl"), help="Manifest path shared with archive_transcriber")
-    parser.add_argument("--interval", type=int, default=300, help="Polling interval in seconds")
-    parser.add_argument("--batch-size", type=int, default=5, help="Number of videos to process per cycle")
-    parser.add_argument("--smil-only", action="store_true", help="Regenerate SMIL manifests without modifying VTT files")
-    parser.add_argument("--force", action="store_true", help="Force regeneration of assets each cycle")
-    parser.add_argument("--one-shot", action="store_true", help="Run a single cycle and exit")
-    parser.add_argument("--log-file", type=Path, help="Optional log file for service output")
+    parser = argparse.ArgumentParser(
+        description="Automatic subtitle generation service"
+    )
+    parser.add_argument(
+        "root", type=Path, help="Root directory to monitor for video chunks"
+    )
+    parser.add_argument(
+        "--output-root", type=Path, help="Optional output root for generated assets"
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("logs/archive_transcriber_manifest.jsonl"),
+        help="Manifest path shared with archive_transcriber",
+    )
+    parser.add_argument(
+        "--interval", type=int, default=300, help="Polling interval in seconds"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=5,
+        help="Number of videos to process per cycle",
+    )
+    parser.add_argument(
+        "--smil-only",
+        action="store_true",
+        help="Regenerate SMIL manifests without modifying VTT files",
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Force regeneration of assets each cycle"
+    )
+    parser.add_argument(
+        "--one-shot", action="store_true", help="Run a single cycle and exit"
+    )
+    parser.add_argument(
+        "--log-file", type=Path, help="Optional log file for service output"
+    )
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
@@ -41,7 +69,11 @@ def configure_logging(args: argparse.Namespace) -> None:
     handlers = [logging.StreamHandler(sys.stdout)]
     if args.log_file:
         handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
-    logging.basicConfig(level=level, format="%(asctime)s %(levelname)-8s %(name)s: %(message)s", handlers=handlers)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        handlers=handlers,
+    )
 
 
 def build_transcriber_args(args: argparse.Namespace) -> List[str]:

@@ -8,11 +8,11 @@ from pathlib import Path
 from unittest import mock
 
 # Mock faster_whisper before importing archive_transcriber
-sys.modules['faster_whisper'] = mock.MagicMock()
+sys.modules["faster_whisper"] = mock.MagicMock()
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
-from archive_transcriber import (
+from archive_transcriber import (  # noqa: E402
     segments_to_webvtt,
     extract_resolution,
     normalise_variant_name,
@@ -28,6 +28,7 @@ from archive_transcriber import (
 
 class MockSegment:
     """Mock Whisper segment for testing."""
+
     def __init__(self, start, end, text):
         self.start = start
         self.end = end
@@ -75,7 +76,7 @@ class TestSegmentsToWebVTT:
         segments = [
             MockSegment(0.0, 2.0, "Valid"),
             MockSegment(2.0, 4.0, "   "),  # Only whitespace
-            MockSegment(4.0, 6.0, ""),      # Empty
+            MockSegment(4.0, 6.0, ""),  # Empty
             MockSegment(6.0, 8.0, "Also valid"),
         ]
         result = segments_to_webvtt(segments)
@@ -122,7 +123,9 @@ class TestTranslationOutputSuspect:
         ]
 
         # Act
-        result = translation_output_suspect(source_segments, translated_segments, "english")
+        result = translation_output_suspect(
+            source_segments, translated_segments, "english"
+        )
 
         # Assert
         assert result is True
@@ -137,7 +140,9 @@ class TestTranslationOutputSuspect:
         ]
 
         # Act
-        result = translation_output_suspect(source_segments, translated_segments, "en-US")
+        result = translation_output_suspect(
+            source_segments, translated_segments, "en-US"
+        )
 
         # Assert
         assert result is True

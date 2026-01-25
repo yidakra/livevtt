@@ -8,3 +8,4 @@ hf_xet
 tqdm
 asyncio
 websockets
+torch

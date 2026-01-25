@@ -12,7 +12,7 @@ import argparse
 from pathlib import Path
 
 # Import everything from the original archive_transcriber
-from archive_transcriber import (
+from .archive_transcriber import (
     configure_logging,
     Manifest,
     discover_video_jobs,
@@ -96,7 +96,9 @@ def process_job_remote(
             # Step 3: Parse response
             result = response.json()
             if result.get("status") != "success":
-                raise RuntimeError(f"Remote transcription failed: {result.get('error')}")
+                raise RuntimeError(
+                    f"Remote transcription failed: {result.get('error')}"
+                )
 
             ru_content = result["ru_vtt"]
             en_content = result["en_vtt"]
@@ -111,8 +113,12 @@ def process_job_remote(
                 filter_words = load_filter_words()
                 ru_cues = parse_vtt_content(ru_content)
                 en_cues = parse_vtt_content(en_content)
-                ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
-                ttml_lang2 = LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
+                ttml_lang1 = LANG_CODE_2_TO_3.get(
+                    args.source_language, args.source_language
+                )
+                ttml_lang2 = LANG_CODE_2_TO_3.get(
+                    args.translation_language, args.translation_language
+                )
                 ttml_content = cues_to_ttml(
                     ru_cues,
                     en_cues,
@@ -125,14 +131,19 @@ def process_job_remote(
 
         else:
             if not job.ru_vtt.exists() or not job.en_vtt.exists():
-                LOGGER.warning("Expected caption files missing for %s; skipping SMIL update", job.video_path)
+                LOGGER.warning(
+                    "Expected caption files missing for %s; skipping SMIL update",
+                    job.video_path,
+                )
                 return {
                     "video_path": str(job.video_path),
                     "status": "error",
                     "error": "Missing caption files for SMIL-only run",
                     "processed_at": human_time(),
                 }
-            LOGGER.info("VTT already present for %s; generating SMIL only.", job.video_path)
+            LOGGER.info(
+                "VTT already present for %s; generating SMIL only.", job.video_path
+            )
 
         # Step 6: Generate SMIL locally
         write_smil(job, metadata, args)
@@ -172,13 +183,18 @@ def process_job_remote(
 
 def main():
     # Reuse argument parser from original, add remote URL
-    from archive_transcriber import parse_args
+    from .archive_transcriber import parse_args
 
     parser = argparse.ArgumentParser(
         description="Batch archive transcription using remote GPU",
         parents=[],
     )
-    parser.add_argument("--remote-url", type=str, required=True, help="Remote Whisper API URL (e.g., http://gpu.example.com:8000)")
+    parser.add_argument(
+        "--remote-url",
+        type=str,
+        required=True,
+        help="Remote Whisper API URL (e.g., http://gpu.example.com:8000)",
+    )
 
     # Copy all args from original parse_args
     original_args = parse_args([])
@@ -187,9 +203,16 @@ def main():
         continue
 
     # Add all original arguments
-    parser.add_argument("input_root", nargs="?", default=Path("/mnt/vod/srv/storage/transcoded/"), type=Path)
+    parser.add_argument(
+        "input_root",
+        nargs="?",
+        default=Path("/mnt/vod/srv/storage/transcoded/"),
+        type=Path,
+    )
     parser.add_argument("--output-root", type=Path)
-    parser.add_argument("--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl"))
+    parser.add_argument(
+        "--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl")
+    )
     parser.add_argument("--model", type=str, default="large-v3-turbo")
     parser.add_argument("--compute-type", type=str, default="float16")
     parser.add_argument("--source-language", type=str, default="ru")
@@ -197,9 +220,20 @@ def main():
     parser.add_argument("--translation-model", type=str, default="large-v3")
     parser.add_argument("--beam-size", type=int, default=5)
     parser.add_argument("--sample-rate", type=int, default=16000)
-    parser.add_argument("--vad-filter", type=lambda x: str(x).lower() in {"1", "true", "yes"}, default=False)
-    parser.add_argument("--extensions", type=str, default=".ts,.mp4,.mkv,.mov,.m4v,.flv")
-    parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (recommended: 4-8 for remote GPU)")
+    parser.add_argument(
+        "--vad-filter",
+        type=lambda x: str(x).lower() in {"1", "true", "yes"},
+        default=False,
+    )
+    parser.add_argument(
+        "--extensions", type=str, default=".ts,.mp4,.mkv,.mov,.m4v,.flv"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Number of parallel workers (recommended: 4-8 for remote GPU)",
+    )
     parser.add_argument("--max-files", type=int)
     parser.add_argument("--smil-only", action="store_true")
     parser.add_argument("--no-ttml", action="store_true")
@@ -234,7 +268,11 @@ def main():
         return 2
 
     manifest = Manifest(args.manifest.resolve())
-    extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
+    extensions = [
+        ext if ext.startswith(".") else f".{ext}"
+        for ext in args.extensions.split(",")
+        if ext
+    ]
 
     jobs = discover_video_jobs(
         input_root,
@@ -248,7 +286,7 @@ def main():
     )
 
     if args.max_files and args.max_files > 0:
-        jobs = jobs[:args.max_files]
+        jobs = jobs[: args.max_files]
 
     if not jobs:
         LOGGER.info("No videos to process. Exiting.")
@@ -261,7 +299,9 @@ def main():
 
     progress_bar = None
     if args.progress and tqdm:
-        progress_bar = tqdm(total=len(jobs), desc="Transcribing (remote GPU)", unit="video")
+        progress_bar = tqdm(
+            total=len(jobs), desc="Transcribing (remote GPU)", unit="video"
+        )
 
     try:
         if args.workers > 1:
