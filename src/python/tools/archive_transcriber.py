@@ -244,7 +244,8 @@ def build_output_artifacts(
     else:
         target_dir = video_path.parent
 
-    target_dir.mkdir(parents=True, exist_ok=True)
+    if output_root:
+        target_dir.mkdir(parents=True, exist_ok=True)
     base_stem = Path(normalized_name).stem
     ru_vtt = target_dir / f"{base_stem}.ru.vtt"
     en_vtt = target_dir / f"{base_stem}.en.vtt"
@@ -1230,7 +1231,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: bool = False) -> Dict:
     """Phase 1: Transcribe audio to Russian VTT only."""
     start_time = time.time()
-    if not quiet:
+    if not quiet or args.verbose:
         LOGGER.info("[Transcription] Processing %s", job.video_path)
 
     filter_words = load_filter_words()
@@ -1298,7 +1299,7 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
 def process_translation_only(job: VideoJob, args: argparse.Namespace, manifest: Manifest, quiet: bool = False) -> Dict:
     """Phase 2: Translate audio to English VTT, generate TTML and SMIL."""
     start_time = time.time()
-    if not quiet:
+    if not quiet or args.verbose:
         LOGGER.info("[Translation] Processing %s", job.video_path)
 
     filter_words = load_filter_words()
