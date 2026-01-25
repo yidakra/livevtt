@@ -6,18 +6,39 @@ Compatible with RunPod API format for easy client integration
 """
 
 import base64
-import tempfile
 import os
-from flask import Flask, request, jsonify
-from faster_whisper import WhisperModel
+import tempfile
+from typing import Any, Callable, Iterable, Optional, Protocol, cast
 
-app = Flask(__name__)
+from flask import Flask, jsonify, request  # type: ignore
+from faster_whisper import WhisperModel  # type: ignore
+
+
+class FlaskLike(Protocol):
+    def route(
+        self, rule: str, methods: Optional[list[str]] = None
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]: ...
+
+    def run(self, host: str, port: int, debug: bool) -> None: ...
+
+
+app: FlaskLike = cast(FlaskLike, Flask(__name__))
 
 # Pre-load models to avoid loading on each request
-MODELS = {}
+MODELS: dict[str, WhisperModel] = {}
 
 
-def get_model(model_name="large-v3-turbo"):
+class SegmentLike(Protocol):
+    start: float
+    end: float
+    text: str
+
+
+class TranscriptionInfoLike(Protocol):
+    language: str
+
+
+def get_model(model_name: str = "large-v3-turbo") -> WhisperModel:
     """Get or load a Whisper model"""
     if model_name not in MODELS:
         print(f"Loading model: {model_name}", flush=True)
@@ -29,27 +50,28 @@ def get_model(model_name="large-v3-turbo"):
 
 
 @app.route("/health", methods=["GET"])
-def health():
+def health() -> Any:
     """Health check endpoint"""
-    return jsonify({"status": "healthy"})
+    return cast(Any, jsonify({"status": "healthy"}))
 
 
 @app.route("/v2/<endpoint_id>/run", methods=["POST"])
-def transcribe(endpoint_id):
+def transcribe(endpoint_id: str) -> Any:
     """
     Transcribe audio using faster-whisper
     Compatible with RunPod API format
     """
     try:
-        data = request.json
-        input_data = data.get("input", {})
+        req = cast(Any, request)
+        data = cast(dict[str, Any], req.get_json(silent=True) or {})
+        input_data = cast(dict[str, Any], data.get("input", {}))
 
         # Extract parameters
-        audio_b64 = input_data.get("audio_base_64")
-        model_name = input_data.get("model", "large-v3-turbo")
-        translate = input_data.get("translate", False)
-        language = input_data.get("language", "auto")
-        beam_size = input_data.get("beam_size", 5)
+        audio_b64 = cast(Optional[str], input_data.get("audio_base_64"))
+        model_name = cast(str, input_data.get("model", "large-v3-turbo"))
+        translate = bool(input_data.get("translate", False))
+        language = cast(str, input_data.get("language", "auto"))
+        beam_size = int(input_data.get("beam_size", 5))
 
         if not audio_b64:
             return jsonify({"error": "No audio_base_64 provided"}), 400
@@ -67,16 +89,19 @@ def transcribe(endpoint_id):
             model = get_model(model_name)
             task = "translate" if translate else "transcribe"
 
-            segments, info = model.transcribe(
+            segments, info = cast(Any, model).transcribe(
                 audio_path,
                 task=task,
                 language=None if language == "auto" else language,
                 beam_size=beam_size,
             )
 
+            segments_iter = cast(Iterable[SegmentLike], segments)
+            info_data = cast(TranscriptionInfoLike, info)
+
             # Convert segments to list
-            segments_list = []
-            for segment in segments:
+            segments_list: list[dict[str, Any]] = []
+            for segment in segments_iter:
                 segments_list.append(
                     {
                         "start": segment.start,
@@ -86,15 +111,18 @@ def transcribe(endpoint_id):
                 )
 
             # Return in RunPod-compatible format (synchronous)
-            return jsonify(
-                {
-                    "id": "sync-job",
-                    "status": "COMPLETED",
-                    "output": {
-                        "segments": segments_list,
-                        "detected_language": info.language,
-                    },
-                }
+            return cast(
+                Any,
+                jsonify(
+                    {
+                        "id": "sync-job",
+                        "status": "COMPLETED",
+                        "output": {
+                            "segments": segments_list,
+                            "detected_language": info_data.language,
+                        },
+                    }
+                ),
             )
 
         finally:
@@ -103,7 +131,10 @@ def transcribe(endpoint_id):
                 os.unlink(audio_path)
 
     except Exception as e:
-        return jsonify({"id": "error", "status": "FAILED", "error": str(e)}), 500
+        return cast(
+            Any,
+            jsonify({"id": "error", "status": "FAILED", "error": str(e)}),
+        ), 500
 
 
 if __name__ == "__main__":

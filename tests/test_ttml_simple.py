@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """Simple tests for TTML utilities (no pytest required)."""
 
+import importlib
 import sys
 import tempfile
 import traceback
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any, Callable, List, Optional, Tuple
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
-from ttml_utils import (
-    SubtitleCue,
-    format_ttml_timestamp,
-    parse_vtt_timestamp,
-    parse_vtt_file,
-    align_bilingual_cues,
-    vtt_files_to_ttml,
-)
+ttml_utils = importlib.import_module("ttml_utils")
+
+SubtitleCue = ttml_utils.SubtitleCue
+format_ttml_timestamp: Callable[[float], str] = ttml_utils.format_ttml_timestamp
+parse_vtt_timestamp: Callable[[str], float] = ttml_utils.parse_vtt_timestamp
+parse_vtt_file: Callable[[str], List[Any]] = ttml_utils.parse_vtt_file
+align_bilingual_cues: Callable[
+    [List[Any], List[Any], float], List[Tuple[Optional[Any], List[Any]]]
+] = ttml_utils.align_bilingual_cues
+vtt_files_to_ttml: Callable[..., str] = ttml_utils.vtt_files_to_ttml
 
 
 def test_format_timestamp():
@@ -47,7 +51,7 @@ Hello, world!
 00:00:10.000 --> 00:00:12.500
 Second subtitle
 """
-    vtt_path = None
+    vtt_path: Optional[str] = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".vtt", delete=False, encoding="utf-8"
@@ -67,17 +71,20 @@ Second subtitle
 
 def test_align_cues():
     """Test bilingual cue alignment."""
-    cues_lang1 = [
+    cues_lang1: List[Any] = [
         SubtitleCue(start=5.0, end=7.0, text="Привет"),
         SubtitleCue(start=10.0, end=12.0, text="Мир"),
     ]
-    cues_lang2 = [
+    cues_lang2: List[Any] = [
         SubtitleCue(start=5.0, end=7.0, text="Hello"),
         SubtitleCue(start=10.0, end=12.0, text="World"),
     ]
 
-    aligned = align_bilingual_cues(cues_lang1, cues_lang2, tolerance=1.0)
+    aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
+        cues_lang1, cues_lang2, 1.0
+    )
     assert len(aligned) == 2
+    assert aligned[0][0] is not None
     assert aligned[0][0].text == "Привет"
     assert len(aligned[0][1]) == 1
     assert aligned[0][1][0].text == "Hello"
@@ -100,6 +107,8 @@ def test_vtt_to_ttml():
 Hello, world!
 """
 
+    vtt_ru_path: Optional[str] = None
+    vtt_en_path: Optional[str] = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8"
@@ -132,8 +141,10 @@ Hello, world!
 
         print("✓ test_vtt_to_ttml passed")
     finally:
-        Path(vtt_ru_path).unlink()
-        Path(vtt_en_path).unlink()
+        if vtt_ru_path:
+            Path(vtt_ru_path).unlink()
+        if vtt_en_path:
+            Path(vtt_en_path).unlink()
 
 
 def run_all_tests():

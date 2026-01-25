@@ -22,14 +22,56 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, List, Optional, Tuple, cast
 
-from ttml_utils import (
-    parse_vtt_file,
-    align_bilingual_cues,
-    vtt_files_to_ttml,
-    load_filter_words,
-)
+try:
+    from . import ttml_utils as _ttml_utils  # type: ignore
+except ImportError:  # pragma: no cover - fallback for script execution
+    import ttml_utils as _ttml_utils  # type: ignore
+
+_ttml_utils: Any = _ttml_utils
+
+
+def parse_vtt_file(path: str) -> List[Any]:
+    func = cast(Callable[[str], List[Any]], _ttml_utils.parse_vtt_file)
+    return func(path)
+
+
+def align_bilingual_cues(
+    cues_lang1: List[Any], cues_lang2: List[Any], tolerance: float = 2.5
+) -> List[Tuple[Optional[Any], List[Any]]]:
+    func = cast(
+        Callable[[List[Any], List[Any], float], List[Tuple[Optional[Any], List[Any]]]],
+        _ttml_utils.align_bilingual_cues,
+    )
+    return func(cues_lang1, cues_lang2, tolerance)
+
+
+def vtt_files_to_ttml(
+    vtt_file1: str,
+    vtt_file2: str,
+    *,
+    lang1: str = "rus",
+    lang2: str = "eng",
+    tolerance: float = 2.5,
+    aligned_cues: Optional[List[Tuple[Optional[Any], List[Any]]]] = None,
+    filter_words: Optional[List[str]] = None,
+) -> str:
+    func = cast(Callable[..., str], _ttml_utils.vtt_files_to_ttml)
+    return func(
+        vtt_file1,
+        vtt_file2,
+        lang1=lang1,
+        lang2=lang2,
+        tolerance=tolerance,
+        aligned_cues=aligned_cues,
+        filter_words=filter_words,
+    )
+
+
+def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
+    func = cast(Callable[[Optional[Path]], List[str]], _ttml_utils.load_filter_words)
+    return func(filter_json_path)
 
 
 LOGGER = logging.getLogger("vtt_to_ttml")
@@ -100,21 +142,23 @@ def convert_vtt_to_ttml(
         return False
 
     # Load filter words (auto-discovers if not specified)
-    filter_words = load_filter_words(filter_json_path)
+    filter_words: List[str] = load_filter_words(filter_json_path)
 
     try:
         # Parse VTT files
         LOGGER.info("Parsing %s", vtt_file1)
-        cues_lang1 = parse_vtt_file(str(vtt_file1))
+        cues_lang1: List[Any] = parse_vtt_file(str(vtt_file1))
         LOGGER.info("Found %d cues in %s", len(cues_lang1), vtt_file1)
 
         LOGGER.info("Parsing %s", vtt_file2)
-        cues_lang2 = parse_vtt_file(str(vtt_file2))
+        cues_lang2: List[Any] = parse_vtt_file(str(vtt_file2))
         LOGGER.info("Found %d cues in %s", len(cues_lang2), vtt_file2)
 
         # Align cues
         LOGGER.info("Aligning cues with tolerance of %.1f seconds", tolerance)
-        aligned = align_bilingual_cues(cues_lang1, cues_lang2, tolerance=tolerance)
+        aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
+            cues_lang1, cues_lang2, tolerance=tolerance
+        )
 
         # Validate alignment
         unaligned_count = sum(1 for c1, c2_list in aligned if c1 is None or not c2_list)
@@ -130,7 +174,7 @@ def convert_vtt_to_ttml(
 
         # Generate TTML without re-parsing or re-aligning the cues
         LOGGER.info("Generating TTML file")
-        ttml_content = vtt_files_to_ttml(
+        ttml_content: str = vtt_files_to_ttml(
             str(vtt_file1),
             str(vtt_file2),
             lang1=lang1,

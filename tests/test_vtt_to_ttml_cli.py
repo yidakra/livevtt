@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
 """Tests for vtt_to_ttml.py CLI converter."""
 
+import importlib
 import sys
 import tempfile
 import traceback
 from pathlib import Path
+from typing import Callable, List, Protocol
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
-from vtt_to_ttml import (
-    validate_vtt_file,
-    convert_vtt_to_ttml,
-    parse_args,
-)
+vtt_to_ttml = importlib.import_module("vtt_to_ttml")
+
+validate_vtt_file: Callable[[Path], bool] = vtt_to_ttml.validate_vtt_file
+convert_vtt_to_ttml: Callable[..., bool] = vtt_to_ttml.convert_vtt_to_ttml
+
+
+class ArgsLike(Protocol):
+    vtt_ru: Path
+    vtt_en: Path
+    output: Path
+    lang1: str
+    lang2: str
+    tolerance: float
+    verbose: bool
+
+
+parse_args: Callable[..., ArgsLike] = vtt_to_ttml.parse_args
 
 
 class TestVTTValidation:
@@ -321,7 +335,7 @@ def run_all_tests():
     print("\nRunning vtt_to_ttml CLI tests...")
     print("=" * 60)
 
-    test_classes = [
+    test_classes: List[type[object]] = [
         TestVTTValidation,
         TestConvertVTTtoTTML,
         TestArgumentParsing,

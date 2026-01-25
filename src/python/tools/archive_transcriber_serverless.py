@@ -18,8 +18,19 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+import importlib
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    TYPE_CHECKING,
+    TypedDict,
+    cast,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -29,23 +40,93 @@ try:
 except ImportError:
     tqdm = None
 
-# Import from archive_transcriber for shared utilities
 
-from archive_transcriber import (
-    VideoJob,
-    Manifest,
-    probe_video_metadata,
-    write_smil,
-    discover_video_jobs,
-    atomic_write,
-    human_time,
-    segments_to_webvtt,
-    VIDEO_EXTENSIONS,
-    LANG_CODE_2_TO_3,
+ManifestRecord = Dict[str, Any]
+
+
+class ManifestProtocol(Protocol):
+    """Protocol for Manifest interface used in this module."""
+
+    def __init__(self, path: Path) -> None: ...
+
+    def get(self, video_path: Path) -> Optional[ManifestRecord]: ...
+
+    def append(self, record: ManifestRecord) -> None: ...
+
+
+class VideoJobProtocol(Protocol):
+    """Protocol for video job objects."""
+
+    def __init__(
+        self,
+        *,
+        video_path: Path,
+        normalized_name: str,
+        ru_vtt: Path,
+        en_vtt: Path,
+        ttml: Path,
+        smil: Path,
+    ) -> None: ...
+
+    video_path: Path
+    normalized_name: str
+    ru_vtt: Path
+    en_vtt: Path
+    ttml: Path
+    smil: Path
+
+
+class VideoMetadataProtocol(Protocol):
+    """Protocol for video metadata objects."""
+
+    duration: Optional[float]
+
+
+if TYPE_CHECKING:
+    from .archive_transcriber import (
+        Manifest as ManifestType,
+        VideoJob as VideoJobType,
+        VideoMetadata as VideoMetadataType,
+        probe_video_metadata,
+        write_smil,
+        discover_video_jobs,
+        atomic_write,
+        human_time,
+        segments_to_webvtt,
+    )
+    from .ttml_utils import (
+        cues_to_ttml,
+        parse_vtt_content,
+        load_filter_words,
+    )
+
+try:
+    _archive_transcriber = importlib.import_module(".archive_transcriber", __package__)
+except ImportError:  # pragma: no cover - fallback for script execution
+    _archive_transcriber = importlib.import_module("archive_transcriber")
+
+VideoJob = cast(type[VideoJobProtocol], _archive_transcriber.VideoJob)
+Manifest = cast(type[ManifestProtocol], _archive_transcriber.Manifest)
+probe_video_metadata: Callable[[Path], VideoMetadataProtocol] = (
+    _archive_transcriber.probe_video_metadata
 )
+write_smil = cast(
+    Callable[[VideoJobProtocol, VideoMetadataProtocol, argparse.Namespace], None],
+    _archive_transcriber.write_smil,
+)
+discover_video_jobs = cast(
+    Callable[..., List[VideoJobProtocol]], _archive_transcriber.discover_video_jobs
+)
+atomic_write: Callable[[Path, str], None] = _archive_transcriber.atomic_write
+human_time = _archive_transcriber.human_time
+segments_to_webvtt = _archive_transcriber.segments_to_webvtt
+VIDEO_EXTENSIONS: set[str] = _archive_transcriber.VIDEO_EXTENSIONS
+LANG_CODE_2_TO_3: Dict[str, str] = _archive_transcriber.LANG_CODE_2_TO_3
 
-# Import TTML utilities
-from ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words
+# Import TTML utilities (use same module source as archive_transcriber to keep resolution consistent)
+cues_to_ttml = _archive_transcriber.cues_to_ttml
+parse_vtt_content = _archive_transcriber.parse_vtt_content
+load_filter_words = _archive_transcriber.load_filter_words
 
 
 LOGGER = logging.getLogger("archive_transcriber_serverless")
@@ -55,6 +136,24 @@ LOGGER = logging.getLogger("archive_transcriber_serverless")
 class WhisperSegment:
     """Compatible segment structure for existing VTT generation"""
 
+    start: float
+    end: float
+    text: str
+
+
+class _RunPodInput(TypedDict):
+    audio_base_64: str
+    model: str
+    translate: bool
+    language: str
+    beam_size: int
+
+
+class _RunPodPayload(TypedDict):
+    input: _RunPodInput
+
+
+class _RunPodSegment(TypedDict, total=False):
     start: float
     end: float
     text: str
@@ -96,7 +195,7 @@ def call_runpod_serverless(
         "Content-Type": "application/json",
     }
 
-    payload = {
+    payload: _RunPodPayload = {
         "input": {
             "audio_base_64": audio_b64,
             "model": model,
@@ -127,7 +226,7 @@ def call_runpod_serverless(
             submit_url, headers=headers, json=payload, timeout=http_timeout
         )
         response.raise_for_status()
-        submit_result = response.json()
+        submit_result = cast(Dict[str, Any], response.json())
 
         job_id = submit_result.get("id")
         if not job_id:
@@ -138,17 +237,17 @@ def call_runpod_serverless(
         # Check if response is already COMPLETED (synchronous mode, e.g., H100)
         if submit_result.get("status") == "COMPLETED":
             LOGGER.debug("Synchronous response received")
-            output = submit_result.get("output", {})
-            segments_data = output.get("segments", [])
+            output = cast(Dict[str, Any], submit_result.get("output", {}))
+            segments_data = cast(List[_RunPodSegment], output.get("segments", []))
 
             # Convert to WhisperSegment objects
-            segments = []
+            segments: List[WhisperSegment] = []
             for seg in segments_data:
                 segments.append(
                     WhisperSegment(
-                        start=seg.get("start", 0.0),
-                        end=seg.get("end", 0.0),
-                        text=seg.get("text", ""),
+                        start=float(seg.get("start", 0.0)),
+                        end=float(seg.get("end", 0.0)),
+                        text=str(seg.get("text", "")),
                     )
                 )
 
@@ -172,7 +271,7 @@ def call_runpod_serverless(
 
             stream_response = requests.get(stream_url, headers=headers, timeout=30)
             stream_response.raise_for_status()
-            result = stream_response.json()
+            result = cast(Dict[str, Any], stream_response.json())
 
             status = result.get("status")
             LOGGER.debug("Job %s status: %s (%.1fs elapsed)", job_id, status, elapsed)
@@ -184,43 +283,43 @@ def call_runpod_serverless(
                 )
 
                 # For streaming endpoints, output is in the 'stream' field
-                stream_data = result.get("stream", [])
+                stream_data = cast(List[Dict[str, Any]], result.get("stream", []))
                 LOGGER.debug(
                     "Stream data type: %s, length: %d",
                     type(stream_data),
-                    len(stream_data) if isinstance(stream_data, list) else 0,
+                    len(stream_data),
                 )
 
                 # Aggregate stream data - each item should have the output
-                output = {}
+                output: Dict[str, Any] = {}
                 if stream_data:
                     # Get the last (final) output from stream
                     for item in reversed(stream_data):
-                        if isinstance(item, dict) and "output" in item:
-                            output = item["output"]
+                        if "output" in item:
+                            output = cast(Dict[str, Any], item["output"])
                             break
                 LOGGER.debug(
                     "Output type: %s, Output keys: %s",
                     type(output),
-                    output.keys() if isinstance(output, dict) else "N/A",
+                    output.keys(),
                 )
                 LOGGER.debug("Full output: %s", json.dumps(output, indent=2)[:1000])
 
-                segments_data = output.get("segments", [])
+                segments_data = cast(List[_RunPodSegment], output.get("segments", []))
                 LOGGER.debug(
                     "Segments data type: %s, length: %d",
                     type(segments_data),
-                    len(segments_data) if isinstance(segments_data, list) else 0,
+                    len(segments_data),
                 )
 
                 # Convert to WhisperSegment objects
-                segments = []
+                segments: List[WhisperSegment] = []
                 for seg in segments_data:
                     segments.append(
                         WhisperSegment(
-                            start=seg.get("start", 0.0),
-                            end=seg.get("end", 0.0),
-                            text=seg.get("text", ""),
+                            start=float(seg.get("start", 0.0)),
+                            end=float(seg.get("end", 0.0)),
+                            text=str(seg.get("text", "")),
                         )
                     )
 
@@ -287,8 +386,8 @@ def extract_audio(video_path: Path, sample_rate: int) -> Path:
 
 
 def process_job_serverless(
-    job: VideoJob, args: argparse.Namespace, manifest: Manifest
-) -> Dict:
+    job: VideoJobProtocol, args: argparse.Namespace, manifest: ManifestProtocol
+) -> ManifestRecord:
     """
     Process a single VideoJob using RunPod Serverless API.
 
@@ -383,11 +482,15 @@ def process_job_serverless(
             if not args.no_ttml:
                 ru_cues = parse_vtt_content(ru_content)
                 en_cues = parse_vtt_content(en_content)
-                ttml_lang1 = LANG_CODE_2_TO_3.get(
-                    args.source_language, args.source_language
+                ttml_lang1 = (
+                    LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+                    or args.source_language
                 )
-                ttml_lang2 = LANG_CODE_2_TO_3.get(
-                    args.translation_language, args.translation_language
+                ttml_lang2 = (
+                    LANG_CODE_2_TO_3.get(
+                        args.translation_language, args.translation_language
+                    )
+                    or args.translation_language
                 )
                 ttml_content = cues_to_ttml(
                     ru_cues,
@@ -423,9 +526,13 @@ def process_job_serverless(
                 "VTT already present for %s; generating SMIL only.", job.video_path
             )
 
-        write_smil(job, metadata, args)
+        write_smil(
+            cast("VideoJobType", job),
+            cast("VideoMetadataType", metadata),
+            args,
+        )
 
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -442,7 +549,7 @@ def process_job_serverless(
 
     except Exception as exc:
         LOGGER.error("Failed to process %s: %s", job.video_path, exc)
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -605,7 +712,7 @@ def run(argv: Optional[List[str]] = None) -> int:
         LOGGER.error("Input root %s does not exist", input_root)
         return 2
 
-    manifest = Manifest(args.manifest.resolve())
+    manifest: ManifestProtocol = Manifest(args.manifest.resolve())
     extensions = [
         ext if ext.startswith(".") else f".{ext}"
         for ext in args.extensions.split(",")
@@ -619,13 +726,11 @@ def run(argv: Optional[List[str]] = None) -> int:
         LOGGER.info(
             "Quick-start mode: finding first %d unprocessed videos", args.max_files
         )
-        from archive_transcriber import (
-            normalise_variant_name,
-            build_output_artifacts,
-            should_skip,
-        )
+        normalise_variant_name = _archive_transcriber.normalise_variant_name
+        build_output_artifacts = _archive_transcriber.build_output_artifacts
+        should_skip = _archive_transcriber.should_skip
 
-        jobs = []
+        jobs: List[VideoJobProtocol] = []
         target_count = args.max_files
 
         # Quick scan: just get first videos we find (fast!)
@@ -684,15 +789,18 @@ def run(argv: Optional[List[str]] = None) -> int:
         LOGGER.info("Quick-start found %d videos to process", len(jobs))
     else:
         # Full scan mode
-        jobs = discover_video_jobs(
-            input_root,
-            output_root,
-            manifest,
-            args.force or args.smil_only,
-            extensions,
-            not args.no_ttml,
-            scan_cache_path=scan_cache_path,
-            force_scan=args.force_scan,
+        jobs = cast(
+            List[VideoJobProtocol],
+            discover_video_jobs(
+                input_root,
+                output_root,
+                cast("ManifestType", manifest),
+                args.force or args.smil_only,
+                extensions,
+                not args.no_ttml,
+                scan_cache_path=scan_cache_path,
+                force_scan=args.force_scan,
+            ),
         )
 
         # REVERSE ALPHABETICAL ORDER (to avoid conflicts with local transcriber)

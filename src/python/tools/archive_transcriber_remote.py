@@ -20,18 +20,17 @@ from .archive_transcriber import (
     atomic_write,
     write_smil,
     probe_video_metadata,
-    parse_vtt_content,
-    cues_to_ttml,
     LANG_CODE_2_TO_3,
-    load_filter_words,
     human_time,
     VideoJob,
     LOGGER,
 )
 
+from .ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words
+
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict
+from typing import Any, Dict, Optional, Protocol, TypedDict, cast
 
 try:
     from tqdm import tqdm
@@ -39,12 +38,33 @@ except ImportError:
     tqdm = None
 
 
+ManifestRecord = Dict[str, Any]
+
+
+class ManifestProtocol(Protocol):
+    def __init__(self, path: Path) -> None: ...
+
+    def append(self, record: ManifestRecord) -> None: ...
+
+
+class _RemoteRequestData(TypedDict):
+    model_name: str
+    translation_model: str
+    source_language: str
+    beam_size: int
+    compute_type: str
+    vad_filter: str
+
+
+ManifestCtor = cast(type[ManifestProtocol], Manifest)
+
+
 def process_job_remote(
     job: VideoJob,
     args: argparse.Namespace,
-    manifest: Manifest,
+    manifest: ManifestProtocol,
     remote_url: str,
-) -> Dict:
+) -> ManifestRecord:
     """
     Process a single job using remote GPU inference.
 
@@ -64,7 +84,7 @@ def process_job_remote(
         args.force or not (job.ru_vtt.exists() and job.en_vtt.exists())
     )
 
-    audio_path = None
+    audio_path: Optional[Path] = None
 
     try:
         if need_transcription:
@@ -76,7 +96,7 @@ def process_job_remote(
             LOGGER.debug("Sending audio to remote GPU: %s", remote_url)
             with open(audio_path, "rb") as audio_file:
                 files = {"audio": audio_file}
-                data = {
+                data: _RemoteRequestData = {
                     "model_name": args.model,
                     "translation_model": args.translation_model or args.model,
                     "source_language": args.source_language,
@@ -94,15 +114,15 @@ def process_job_remote(
                 response.raise_for_status()
 
             # Step 3: Parse response
-            result = response.json()
+            result = cast(Dict[str, Any], response.json())
             if result.get("status") != "success":
                 raise RuntimeError(
                     f"Remote transcription failed: {result.get('error')}"
                 )
 
-            ru_content = result["ru_vtt"]
-            en_content = result["en_vtt"]
-            duration = result.get("duration", duration)
+            ru_content = cast(str, result["ru_vtt"])
+            en_content = cast(str, result["en_vtt"])
+            duration = cast(float, result.get("duration", duration))
 
             # Step 4: Save VTT files locally
             atomic_write(job.ru_vtt, ru_content)
@@ -113,11 +133,15 @@ def process_job_remote(
                 filter_words = load_filter_words()
                 ru_cues = parse_vtt_content(ru_content)
                 en_cues = parse_vtt_content(en_content)
-                ttml_lang1 = LANG_CODE_2_TO_3.get(
-                    args.source_language, args.source_language
+                ttml_lang1 = (
+                    LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+                    or args.source_language
                 )
-                ttml_lang2 = LANG_CODE_2_TO_3.get(
-                    args.translation_language, args.translation_language
+                ttml_lang2 = (
+                    LANG_CODE_2_TO_3.get(
+                        args.translation_language, args.translation_language
+                    )
+                    or args.translation_language
                 )
                 ttml_content = cues_to_ttml(
                     ru_cues,
@@ -148,7 +172,7 @@ def process_job_remote(
         # Step 6: Generate SMIL locally
         write_smil(job, metadata, args)
 
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -164,7 +188,7 @@ def process_job_remote(
 
     except Exception as exc:
         LOGGER.error("Failed to process %s: %s", job.video_path, exc)
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "status": "error",
             "error": str(exc),
@@ -183,8 +207,6 @@ def process_job_remote(
 
 def main():
     # Reuse argument parser from original, add remote URL
-    from .archive_transcriber import parse_args
-
     parser = argparse.ArgumentParser(
         description="Batch archive transcription using remote GPU",
         parents=[],
@@ -195,12 +217,6 @@ def main():
         required=True,
         help="Remote Whisper API URL (e.g., http://gpu.example.com:8000)",
     )
-
-    # Copy all args from original parse_args
-    original_args = parse_args([])
-    for action in vars(original_args):
-        # Skip positional args, we'll add them separately
-        continue
 
     # Add all original arguments
     parser.add_argument(
@@ -267,7 +283,7 @@ def main():
         LOGGER.error("Input root %s does not exist", input_root)
         return 2
 
-    manifest = Manifest(args.manifest.resolve())
+    manifest: ManifestProtocol = ManifestCtor(args.manifest.resolve())
     extensions = [
         ext if ext.startswith(".") else f".{ext}"
         for ext in args.extensions.split(",")
@@ -277,7 +293,7 @@ def main():
     jobs = discover_video_jobs(
         input_root,
         output_root,
-        manifest,
+        cast(Manifest, manifest),
         args.force or args.smil_only,
         extensions,
         not args.no_ttml,

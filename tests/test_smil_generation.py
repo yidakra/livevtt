@@ -6,6 +6,7 @@ import logging
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -37,14 +38,14 @@ class MockArgs:
 
 
 @pytest.fixture
-def tmpdir_with_vtts(tmp_path):
+def tmpdir_with_vtts(tmp_path: Path) -> Path:
     (tmp_path / "video.ru.vtt").write_text("WEBVTT\n")
     (tmp_path / "video.en.vtt").write_text("WEBVTT\n")
     return tmp_path
 
 
 @pytest.fixture
-def video_job(tmpdir_with_vtts):
+def video_job(tmpdir_with_vtts: Path) -> Any:
     return VideoJob(
         video_path=tmpdir_with_vtts / "video.ts",
         normalized_name="video.ts",
@@ -56,7 +57,7 @@ def video_job(tmpdir_with_vtts):
 
 
 @pytest.fixture
-def metadata():
+def metadata() -> Any:
     return VideoMetadata(
         duration=120.0,
         width=1920,
@@ -68,12 +69,12 @@ def metadata():
 
 
 @pytest.fixture
-def args():
+def args() -> MockArgs:
     return MockArgs(vtt_in_smil=True)
 
 
 @pytest.fixture
-def video_job_missing_vtts(tmp_path):
+def video_job_missing_vtts(tmp_path: Path) -> Any:
     return VideoJob(
         video_path=tmp_path / "video.ts",
         normalized_name="video.ts",
@@ -87,7 +88,7 @@ def video_job_missing_vtts(tmp_path):
 class TestSMILGeneration:
     """Tests for SMIL manifest generation."""
 
-    def test_smil_basic_structure(self, video_job, metadata, args):
+    def test_smil_basic_structure(self, video_job: Any, metadata: Any, args: MockArgs):
         """Test basic SMIL structure generation."""
         write_smil(video_job, metadata, args)
 
@@ -103,13 +104,14 @@ class TestSMILGeneration:
         assert root.find("body") is not None
         assert root.find("body/switch") is not None
 
-    def test_smil_video_element(self, video_job, metadata, args):
+    def test_smil_video_element(self, video_job: Any, metadata: Any, args: MockArgs):
         """Test that SMIL includes video element with metadata."""
         write_smil(video_job, metadata, args)
 
         tree = ET.parse(video_job.smil)
         root = tree.getroot()
         switch = root.find("body/switch")
+        assert switch is not None
         video = switch.find("video")
 
         assert video is not None
@@ -118,7 +120,9 @@ class TestSMILGeneration:
         assert video.get("width") == "1920"
         assert video.get("height") == "1080"
 
-    def test_smil_textstream_elements(self, video_job, metadata, args):
+    def test_smil_textstream_elements(
+        self, video_job: Any, metadata: Any, args: MockArgs
+    ):
         """
         Verify the SMIL contains two subtitle textstream elements (Russian and English) with correct src and language attributes.
 
@@ -129,6 +133,7 @@ class TestSMILGeneration:
         tree = ET.parse(video_job.smil)
         root = tree.getroot()
         switch = root.find("body/switch")
+        assert switch is not None
         textstreams = switch.findall("textstream")
 
         # Should have two textstreams (Russian and English)
@@ -149,38 +154,9 @@ class TestSMILGeneration:
         assert ru_stream.get("src") == "video.ru.vtt"
         assert en_stream.get("src") == "video.en.vtt"
 
-    def test_smil_wowza_caption_params(self, video_job, args):
-        """Test that textstreams have Wowza caption parameters."""
-        metadata = VideoMetadata(
-            duration=None,
-            width=None,
-            height=None,
-            video_codec_id=None,
-            audio_codec_id=None,
-            bitrate=None,
-        )
-
-        write_smil(video_job, metadata, args)
-
-        tree = ET.parse(video_job.smil)
-        root = tree.getroot()
-        switch = root.find("body/switch")
-        textstreams = switch.findall("textstream")
-
-        for ts in textstreams:
-            # Check for Wowza caption parameter
-            params = ts.findall("param")
-            wowza_param = None
-            for param in params:
-                if param.get("name") == "isWowzaCaptionStream":
-                    wowza_param = param
-                    break
-
-            assert wowza_param is not None
-            assert wowza_param.get("value") == "true"
-            assert wowza_param.get("valuetype") == "data"
-
-    def test_smil_update_preserves_structure(self, video_job, metadata, args):
+    def test_smil_update_preserves_structure(
+        self, video_job: Any, metadata: Any, args: MockArgs
+    ):
         """Test that updating SMIL preserves existing structure."""
         # Generate SMIL first time
         write_smil(video_job, metadata, args)
@@ -195,6 +171,7 @@ class TestSMILGeneration:
         tree = ET.parse(video_job.smil)
         root = tree.getroot()
         switch = root.find("body/switch")
+        assert switch is not None
         videos = switch.findall("video")
         textstreams = switch.findall("textstream")
 
@@ -202,18 +179,14 @@ class TestSMILGeneration:
         assert len(videos) == 1
 
         # Should have exactly two textstreams (not duplicated)
-        wowza_textstreams = []
-        for ts in textstreams:
-            params = ts.findall("param")
-            for param in params:
-                if param.get("name") == "isWowzaCaptionStream":
-                    wowza_textstreams.append(ts)
-                    break
-
-        assert len(wowza_textstreams) == 2
+        assert len(textstreams) == 2
 
     def test_smil_missing_vtt_warning(
-        self, video_job_missing_vtts, metadata, args, caplog
+        self,
+        video_job_missing_vtts: Any,
+        metadata: Any,
+        args: MockArgs,
+        caplog: Any,
     ):
         """Test that SMIL generation handles missing VTT files."""
         # Should not crash, just skip missing textstreams and emit warnings
@@ -229,6 +202,7 @@ class TestSMILGeneration:
         tree = ET.parse(video_job_missing_vtts.smil)
         root = tree.getroot()
         switch = root.find("body/switch")
+        assert switch is not None
         video = switch.find("video")
 
         # Video element should exist
@@ -236,25 +210,20 @@ class TestSMILGeneration:
 
         # Textstreams should not exist (files missing)
         textstreams = switch.findall("textstream")
-        wowza_textstreams = []
-        for ts in textstreams:
-            params = ts.findall("param")
-            for param in params:
-                if param.get("name") == "isWowzaCaptionStream":
-                    wowza_textstreams.append(ts)
-                    break
 
         # No textstreams should be added for missing files
-        assert len(wowza_textstreams) == 0
+        assert len(textstreams) == 0
 
-    def test_smil_codec_params(self, video_job, metadata, args):
+    def test_smil_codec_params(self, video_job: Any, metadata: Any, args: MockArgs):
         """Test that video codec parameters are included."""
         write_smil(video_job, metadata, args)
 
         tree = ET.parse(video_job.smil)
         root = tree.getroot()
         switch = root.find("body/switch")
+        assert switch is not None
         video = switch.find("video")
+        assert video is not None
         params = video.findall("param")
 
         video_codec_param = None
@@ -272,7 +241,7 @@ class TestSMILGeneration:
         assert audio_codec_param is not None
         assert audio_codec_param.get("value") == "aac"
 
-    def test_smil_ttml_bilingual_language(self, video_job, metadata):
+    def test_smil_ttml_bilingual_language(self, video_job: Any, metadata: Any):
         """Test that TTML textstream includes both languages in system-language."""
         # Create TTML file
         video_job.ttml.write_text("<?xml version='1.0' encoding='UTF-8'?><tt></tt>")
@@ -284,6 +253,7 @@ class TestSMILGeneration:
         tree = ET.parse(video_job.smil)
         root = tree.getroot()
         switch = root.find("body/switch")
+        assert switch is not None
         textstreams = switch.findall("textstream")
 
         # Find TTML textstream

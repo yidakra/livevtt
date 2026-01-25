@@ -40,11 +40,10 @@ Comprehensive pytest-based tests for TTML functionality:
 **Run**: `pytest tests/test_ttml_utils.py -v` (when pytest is installed)
 
 #### `test_smil_generation.py` (7 tests)
-Tests for Wowza SMIL manifest generation:
+Tests for SMIL manifest generation:
 - Basic SMIL structure creation
 - Video element with metadata
 - Textstream elements for subtitles
-- Wowza caption parameters
 - Update logic (no duplication)
 - Missing VTT file handling
 - Codec parameter inclusion
@@ -66,14 +65,11 @@ Tests for the standalone VTT-to-TTML converter CLI:
 
 ### Run All Tests
 ```bash
-# With pytest (recommended)
-pytest tests/ -v
-
-# Or using the test runner
-python tests/run_all_tests.py
+# With pytest
+poetry run pytest tests/ -v
 
 # With coverage report
-pytest tests/ -v --cov=src/python --cov-report=term-missing
+poetry run pytest tests/ -v --cov=src/python --cov-report=term-missing
 ```
 
 ### Run Individual Test Files
@@ -85,16 +81,9 @@ pytest tests/test_smil_generation.py -v
 
 # CLI tool tests
 pytest tests/test_vtt_to_ttml_cli.py -v
-pytest tests/test_caption_sender.py -v
-pytest tests/test_stream_checker.py -v
 
 # Service tests
 pytest tests/test_subtitle_autogen.py -v
-
-# Standalone tests (can also run directly with Python)
-python tests/test_ttml_simple.py
-python tests/test_smil_generation.py
-python tests/test_vtt_to_ttml_cli.py
 ```
 
 #### `test_subtitle_autogen.py` (11 tests)
@@ -107,28 +96,6 @@ Tests for the subtitle_autogen background service:
 
 **Run**: `pytest tests/test_subtitle_autogen.py -v`
 
-#### `test_caption_sender.py` (11 tests)
-Tests for the caption_sender utility:
-- Caption sending with various response codes
-- Authentication handling
-- Custom language codes and track IDs
-- Connection error handling
-- Payload structure validation
-- Multiple captions sending
-
-**Run**: `pytest tests/test_caption_sender.py -v`
-
-#### `test_stream_checker.py` (13 tests)
-Tests for the stream_checker utility:
-- Basic stream status checking
-- Wowza REST API integration
-- Multiple applications and streams
-- Fallback to basic check when REST API unavailable
-- Connection error handling
-- JSON parsing validation
-
-**Run**: `pytest tests/test_stream_checker.py -v`
-
 ## Test Results Summary
 
 As of last run:
@@ -140,8 +107,6 @@ As of last run:
   - ttml_utils.py: 92%
   - vtt_to_ttml.py: 68%
   - subtitle_autogen.py: 71%
-  - caption_sender.py: 98%
-  - stream_checker.py: 92%
 
 ## Test Structure
 
@@ -157,7 +122,6 @@ Tests mock external dependencies to avoid requiring:
 - `faster-whisper` (Whisper model)
 - `ttml_utils` (when testing archive_transcriber)
 - Video files and FFmpeg (use temp files)
-- Wowza server (test SMIL generation only)
 
 ## Adding New Tests
 
@@ -201,42 +165,17 @@ class TestNewFeature:
         print("✓ test_basic_case passed")
 
 
-def run_all_tests():
-    """Run all tests."""
-    test_class = TestNewFeature
 
-    test_methods = [
-        method for method in dir(test_class)
-        if method.startswith("test_")
-    ]
-
-    passed = 0
-    failed = 0
-
-    for method_name in test_methods:
-        try:
-            instance = test_class()
-            method = getattr(instance, method_name)
-            method()
-            passed += 1
-        except Exception as e:
-            print(f"✗ {method_name} failed: {e}")
-            failed += 1
-
-    print(f"Results: {passed} passed, {failed} failed")
-    return failed == 0
-
-
-if __name__ == "__main__":
-    import sys
-    success = run_all_tests()
-    sys.exit(0 if success else 1)
+def test_new_feature_basic_case():
+    """Test basic functionality."""
+    result = some_function("input")
+    assert result == "expected"
 ```
 
 ## Continuous Testing
 
 Recommended workflow:
-1. Run tests before committing: `python tests/run_all_tests.py`
+1. Run tests before committing: `poetry run pytest`
 2. Add tests for new features
 3. Update tests when changing functionality
 4. Keep test coverage above 80%
@@ -248,7 +187,7 @@ Recommended workflow:
 - Standard library modules
 
 ### Optional (for full test suite)
-- `pytest` - For advanced test features
+- `pytest` - Test runner
 - `pytest-cov` - For coverage reporting
 - `pytest-asyncio` - For async tests (future)
 
@@ -261,16 +200,6 @@ Or with pip:
 ```bash
 pip install pytest pytest-cov
 ```
-
-## Integration Tests
-
-Integration tests for Wowza are in:
-- `src/python/tools/test_final_integration.py`
-
-These test the live server and require:
-- Running Wowza server
-- LiveVTT Caption Module loaded
-- Network access to localhost:8086
 
 ## Test Data
 

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from unittest import mock
 import argparse
+from typing import List
 
 # Mock archive_transcriber before import
 sys.modules["src.python.tools.archive_transcriber"] = mock.MagicMock()
@@ -199,7 +200,7 @@ def run_all_tests():
     Returns:
         bool: `True` if all tests passed, `False` otherwise.
     """
-    test_classes = [
+    test_classes: List[type[object]] = [
         TestArgumentParsing,
         TestTranscriberArgsBuilder,
         TestRunCycle,

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Unit tests for archive_transcriber.py core functionality."""
 
+import importlib
 import re
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable, Optional, Protocol
 from unittest import mock
 
 # Mock faster_whisper before importing archive_transcriber
@@ -12,24 +14,63 @@ sys.modules["faster_whisper"] = mock.MagicMock()
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
-from archive_transcriber import (  # noqa: E402
-    segments_to_webvtt,
-    extract_resolution,
-    normalise_variant_name,
-    select_best_variant,
-    build_output_artifacts,
-    atomic_write,
-    VideoJob,
-    Manifest,
-    VideoMetadata,
-    translation_output_suspect,
+archive_transcriber = importlib.import_module("archive_transcriber")
+
+
+class ManifestProto(Protocol):
+    path: Path
+    records: dict[str, object]
+
+    def append(self, record: dict[str, object]) -> None: ...
+
+    def get(self, video_path: Path) -> Optional[dict[str, object]]: ...
+
+
+class VideoJobProto(Protocol):
+    video_path: Path
+    normalized_name: str
+    ru_vtt: Path
+    en_vtt: Path
+    ttml: Path
+    smil: Path
+
+
+class VideoMetadataProto(Protocol):
+    duration: Optional[float]
+    width: Optional[int]
+    height: Optional[int]
+    video_codec_id: Optional[str]
+    audio_codec_id: Optional[str]
+    bitrate: Optional[int]
+
+
+segments_to_webvtt: Callable[..., str] = archive_transcriber.segments_to_webvtt
+extract_resolution: Callable[[str], Optional[int]] = (
+    archive_transcriber.extract_resolution
 )
+normalise_variant_name: Callable[[Path], str] = (
+    archive_transcriber.normalise_variant_name
+)
+select_best_variant: Callable[[list[Path]], Optional[Path]] = (
+    archive_transcriber.select_best_variant
+)
+build_output_artifacts: Callable[
+    [Path, str, Path, Optional[Path]], tuple[Path, Path, Path, Path]
+] = archive_transcriber.build_output_artifacts
+atomic_write: Callable[[Path, str], None] = archive_transcriber.atomic_write
+translation_output_suspect: Callable[..., bool] = (
+    archive_transcriber.translation_output_suspect
+)
+
+Manifest = archive_transcriber.Manifest  # type: ignore[assignment]
+VideoJob = archive_transcriber.VideoJob  # type: ignore[assignment]
+VideoMetadata = archive_transcriber.VideoMetadata  # type: ignore[assignment]
 
 
 class MockSegment:
     """Mock Whisper segment for testing."""
 
-    def __init__(self, start, end, text):
+    def __init__(self, start: float, end: float, text: str) -> None:
         self.start = start
         self.end = end
         self.text = text
@@ -236,6 +277,7 @@ class TestVariantSelection:
             ]
 
             best = select_best_variant(candidates)
+            assert best is not None
             assert best.name == "video_1080p.ts"
             print("✓ test_select_highest_resolution passed")
 
@@ -253,6 +295,7 @@ class TestVariantSelection:
             ]
 
             best = select_best_variant(candidates)
+            assert best is not None
             assert best.name == "video_1080p_v2.ts"
             print("✓ test_select_by_size_when_same_resolution passed")
 
@@ -276,6 +319,7 @@ class TestVariantSelection:
 
             # Should select by size
             best = select_best_variant(candidates)
+            assert best is not None
             assert best.name == "video2.ts"
             print("✓ test_no_resolution_info passed")
 
@@ -310,7 +354,7 @@ class TestBuildOutputArtifacts:
             video_path.parent.mkdir()
             video_path.write_text("test")
 
-            ru_vtt, en_vtt, ttml, smil = build_output_artifacts(
+            ru_vtt, _en_vtt, _ttml, _smil = build_output_artifacts(
                 video_path, "video.ts", input_root, output_root
             )
 

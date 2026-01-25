@@ -29,22 +29,55 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from types import FrameType
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    cast,
+)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from faster_whisper import WhisperModel  # type: ignore
-from ttml_utils import (
-    cues_to_ttml,
-    parse_vtt_content,
-    load_filter_words,
-    should_filter_cue,
-)  # type: ignore
+
+_ttml_utils: Any
+try:
+    from . import ttml_utils as _ttml_utils  # type: ignore
+except ImportError:  # pragma: no cover - fallback for script execution
+    import ttml_utils as _ttml_utils  # type: ignore
+
+
+def cues_to_ttml(*args: Any, **kwargs: Any) -> str:
+    func = cast(Callable[..., str], _ttml_utils.cues_to_ttml)
+    return func(*args, **kwargs)
+
+
+def parse_vtt_content(vtt_content: str) -> List[Any]:
+    func = cast(Callable[[str], List[Any]], _ttml_utils.parse_vtt_content)
+    return func(vtt_content)
+
+
+def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
+    func = cast(Callable[[Optional[Path]], List[str]], _ttml_utils.load_filter_words)
+    return func(filter_json_path)
+
+
+def should_filter_cue(text: str, filter_words: List[str]) -> bool:
+    func = cast(Callable[[str, List[str]], bool], _ttml_utils.should_filter_cue)
+    return func(text, filter_words)
+
 
 # Global flag for graceful shutdown
 shutdown_requested = False
 
 
-def signal_handler(signum, frame):
+def signal_handler(signum: int, frame: Optional[FrameType]) -> None:
     """Handle SIGINT (Ctrl+C) gracefully."""
     global shutdown_requested
     if not shutdown_requested:
@@ -76,6 +109,17 @@ RESOLUTION_TOKEN_PATTERN = re.compile(r"([_.-])(\d{3,4})p(?=([_.-]|$))", re.IGNO
 
 LOGGER = logging.getLogger("archive_transcriber")
 
+
+class SegmentLike(Protocol):
+    """Protocol for transcription segment objects."""
+
+    start: float
+    end: float
+    text: str
+
+
+ManifestRecord = Dict[str, Any]
+
 # Register signal handler for graceful shutdown
 signal.signal(signal.SIGINT, signal_handler)
 
@@ -102,7 +146,7 @@ def human_time() -> str:
 
 
 def segments_to_webvtt(
-    segments: Iterable,
+    segments: Iterable[SegmentLike],
     prepend_header: bool = True,
     filter_words: Optional[List[str]] = None,
 ) -> str:
@@ -196,8 +240,8 @@ def _normalise_language_code(language: Optional[str]) -> Optional[str]:
 
 
 def translation_output_suspect(
-    source_segments: List,
-    translated_segments: List,
+    source_segments: Sequence[SegmentLike],
+    translated_segments: Sequence[SegmentLike],
     target_language: str,
 ) -> bool:
     if not translated_segments:
@@ -281,7 +325,7 @@ class Manifest:
     def __init__(self, path: Path):
         self.path = path
         self.lock = threading.Lock()
-        self.records: Dict[str, Dict] = {}
+        self.records: Dict[str, ManifestRecord] = {}
         if self.path.exists():
             with self.path.open("r", encoding="utf-8") as manifest_file:
                 for line in manifest_file:
@@ -292,21 +336,26 @@ class Manifest:
                         record = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    video_path = record.get("video_path")
+                    if not isinstance(record, dict):
+                        continue
+                    record_typed = cast(ManifestRecord, record)
+                    video_path = record_typed.get("video_path")
                     if video_path:
-                        self.records[video_path] = record
+                        self.records[str(video_path)] = record_typed
 
         # Ensure parent directory exists for future writes
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def get(self, video_path: Path) -> Optional[Dict]:
+    def get(self, video_path: Path) -> Optional[ManifestRecord]:
         return self.records.get(str(video_path))
 
-    def append(self, record: Dict) -> None:
+    def append(self, record: ManifestRecord) -> None:
         with self.lock:
             with self.path.open("a", encoding="utf-8") as manifest_file:
                 manifest_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self.records[str(record.get("video_path"))] = record
+            video_path = record.get("video_path")
+            if video_path is not None:
+                self.records[str(video_path)] = record
 
 
 class WhisperModelHolder(threading.local):
@@ -342,10 +391,13 @@ class GPUAssigner:
     def get_gpu_index(self) -> int:
         """Get the GPU index (int) for the current thread. Used by faster-whisper."""
         self._ensure_assigned()
-        return MODEL_HOLDER.assigned_gpu
+        assigned_gpu = MODEL_HOLDER.assigned_gpu
+        if assigned_gpu is None:
+            raise RuntimeError("GPU assignment failed")
+        return assigned_gpu
 
 
-GPU_ASSIGNER: Optional[GPUAssigner] = None
+gpu_assigner: Optional[GPUAssigner] = None
 
 
 def get_worker_info() -> str:
@@ -356,13 +408,13 @@ def get_worker_info() -> str:
 
 
 def init_gpu_assigner(args: argparse.Namespace) -> None:
-    """Initialize GPU_ASSIGNER if --gpus is specified."""
-    global GPU_ASSIGNER
+    """Initialize gpu_assigner if --gpus is specified."""
+    global gpu_assigner
     if args.gpus:
         try:
             gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
             if gpu_ids:
-                GPU_ASSIGNER = GPUAssigner(gpu_ids)
+                gpu_assigner = GPUAssigner(gpu_ids)
                 LOGGER.info(
                     "Multi-GPU mode enabled: using GPUs %s with %d workers",
                     gpu_ids,
@@ -387,9 +439,9 @@ def get_model(
     # Determine device and device_index for multi-GPU support
     # faster-whisper expects device="cuda" and device_index=<int> for specific GPU
     device_index = 0
-    if args.use_cuda and GPU_ASSIGNER is not None:
+    if args.use_cuda and gpu_assigner is not None:
         device = "cuda"
-        device_index = GPU_ASSIGNER.get_gpu_index()
+        device_index = gpu_assigner.get_gpu_index()
     elif args.use_cuda:
         device = "cuda"
     else:
@@ -402,9 +454,10 @@ def get_model(
             import torch
 
             if torch.cuda.is_available():
-                gpu_memory = torch.cuda.get_device_properties(device_index).total_memory
-                allocated_memory = torch.cuda.memory_allocated(device_index)
-                reserved_memory = torch.cuda.memory_reserved(device_index)
+                props = cast(Any, torch.cuda.get_device_properties(device_index))  # type: ignore[reportUnknownMemberType]
+                gpu_memory = int(getattr(props, "total_memory", 0))
+                allocated_memory = int(torch.cuda.memory_allocated(device_index))
+                reserved_memory = int(torch.cuda.memory_reserved(device_index))
                 free_memory = gpu_memory - (allocated_memory + reserved_memory)
 
                 # Warn if less than 2GB free
@@ -478,7 +531,7 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
 
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=True)
-        data = json.loads(result.stdout or "{}")
+        data = cast(Dict[str, Any], json.loads(result.stdout or "{}"))
     except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         LOGGER.warning("Failed to probe metadata for %s: %s", video_path, exc)
         return VideoMetadata(
@@ -490,16 +543,19 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
             bitrate=None,
         )
 
-    streams = data.get("streams", [])
-    video_stream = next(
-        (stream for stream in streams if stream.get("codec_type") == "video"), {}
+    streams = cast(List[Dict[str, Any]], data.get("streams", []))
+    empty_stream: Dict[str, Any] = {}
+    video_stream: Dict[str, Any] = next(
+        (stream for stream in streams if stream.get("codec_type") == "video"),
+        empty_stream,
     )
-    audio_stream = next(
-        (stream for stream in streams if stream.get("codec_type") == "audio"), {}
+    audio_stream: Dict[str, Any] = next(
+        (stream for stream in streams if stream.get("codec_type") == "audio"),
+        empty_stream,
     )
-    format_data = data.get("format", {})
+    format_data: Dict[str, Any] = cast(Dict[str, Any], data.get("format", {}))
 
-    def _get_int(value: Optional[str]) -> Optional[int]:
+    def _get_int(value: Any) -> Optional[int]:
         if value in (None, "", "N/A"):
             return None
         try:
@@ -507,7 +563,7 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
         except (ValueError, TypeError):
             return None
 
-    def _get_float(value: Optional[str]) -> Optional[float]:
+    def _get_float(value: Any) -> Optional[float]:
         if value in (None, "", "N/A"):
             return None
         try:
@@ -518,11 +574,13 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
     duration = _get_float(format_data.get("duration"))
     width = _get_int(video_stream.get("width"))
     height = _get_int(video_stream.get("height"))
-    video_codec_id = video_stream.get("codec_tag_string") or video_stream.get(
-        "codec_name"
+    video_codec_id = cast(
+        Optional[str],
+        video_stream.get("codec_tag_string") or video_stream.get("codec_name"),
     )
-    audio_codec_id = audio_stream.get("codec_tag_string") or audio_stream.get(
-        "codec_name"
+    audio_codec_id = cast(
+        Optional[str],
+        audio_stream.get("codec_tag_string") or audio_stream.get("codec_name"),
     )
     bitrate = _get_int(video_stream.get("bit_rate")) or _get_int(
         format_data.get("bit_rate")
@@ -553,7 +611,7 @@ def write_smil(
     """
     job.smil.parent.mkdir(parents=True, exist_ok=True)
 
-    tree: Optional[ET.ElementTree] = None
+    tree = ET.ElementTree()
     root: Optional[ET.Element] = None
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -619,20 +677,12 @@ def write_smil(
 
     ensure_video_node()
 
-    # Remove existing LiveVTT-managed textstreams
-    for node in list(switch.findall("textstream")):
-        if any(
-            child.tag == "param" and child.get("name") == "isWowzaCaptionStream"
-            for child in list(node)
-        ):
-            switch.remove(node)
-
     def ensure_textstream(src: str, language: str) -> None:
         # Textstream sources should NOT have mp4: prefix (unlike video sources)
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
 
-        Removes any existing <textstream> entries that reference the same subtitle source (comparison ignores a leading "mp4:" prefix), then adds a new <textstream> child with the given language and an `isWowzaCaptionStream` parameter. If the referenced subtitle file is missing on disk, logs a warning and does not add an entry.
+        Removes any existing <textstream> entries that reference the same subtitle source (comparison ignores a leading "mp4:" prefix), then adds a new <textstream> child with the given language. If the referenced subtitle file is missing on disk, logs a warning and does not add an entry.
 
         Parameters:
                 src (str): Subtitle file path as used in the SMIL `src` attribute.
@@ -673,17 +723,8 @@ def write_smil(
                 "Expected subtitle file missing for %s when writing SMIL", src
             )
             return
-        ts = ET.SubElement(
-            switch, "textstream", {"src": target_src, "system-language": language}
-        )
         ET.SubElement(
-            ts,
-            "param",
-            {
-                "name": "isWowzaCaptionStream",
-                "value": "true",
-                "valuetype": "data",
-            },
+            switch, "textstream", {"src": target_src, "system-language": language}
         )
 
     # By default, use TTML in SMIL (contains both languages)
@@ -775,6 +816,7 @@ def discover_video_jobs(
 
         # Run find command with streaming output
         file_count = 0
+        process: Optional[subprocess.Popen[str]] = None
         try:
             LOGGER.info("Running: %s", " ".join(find_args))
             process = subprocess.Popen(
@@ -784,6 +826,9 @@ def discover_video_jobs(
                 text=True,
                 bufsize=1,
             )
+
+            if process.stdout is None or process.stderr is None:
+                raise RuntimeError("Failed to open subprocess pipes for find")
 
             # Stream and process results as they come
             for line in process.stdout:
@@ -815,8 +860,9 @@ def discover_video_jobs(
 
         except KeyboardInterrupt:
             LOGGER.warning("Scan interrupted by user. Terminating find process...")
-            process.terminate()
-            process.wait()
+            if process is not None:
+                process.terminate()
+                process.wait()
             raise
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
@@ -876,7 +922,7 @@ def discover_video_jobs(
     skipped_count = 0
     last_log_time = time.time()
 
-    for (_, normalized_name_lower), candidates in grouped.items():
+    for _, candidates in grouped.items():
         best_path = select_best_variant(candidates)
         if not best_path:
             continue
@@ -1037,7 +1083,9 @@ def atomic_write(path: Path, content: str) -> None:
 
 
 def detect_audio_start_time(
-    audio_path: Path, segments: list = None, threshold: float = -40.0
+    audio_path: Path,
+    segments: Optional[Sequence[SegmentLike]] = None,
+    threshold: float = -40.0,
 ) -> float:
     """
     Detect when audio actually starts using either FFmpeg silence detection or segment analysis.
@@ -1065,7 +1113,7 @@ def detect_audio_start_time(
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         # Parse FFmpeg output for silence end times
-        silence_end_times = []
+        silence_end_times: List[float] = []
         for line in result.stderr.split("\n"):
             if "silence_end:" in line:
                 # Extract the time value
@@ -1138,7 +1186,7 @@ def adjust_vtt_timestamps(vtt_content: str, offset_seconds: float) -> str:
         return ts
 
     lines = vtt_content.split("\n")
-    adjusted_lines = []
+    adjusted_lines: List[str] = []
 
     for line in lines:
         if "-->" in line:
@@ -1156,7 +1204,9 @@ def adjust_vtt_timestamps(vtt_content: str, offset_seconds: float) -> str:
     return "\n".join(adjusted_lines)
 
 
-def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> Dict:
+def process_job(
+    job: VideoJob, args: argparse.Namespace, manifest: Manifest
+) -> ManifestRecord:
     """
     Process a single VideoJob: transcribe/translate audio if needed, write VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
 
@@ -1172,7 +1222,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
     LOGGER.info("Processing %s", job.video_path)
 
     # Load filter words (cached after first call)
-    filter_words = load_filter_words()
+    filter_words: List[str] = load_filter_words()
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
@@ -1185,7 +1235,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
     try:
         if need_transcription:
             audio_path = extract_audio(job.video_path, args.sample_rate)
-            model = get_model(args)
+            model: Any = get_model(args)
 
             ru_iter, ru_info = model.transcribe(
                 str(audio_path),
@@ -1197,7 +1247,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
             ru_segments = list(ru_iter)
 
             translation_model_name = args.translation_model or args.model
-            translation_model = get_model(args, model_name=translation_model_name)
+            translation_model: Any = get_model(args, model_name=translation_model_name)
 
             en_iter, en_info = translation_model.transcribe(
                 str(audio_path),
@@ -1224,7 +1274,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                     translation_model_name,
                     fallback_name,
                 )
-                translation_model = get_model(args, model_name=fallback_name)
+                translation_model = cast(Any, get_model(args, model_name=fallback_name))
                 en_iter, en_info = translation_model.transcribe(
                     str(audio_path),
                     beam_size=args.beam_size,
@@ -1254,14 +1304,18 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
             # Generate TTML file by default (unless --no-ttml is specified)
             if not args.no_ttml:
-                ru_cues = parse_vtt_content(ru_content)
-                en_cues = parse_vtt_content(en_content)
+                ru_cues: List[Any] = parse_vtt_content(ru_content)
+                en_cues: List[Any] = parse_vtt_content(en_content)
                 # Convert 2-letter language codes to 3-letter for TTML
-                ttml_lang1 = LANG_CODE_2_TO_3.get(
-                    args.source_language, args.source_language
+                ttml_lang1 = (
+                    LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+                    or args.source_language
                 )
-                ttml_lang2 = LANG_CODE_2_TO_3.get(
-                    args.translation_language, args.translation_language
+                ttml_lang2 = (
+                    LANG_CODE_2_TO_3.get(
+                        args.translation_language, args.translation_language
+                    )
+                    or args.translation_language
                 )
                 ttml_content = cues_to_ttml(
                     ru_cues,
@@ -1301,7 +1355,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
         write_smil(job, metadata, args)
 
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -1337,7 +1391,7 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
                 "Failed to process %s (%s): %s", job.video_path, error_type, exc
             )
 
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -1361,19 +1415,19 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
 def process_transcription_only(
     job: VideoJob, args: argparse.Namespace, quiet: bool = False
-) -> Dict:
+) -> ManifestRecord:
     """Phase 1: Transcribe audio to Russian VTT only."""
     start_time = time.time()
     if not quiet or args.verbose:
         LOGGER.info("[Transcription] Processing %s", job.video_path)
 
-    filter_words = load_filter_words()
+    filter_words: List[str] = load_filter_words()
     audio_path: Optional[Path] = None
 
     try:
         audio_path = extract_audio(job.video_path, args.sample_rate)
         LOGGER.debug("[Transcription] Loading model %s...", args.model)
-        model = get_model(args)
+        model: Any = get_model(args)
         LOGGER.debug("[Transcription] Model loaded, starting transcription...")
 
         ru_iter, ru_info = model.transcribe(
@@ -1435,13 +1489,13 @@ def process_transcription_only(
 
 def process_translation_only(
     job: VideoJob, args: argparse.Namespace, manifest: Manifest, quiet: bool = False
-) -> Dict:
+) -> ManifestRecord:
     """Phase 2: Translate audio to English VTT, generate TTML and SMIL."""
     start_time = time.time()
     if not quiet or args.verbose:
         LOGGER.info("[Translation] Processing %s", job.video_path)
 
-    filter_words = load_filter_words()
+    filter_words: List[str] = load_filter_words()
     metadata = probe_video_metadata(job.video_path)
     audio_path: Optional[Path] = None
 
@@ -1450,13 +1504,13 @@ def process_translation_only(
         ru_content = (
             job.ru_vtt.read_text(encoding="utf-8") if job.ru_vtt.exists() else ""
         )
-        ru_cues = parse_vtt_content(ru_content) if ru_content else []
+        ru_cues: List[Any] = parse_vtt_content(ru_content) if ru_content else []
 
         audio_path = extract_audio(job.video_path, args.sample_rate)
 
         translation_model_name = args.translation_model or args.model
         LOGGER.debug("[Translation] Loading model %s...", translation_model_name)
-        translation_model = get_model(args, model_name=translation_model_name)
+        translation_model: Any = get_model(args, model_name=translation_model_name)
         LOGGER.debug("[Translation] Model loaded, starting translation...")
 
         en_iter, en_info = translation_model.transcribe(
@@ -1470,10 +1524,12 @@ def process_translation_only(
 
         # Build a simple segment-like object for suspect check
         class _Seg:
-            def __init__(self, text):
+            def __init__(self, text: str) -> None:
+                self.start = 0.0
+                self.end = 0.0
                 self.text = text
 
-        ru_seg_objs = [_Seg(c.text) for c in ru_cues]
+        ru_seg_objs = [_Seg(str(getattr(c, "text", ""))) for c in ru_cues]
 
         fallback_name = (args.translation_fallback_model or "").strip()
         if fallback_name.lower() == "none":
@@ -1491,7 +1547,7 @@ def process_translation_only(
                 translation_model_name,
                 fallback_name,
             )
-            translation_model = get_model(args, model_name=fallback_name)
+            translation_model = cast(Any, get_model(args, model_name=fallback_name))
             en_iter, en_info = translation_model.transcribe(
                 str(audio_path),
                 beam_size=args.beam_size,
@@ -1518,12 +1574,16 @@ def process_translation_only(
 
         # Generate TTML
         if not args.no_ttml:
-            en_cues = parse_vtt_content(en_content)
-            ttml_lang1 = LANG_CODE_2_TO_3.get(
-                args.source_language, args.source_language
+            en_cues: List[Any] = parse_vtt_content(en_content)
+            ttml_lang1 = (
+                LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+                or args.source_language
             )
-            ttml_lang2 = LANG_CODE_2_TO_3.get(
-                args.translation_language, args.translation_language
+            ttml_lang2 = (
+                LANG_CODE_2_TO_3.get(
+                    args.translation_language, args.translation_language
+                )
+                or args.translation_language
             )
             ttml_content = cues_to_ttml(
                 ru_cues,
@@ -1537,7 +1597,7 @@ def process_translation_only(
         write_smil(job, metadata, args)
 
         duration = en_info.duration if en_info else (metadata.duration or 0.0)
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -1555,7 +1615,7 @@ def process_translation_only(
 
     except Exception as exc:
         LOGGER.error("[Translation] Failed %s: %s", job.video_path, exc)
-        record = {
+        record: ManifestRecord = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -1904,8 +1964,8 @@ def run_two_phase(
 
     # Filter jobs for each phase in a SINGLE pass (respecting existing outputs)
     LOGGER.info("Filtering jobs for both phases... checking %d files", len(all_jobs))
-    transcription_jobs = []
-    translation_jobs = []
+    transcription_jobs: List[VideoJob] = []
+    translation_jobs: List[VideoJob] = []
     last_log_time = time.time()
     try:
         for i, j in enumerate(all_jobs):
@@ -1955,7 +2015,7 @@ def run_two_phase(
         elif args.progress and tqdm is None:
             LOGGER.warning("tqdm is not installed; progress bar disabled")
 
-        def update_progress(record: Dict) -> None:
+        def update_progress(record: ManifestRecord) -> None:
             nonlocal phase1_successes, phase1_failures
             video_path = record.get("video_path", "unknown")
             worker_info = record.get("worker_info", "")
@@ -1974,7 +2034,7 @@ def run_two_phase(
                     record.get("error", "unknown"),
                 )
             if progress_bar is not None:
-                progress_bar.set_postfix(
+                cast(Any, progress_bar).set_postfix(
                     ok=phase1_successes, fail=phase1_failures, refresh=False
                 )
                 progress_bar.update(1)
@@ -2043,10 +2103,10 @@ def run_two_phase(
                 total=len(translation_jobs), desc="Translating", unit="video"
             )
 
-        def update_progress2(record: Dict) -> None:
+        def update_progress2(record: ManifestRecord) -> None:
             nonlocal phase2_successes, phase2_failures
-            video_path = record.get("video_path", "unknown")
-            worker_info = record.get("worker_info", "")
+            video_path = str(record.get("video_path", "unknown"))
+            worker_info = str(record.get("worker_info", ""))
             worker_tag = f"[{worker_info}] " if worker_info else ""
             if record.get("status") == "success":
                 phase2_successes += 1
@@ -2062,7 +2122,7 @@ def run_two_phase(
                     record.get("error", "unknown"),
                 )
             if progress_bar is not None:
-                progress_bar.set_postfix(
+                cast(Any, progress_bar).set_postfix(
                     ok=phase2_successes, fail=phase2_failures, refresh=False
                 )
                 progress_bar.update(1)

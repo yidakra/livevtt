@@ -8,31 +8,45 @@ returns VTT transcriptions and translations.
 
 import tempfile
 from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Protocol, cast
 
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
-from faster_whisper import WhisperModel
+
+try:
+    from faster_whisper import WhisperModel  # type: ignore
+except Exception:  # pragma: no cover - typing fallback when stubs are missing
+    WhisperModel = Any  # type: ignore
 import uvicorn
 
 app = FastAPI()
 
 # Global model cache
-models = {}
+models: Dict[str, Any] = {}
+
+
+class SegmentLike(Protocol):
+    start: float
+    end: float
+    text: str
 
 
 def get_model(
     model_name: str = "large-v3-turbo",
     device: str = "cuda",
     compute_type: str = "float16",
-) -> WhisperModel:
+) -> Any:
     """Get or load Whisper model (cached)."""
     key = f"{model_name}_{device}_{compute_type}"
     if key not in models:
-        models[key] = WhisperModel(model_name, device=device, compute_type=compute_type)
+        ctor = cast(Callable[..., Any], WhisperModel)
+        models[key] = ctor(model_name, device=device, compute_type=compute_type)
     return models[key]
 
 
-def segments_to_vtt(segments, prepend_header: bool = True) -> str:
+def segments_to_vtt(
+    segments: Iterable[SegmentLike], prepend_header: bool = True
+) -> str:
     """Convert segments to WebVTT format."""
 
     def format_timestamp(seconds: float) -> str:
@@ -42,7 +56,7 @@ def segments_to_vtt(segments, prepend_header: bool = True) -> str:
         secs, ms = divmod(remainder, 1000)
         return f"{hours:02}:{minutes:02}:{secs:02}.{ms:03}"
 
-    lines = []
+    lines: List[str] = []
     if prepend_header:
         lines.append("WEBVTT")
         lines.append("")
@@ -74,7 +88,7 @@ async def transcribe(
     beam_size: int = Form(5),
     compute_type: str = Form("float16"),
     vad_filter: bool = Form(False),
-):
+) -> JSONResponse:
     """
     Transcribe and translate audio file.
 
@@ -135,7 +149,7 @@ async def transcribe(
 
 
 @app.get("/health")
-async def health():
+async def health() -> Dict[str, object]:
     """Health check endpoint."""
     return {"status": "healthy", "models_loaded": len(models)}
 

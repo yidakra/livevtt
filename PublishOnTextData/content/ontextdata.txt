@@ -1,3 +1,0 @@
-My first Wowza Media Server closed caption.
-Here is a much longer second closed caption that should fill up more of the screen
-Here is a 3rd closed caption

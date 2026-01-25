@@ -1,3 +1,0 @@
-#!/bin/bash
-# Convenience script for caption_sender.py
-python src/python/tools/caption_sender.py "$@" 

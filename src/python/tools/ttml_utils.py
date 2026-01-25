@@ -33,7 +33,7 @@ class SegmentLike(Protocol):
 
 
 # Global filter words cache: (path, filter_words)
-_FILTER_CACHE: Optional[Tuple[Optional[Path], List[str]]] = None
+filter_cache: Optional[Tuple[Optional[Path], List[str]]] = None
 
 
 def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
@@ -48,7 +48,7 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
     Returns:
         List[str]: The list of filter words; an empty list if no valid file is found or loading fails.
     """
-    global _FILTER_CACHE
+    global filter_cache
 
     # Resolve the path to use
     resolved_path = filter_json_path
@@ -66,24 +66,24 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
                 break
 
     # Check if we have a cached result for this path
-    if _FILTER_CACHE is not None:
-        cached_path, cached_words = _FILTER_CACHE
+    if filter_cache is not None:
+        cached_path, cached_words = filter_cache
         if cached_path == resolved_path:
             return cached_words
 
     # Load filter words from the resolved path
     if resolved_path is None or not resolved_path.exists():
-        _FILTER_CACHE = (resolved_path, [])
+        filter_cache = (resolved_path, [])
         return []
 
     try:
         with open(resolved_path, "r", encoding="utf-8") as f:
             data = json.load(f)
             filter_words = data.get("filter_words", [])
-            _FILTER_CACHE = (resolved_path, filter_words)
+            filter_cache = (resolved_path, filter_words)
             return filter_words
     except (json.JSONDecodeError, OSError):
-        _FILTER_CACHE = (resolved_path, [])
+        filter_cache = (resolved_path, [])
         return []
 
 
@@ -194,7 +194,7 @@ def _parse_vtt_lines(lines: List[str], start_index: int = 0) -> List[SubtitleCue
             end = parse_vtt_timestamp(end_str)
 
             i += 1
-            text_lines = []
+            text_lines: List[str] = []
             while i < len(lines) and lines[i].strip():
                 text_lines.append(lines[i].rstrip())
                 i += 1
@@ -260,7 +260,7 @@ def align_bilingual_cues(
     en_index = 0
     total_en = len(cues_lang2)
 
-    for idx, cue1 in enumerate(cues_lang1):
+    for cue1 in cues_lang1:
         # emit lang2 cues that finish well before this lang1 cue
         while en_index < total_en and cues_lang2[en_index].end + tolerance < cue1.start:
             aligned.append((None, [cues_lang2[en_index]]))

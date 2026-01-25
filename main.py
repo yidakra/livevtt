@@ -8,7 +8,6 @@ import os.path
 
 import aiofiles.tempfile
 import aiohttp
-import faster_whisper
 import m3u8
 import os
 import sys
@@ -17,47 +16,42 @@ import copy
 import threading
 
 from datetime import timedelta, datetime
-from typing import Iterable, Tuple
-from faster_whisper import WhisperModel
+from typing import Any, Iterable, Protocol, Tuple, cast, Optional
+from faster_whisper import WhisperModel  # type: ignore
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from faster_whisper.utils import available_models
+from faster_whisper.utils import available_models  # type: ignore
 from m3u8 import PlaylistList, SegmentList
 
-translated_chunk_paths = {}
-chunk_to_vtt = {}
-chunk_to_vtt_trans = {}  # Dictionary for translated subtitles
-chunk_to_vtt_orig = {}  # Dictionary for transcribed subtitles
+translated_chunk_paths: dict[str, str] = {}
+chunk_to_vtt: dict[str, str] = {}
+chunk_to_vtt_trans: dict[str, str] = {}  # Dictionary for translated subtitles
+chunk_to_vtt_orig: dict[str, str] = {}  # Dictionary for transcribed subtitles
 
 CHUNK_LIST_BASE_URI = None
-BASE_PLAYLIST_SER = None
-CHUNK_LIST_SER = None
-SUB_LIST_SER = None
-SUB_LIST_TRANS_SER = None  # Global for translated subtitles playlist
-SUB_LIST_ORIG_SER = None  # Global for transcribed subtitles playlist
+base_playlist_ser: Optional[bytes] = None
+chunk_list_ser: Optional[bytes] = None
+sub_list_ser: Optional[bytes] = None
+sub_list_trans_ser: Optional[bytes] = None  # Global for translated subtitles playlist
+sub_list_orig_ser: Optional[bytes] = None  # Global for transcribed subtitles playlist
 
 TARGET_BUFFER_SECS = 60
 MAX_TARGET_BUFFER_SECS = 120
 
-FILTER_DICT = {}  # Dictionary of strings to filter out
-FILTER_FILE = "config/filter.json"  # File to store filter words
-VOCABULARY_FILE = "config/vocabulary.json"  # File to store custom vocabulary
+filter_dict: dict[str, Any] = {}  # Dictionary of strings to filter out
+filter_file_path = "config/filter.json"  # File to store filter words
+vocabulary_file_path = "config/vocabulary.json"  # File to store custom vocabulary
 
 # New global variables for custom vocabulary
-CUSTOM_VOCABULARY = {}  # Dictionary of custom vocabulary
-INITIAL_PROMPT = ""  # Initial prompt for Whisper model
-
-# New global variables for RTMP streaming
-RTMP_ENABLED = False
-RTMP_URL = None
-RTMP_QUEUE = None
+custom_vocabulary: list[str] = []  # Custom vocabulary terms
+initial_prompt_text = ""  # Initial prompt for Whisper model
 
 # New global variable for container extension
-CONTAINER_EXT = ".ts"
+container_ext = ".ts"
 
 # Globals for MP4 init segment
-INIT_SEGMENT_PATH = None  # Filesystem path of generated init.mp4
+init_segment_path: Optional[str] = None  # Filesystem path of generated init.mp4
 INIT_SEGMENT_URI = "/init.mp4"
-INIT_SEGMENT_CREATED = False
+init_segment_created = False
 
 if sys.version_info < (3, 10):
     print("This script needs to be ran under Python 3.10 at minimum.")
@@ -71,9 +65,13 @@ logging.basicConfig(
 )
 
 
-def segments_to_srt(
-    segments: Iterable[faster_whisper.transcribe.Segment], ts_offset: timedelta
-) -> str:
+class SegmentLike(Protocol):
+    start: float
+    end: float
+    text: str
+
+
+def segments_to_srt(segments: Iterable[SegmentLike], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
     segment_chunks = [
         f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S,%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S,%f')[:-3]}\n{segment.text}"
@@ -82,9 +80,7 @@ def segments_to_srt(
     return "\n\n".join(segment_chunks)
 
 
-def segments_to_webvtt(
-    segments: Iterable[faster_whisper.transcribe.Segment], ts_offset: timedelta
-) -> str:
+def segments_to_webvtt(segments: Iterable[SegmentLike], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
     segment_chunks = [
         f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S.%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S.%f')[:-3]}\n{segment.text}"
@@ -102,35 +98,35 @@ class HTTPHandler(BaseHTTPRequestHandler):
         # Handle GET requests normally
         self._handle_request(send_body=True)
 
-    def _handle_request(self, send_body=True):
+    def _handle_request(self, send_body: bool = True) -> None:
         response_content = None
         if self.path == "/playlist.m3u8":
-            response_content = BASE_PLAYLIST_SER
+            response_content = base_playlist_ser
         elif self.path == "/chunklist.m3u8":
-            response_content = CHUNK_LIST_SER
+            response_content = chunk_list_ser
         elif self.path == "/subs.m3u8":
-            response_content = SUB_LIST_SER
+            response_content = sub_list_ser
         elif self.path.startswith("/subs_") and self.path.endswith(".m3u8"):
             # Handle language-specific subtitle playlists like /subs_en.m3u8, /subs_ru.m3u8
             if self.path == "/subs_en.m3u8":
-                response_content = SUB_LIST_TRANS_SER
+                response_content = sub_list_trans_ser
             else:
-                response_content = SUB_LIST_ORIG_SER
+                response_content = sub_list_orig_ser
         elif self.path == "/subs.trans.m3u8":
-            response_content = SUB_LIST_TRANS_SER
+            response_content = sub_list_trans_ser
         elif self.path == "/subs.orig.m3u8":
-            response_content = SUB_LIST_ORIG_SER
+            response_content = sub_list_orig_ser
         elif (
             self.path == INIT_SEGMENT_URI
-            and INIT_SEGMENT_CREATED
-            and INIT_SEGMENT_PATH
-            and os.path.exists(INIT_SEGMENT_PATH)
+            and init_segment_created
+            and init_segment_path
+            and os.path.exists(init_segment_path)
         ):
             self.send_response(200)
             self.send_header("Content-Type", "video/mp4")
-            self.send_header("Content-Length", str(os.path.getsize(INIT_SEGMENT_PATH)))
+            self.send_header("Content-Length", str(os.path.getsize(init_segment_path)))
             self.end_headers()
-            with open(INIT_SEGMENT_PATH, "rb") as f:
+            with open(init_segment_path, "rb") as f:
                 shutil.copyfileobj(f, self.wfile)
             return
         elif self.path in translated_chunk_paths:
@@ -157,7 +153,8 @@ class HTTPHandler(BaseHTTPRequestHandler):
                 or chunk_to_vtt_trans.get(self.path)
                 or chunk_to_vtt_orig.get(self.path)
             )
-            response_content = bytes(vtt_content, "utf-8")
+            if vtt_content is not None:
+                response_content = bytes(vtt_content, "utf-8")
 
         self.send_response(200 if response_content else 404)
 
@@ -188,9 +185,24 @@ def http_listener(server_address: Tuple[str, int], stop_event: threading.Event):
 
 def normalise_chunk_uri(chunk_uri: str) -> str:
     # Use dynamic extension (.ts by default, .mp4 when mp4_container is enabled)
-    chunk_uri = os.path.splitext(chunk_uri)[0] + CONTAINER_EXT
+    chunk_uri = os.path.splitext(chunk_uri)[0] + container_ext
     chunk_uri = chunk_uri.replace("../", "").replace("./", "")
     return "/" + chunk_uri
+
+
+def ensure_segment_uri(uri: Optional[str]) -> str:
+    if uri is None:
+        raise ValueError("Segment URI is missing")
+    return uri
+
+
+def parse_m3u8_version(value: Optional[str]) -> int:
+    if not value:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def check_bindeps_present():
@@ -204,10 +216,16 @@ def check_bindeps_present():
 
 
 async def download_chunk(
-    session: aiohttp.ClientSession, base_uri: str, segment: m3u8.Segment, chunk_dir: str
+    session: aiohttp.ClientSession,
+    base_uri: Optional[str],
+    segment: m3u8.Segment,
+    chunk_dir: str,
 ):
-    chunk_url = os.path.join(base_uri, segment.uri)
-    chunk_uri = normalise_chunk_uri(segment.uri)
+    if base_uri is None:
+        raise ValueError("Base URI is missing for segment download")
+    segment_uri = ensure_segment_uri(segment.uri)
+    chunk_url = os.path.join(base_uri, segment_uri)
+    chunk_uri = normalise_chunk_uri(segment_uri)
     if chunk_uri not in translated_chunk_paths:
         logger.info(f"Downloading segment {chunk_uri}...")
         try:
@@ -233,22 +251,22 @@ async def download_chunk(
 
 
 def load_filter_dict():
-    global FILTER_DICT
+    global filter_dict
     try:
-        if os.path.exists(FILTER_FILE):
-            with open(FILTER_FILE, "r", encoding="utf-8") as f:
+        if os.path.exists(filter_file_path):
+            with open(filter_file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                FILTER_DICT = data
+                filter_dict = data
     except Exception as e:
         logger.error(f"Failed to load filter dictionary: {e}")
 
 
-def load_custom_vocabulary(language: str, vocabulary_file: str = None):
+def load_custom_vocabulary(language: str, vocabulary_file: Optional[str] = None):
     """Load language-specific custom vocabulary"""
-    global CUSTOM_VOCABULARY, INITIAL_PROMPT
+    global custom_vocabulary, initial_prompt_text
 
     # Use provided file path or fall back to global
-    vocab_file_path = vocabulary_file or VOCABULARY_FILE
+    vocab_file_path = vocabulary_file or vocabulary_file_path
 
     try:
         if os.path.exists(vocab_file_path):
@@ -264,150 +282,51 @@ def load_custom_vocabulary(language: str, vocabulary_file: str = None):
                     if language in vocab_dict and isinstance(
                         vocab_dict[language], list
                     ):
-                        CUSTOM_VOCABULARY = vocab_dict[language]
+                        custom_vocabulary = vocab_dict[language]
 
                         # Generate initial prompt for Whisper with the vocabulary words
-                        quoted_terms = [f'"{term}"' for term in CUSTOM_VOCABULARY]
-                        INITIAL_PROMPT = (
+                        quoted_terms = [f'"{term}"' for term in custom_vocabulary]
+                        initial_prompt_text = (
                             "The following terms may appear in this audio: "
                             + ", ".join(quoted_terms)
                             + "."
                         )
                         logger.info(
-                            f"Custom vocabulary loaded for language '{language}' with {len(CUSTOM_VOCABULARY)} terms: {', '.join(CUSTOM_VOCABULARY)}"
+                            f"Custom vocabulary loaded for language '{language}' with {len(custom_vocabulary)} terms: {', '.join(custom_vocabulary)}"
                         )
-                        logger.debug(f"Initial prompt: {INITIAL_PROMPT}")
+                        logger.debug(f"Initial prompt: {initial_prompt_text}")
                     else:
                         # No vocabulary for this language - disable custom vocabulary
-                        CUSTOM_VOCABULARY = []
-                        INITIAL_PROMPT = ""
+                        custom_vocabulary = []
+                        initial_prompt_text = ""
                         logger.info(
                             f"No custom vocabulary found for language '{language}' - custom vocabulary disabled"
                         )
                 else:
                     # No custom vocabulary section - disable
-                    CUSTOM_VOCABULARY = []
-                    INITIAL_PROMPT = ""
+                    custom_vocabulary = []
+                    initial_prompt_text = ""
                     logger.info("No custom vocabulary configuration found")
         else:
             # No vocabulary file - disable
-            CUSTOM_VOCABULARY = []
-            INITIAL_PROMPT = ""
+            custom_vocabulary = []
+            initial_prompt_text = ""
             logger.info(
                 f"Vocabulary file '{vocab_file_path}' not found - custom vocabulary disabled"
             )
     except Exception as e:
         logger.error(f"Failed to load custom vocabulary: {e}")
-        CUSTOM_VOCABULARY = []
-        INITIAL_PROMPT = ""
+        custom_vocabulary = []
+        initial_prompt_text = ""
 
 
 def should_filter_segment(text: str) -> bool:
     """Return True if segment should be filtered out based on content."""
-    if not FILTER_DICT:
+    if not filter_dict:
         return False
     text = text.lower()
-    return any(word.lower() in text for word in FILTER_DICT.get("filter_words", []))
-
-
-async def publish_to_rtmp(
-    text: str,
-    language: str = "eng",
-    track_id: int = 99,
-    http_port: int = 8086,
-    username: str = "admin",
-    password: str = "password",
-):
-    """
-    Publish subtitle text to Wowza Streaming Engine via HTTP as onTextData events.
-
-    Args:
-        text: The subtitle text to send
-        language: Language code (default: "eng")
-        track_id: Track identifier (default: 99)
-        http_port: HTTP port for Wowza caption API (default: 8086)
-        username: Username for Wowza authentication (default: admin)
-        password: Password for Wowza authentication (default: password)
-    """
-    global RTMP_ENABLED, RTMP_URL
-    if RTMP_ENABLED and RTMP_URL is not None:
-        try:
-            # Extract server and application name from RTMP URL
-            # Example: rtmp://localhost:1935/live/stream -> extract only localhost
-            parts = RTMP_URL.split("/")
-            if len(parts) >= 3:
-                # Extract hostname without port from the server part
-                server_part = parts[2]
-                if ":" in server_part:
-                    server = server_part.split(":")[0]  # Extract only hostname
-                else:
-                    server = server_part
-                stream_name = parts[-1]
-
-                # Prepare HTTP request to Wowza module using configured port
-                # Fixed URL format to match what the HTTP Provider expects
-                url = f"http://{server}:{http_port}/livevtt/captions"
-                headers = {"Content-Type": "application/json"}
-                data = {
-                    "text": text,
-                    "lang": language,
-                    "trackid": track_id,
-                    "streamname": stream_name,
-                }
-
-                # Setup auth parameters if credentials are provided
-                auth = (
-                    aiohttp.BasicAuth(username, password)
-                    if username and password
-                    else None
-                )
-
-                # Enhanced debug logging
-                logger.info(
-                    f"Sending caption to {url} with auth: {username if username else 'None'}"
-                )
-                logger.info(f"Caption data: {data}")
-
-                # Send HTTP request to Wowza module
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        url, json=data, headers=headers, auth=auth
-                    ) as response:
-                        response_text = await response.text()
-                        if response.status != 200:
-                            logger.error(
-                                f"Failed to send caption to Wowza: {response.status} - {response_text}"
-                            )
-                        else:
-                            logger.info(
-                                f"Caption sent to Wowza successfully: {response_text}"
-                            )
-            else:
-                logger.error(f"Invalid RTMP URL format: {RTMP_URL}")
-        except Exception as e:
-            logger.error(f"Error sending caption to Wowza: {e}")
-
-
-async def rtmp_publisher(rtmp_url: str, queue: asyncio.Queue):
-    """
-    Process for publishing onTextData events to an RTMP server using Wowza module.
-    This function is kept for backward compatibility but is no longer used.
-    All caption publishing is now done directly in publish_to_rtmp.
-    """
-    logger.info("RTMP publishing is now handled directly via HTTP to Wowza module")
-
-    # Just consume the queue items to prevent queue from filling up
-    # in case old code is still putting items in the queue
-    try:
-        while True:
-            item = await queue.get()
-            if item is None:  # None used as sentinel to stop
-                break
-            queue.task_done()
-    except asyncio.CancelledError:
-        logger.info("RTMP publisher task cancelled")
-    except Exception as e:
-        logger.error(f"Error in RTMP publisher: {e}")
+    filter_words = cast(list[str], filter_dict.get("filter_words", []))
+    return any(word.lower() in text for word in filter_words)
 
 
 async def transcribe_chunk(
@@ -437,16 +356,22 @@ async def transcribe_chunk(
     loop = asyncio.get_running_loop()
 
     # Add custom vocabulary initial prompt if available
-    initial_prompt = INITIAL_PROMPT if INITIAL_PROMPT and not args.debug else None
+    initial_prompt = (
+        initial_prompt_text if initial_prompt_text and not args.debug else None
+    )
     if initial_prompt:
         logger.debug(f"Using initial prompt for transcription: {initial_prompt}")
+
+    segments: list[SegmentLike] = []
+    segments_orig: list[SegmentLike] = []
+    segments_trans: list[SegmentLike] = []
 
     # Run transcription and translation in parallel if both_tracks is enabled
     if args.both_tracks:
         # Transcribe in source language
-        segments_orig, _ = await loop.run_in_executor(
+        segments_orig_raw, _ = await loop.run_in_executor(
             None,
-            lambda: model.transcribe(
+            lambda: cast(Any, model).transcribe(
                 chunk_name,
                 beam_size=args.beam_size,
                 vad_filter=args.vad_filter,
@@ -455,10 +380,11 @@ async def transcribe_chunk(
                 initial_prompt=initial_prompt,
             ),
         )
+        segments_orig = list(cast(Iterable[SegmentLike], segments_orig_raw))
         # Translate to English
-        segments_trans, _ = await loop.run_in_executor(
+        segments_trans_raw, _ = await loop.run_in_executor(
             None,
-            lambda: model.transcribe(
+            lambda: cast(Any, model).transcribe(
                 chunk_name,
                 beam_size=args.beam_size,
                 vad_filter=args.vad_filter,
@@ -467,6 +393,7 @@ async def transcribe_chunk(
                 initial_prompt=initial_prompt,
             ),
         )
+        segments_trans = list(cast(Iterable[SegmentLike], segments_trans_raw))
 
         # Filter segments
         segments_orig = [
@@ -475,25 +402,6 @@ async def transcribe_chunk(
         segments_trans = [
             seg for seg in segments_trans if not should_filter_segment(seg.text)
         ]
-
-        # Send to RTMP if enabled
-        if RTMP_ENABLED:
-            segments_to_use = (
-                segments_trans if args.rtmp_use_translated else segments_orig
-            )
-            for segment in segments_to_use:
-                if segment.text.strip():
-                    await publish_to_rtmp(
-                        segment.text,
-                        language=args.rtmp_language
-                        or (args.language if args.rtmp_use_translated else "eng"),
-                        track_id=args.rtmp_track_id,
-                        http_port=args.rtmp_http_port,
-                        username=args.rtmp_username if args.rtmp_username else "admin",
-                        password=args.rtmp_password
-                        if args.rtmp_password
-                        else "password",
-                    )
 
         if not args.hard_subs and not args.embedded_subs:
             vtt_uri = os.path.splitext(segment_uri)[0]
@@ -508,9 +416,9 @@ async def transcribe_chunk(
             return segment_uri, chunk_name
     else:
         # Original behavior with filtering
-        segments, _ = await loop.run_in_executor(
+        segments_raw, _ = await loop.run_in_executor(
             None,
-            lambda: model.transcribe(
+            lambda: cast(Any, model).transcribe(
                 chunk_name,
                 beam_size=args.beam_size,
                 vad_filter=args.vad_filter,
@@ -519,24 +427,10 @@ async def transcribe_chunk(
                 initial_prompt=initial_prompt,
             ),
         )
+        segments = list(cast(Iterable[SegmentLike], segments_raw))
 
         # Filter segments
         segments = [seg for seg in segments if not should_filter_segment(seg.text)]
-
-        # Send to RTMP if enabled
-        if RTMP_ENABLED:
-            for segment in segments:
-                if segment.text.strip():
-                    await publish_to_rtmp(
-                        segment.text,
-                        language=args.rtmp_language or args.language,
-                        track_id=args.rtmp_track_id,
-                        http_port=args.rtmp_http_port,
-                        username=args.rtmp_username if args.rtmp_username else "admin",
-                        password=args.rtmp_password
-                        if args.rtmp_password
-                        else "password",
-                    )
 
         if not args.hard_subs and not args.embedded_subs:
             vtt_uri = os.path.splitext(segment_uri)[0] + ".vtt"
@@ -549,12 +443,18 @@ async def transcribe_chunk(
         # Embedded subtitles logic
         if args.both_tracks:
             logger.info(
-                f"Both tracks mode: orig={len(segments_orig) if 'segments_orig' in locals() else 0}, trans={len(segments_trans) if 'segments_trans' in locals() else 0}"
+                f"Both tracks mode: orig={len(segments_orig)}, trans={len(segments_trans)}"
             )
             # Both tracks mode: embed both original and translated subtitles
             if segments_orig or segments_trans:
-                srt_files = []
-                ffmpeg_cmd = ["ffmpeg", "-hwaccel", "auto", "-i", chunk_name]
+                srt_files: list[str] = []
+                ffmpeg_cmd: list[str] = [
+                    "ffmpeg",
+                    "-hwaccel",
+                    "auto",
+                    "-i",
+                    chunk_name,
+                ]
 
                 # Add SRT inputs and prepare temp files
                 if segments_orig:
@@ -564,8 +464,9 @@ async def transcribe_chunk(
                         srt_content_orig = segments_to_srt(segments_orig, start_ts)
                         await srt_orig_file.write(bytes(srt_content_orig, "utf-8"))
                         await srt_orig_file.close()
-                        srt_files.append(srt_orig_file.name)
-                        ffmpeg_cmd.extend(["-f", "srt", "-i", srt_orig_file.name])
+                        srt_orig_name = cast(str, srt_orig_file.name)
+                        srt_files.append(srt_orig_name)
+                        ffmpeg_cmd.extend(["-f", "srt", "-i", srt_orig_name])
 
                 if segments_trans:
                     async with aiofiles.tempfile.NamedTemporaryFile(
@@ -574,8 +475,9 @@ async def transcribe_chunk(
                         srt_content_trans = segments_to_srt(segments_trans, start_ts)
                         await srt_trans_file.write(bytes(srt_content_trans, "utf-8"))
                         await srt_trans_file.close()
-                        srt_files.append(srt_trans_file.name)
-                        ffmpeg_cmd.extend(["-f", "srt", "-i", srt_trans_file.name])
+                        srt_trans_name = cast(str, srt_trans_file.name)
+                        srt_files.append(srt_trans_name)
+                        ffmpeg_cmd.extend(["-f", "srt", "-i", srt_trans_name])
 
                 # Build mapping - map video and audio from input 0
                 ffmpeg_cmd.extend(["-map", "0:v:0"])  # Video stream
@@ -701,11 +603,11 @@ async def transcribe_chunk(
                     logger.info(f"FFmpeg completed for {segment_uri}")
                     # Generate init.mp4 only once when using fragmented MP4 segments
                     if args.mp4_container:
-                        global INIT_SEGMENT_CREATED, INIT_SEGMENT_PATH
-                        if not INIT_SEGMENT_CREATED:
+                        global init_segment_created, init_segment_path
+                        if not init_segment_created:
                             try:
-                                INIT_SEGMENT_PATH = os.path.join(chunk_dir, "init.mp4")
-                                init_cmd = [
+                                init_segment_path = os.path.join(chunk_dir, "init.mp4")
+                                init_cmd: list[str] = [
                                     "ffmpeg",
                                     "-i",
                                     embedded_chunk_name,
@@ -719,7 +621,7 @@ async def transcribe_chunk(
                                     "mp4",
                                     "-t",
                                     "0",
-                                    INIT_SEGMENT_PATH,
+                                    init_segment_path,
                                     "-y",
                                     "-loglevel",
                                     "quiet",
@@ -732,16 +634,17 @@ async def transcribe_chunk(
                                     *init_cmd
                                 )
                                 await init_proc.communicate()
-                                if init_proc.returncode == 0 and os.path.exists(
-                                    INIT_SEGMENT_PATH
-                                ):
-                                    INIT_SEGMENT_CREATED = True
-                                    logger.info("init.mp4 generated and ready to serve")
+                                if init_proc.returncode == 0 and init_segment_path:
+                                    if os.path.exists(init_segment_path):
+                                        init_segment_created = True
+                                        logger.info(
+                                            "init.mp4 generated and ready to serve"
+                                        )
                             except Exception as e:
                                 logger.error(f"Failed to generate init.mp4: {e}")
                     # Verify the output file has subtitle streams
                     if args.debug:
-                        verify_cmd = [
+                        verify_cmd: list[str] = [
                             "ffprobe",
                             "-v",
                             "quiet",
@@ -780,9 +683,7 @@ async def transcribe_chunk(
                 os.unlink(chunk_name)
                 return segment_uri, embedded_chunk_name
         else:
-            logger.info(
-                f"Single track mode: segments={len(segments) if 'segments' in locals() else 0}"
-            )
+            logger.info(f"Single track mode: segments={len(segments)}")
             # Single track mode: embed one subtitle track
             if segments:
                 async with aiofiles.tempfile.NamedTemporaryFile(
@@ -791,6 +692,7 @@ async def transcribe_chunk(
                     srt_content = segments_to_srt(segments, start_ts)
                     await srt_file.write(bytes(srt_content, "utf-8"))
                     await srt_file.close()
+                    srt_file_name = cast(str, srt_file.name)
 
                     chunk_fp_name_split = os.path.splitext(chunk_name)
                     embedded_chunk_name = (
@@ -802,7 +704,7 @@ async def transcribe_chunk(
                         "eng" if not args.transcribe else (args.language or "eng")
                     )
 
-                    ffmpeg_cmd = [
+                    ffmpeg_cmd: list[str] = [
                         "ffmpeg",
                         "-hwaccel",
                         "auto",
@@ -811,7 +713,7 @@ async def transcribe_chunk(
                         "-f",
                         "srt",
                         "-i",
-                        srt_file.name,
+                        srt_file_name,
                         "-map",
                         "0:v:0",
                         "-map",
@@ -889,12 +791,13 @@ async def transcribe_chunk(
                         logger.info(f"Single track FFmpeg completed for {segment_uri}")
                         # Generate init.mp4 only once when using fragmented MP4 segments
                         if args.mp4_container:
-                            if not INIT_SEGMENT_CREATED:
+                            global init_segment_created, init_segment_path
+                            if not init_segment_created:
                                 try:
-                                    INIT_SEGMENT_PATH = os.path.join(
+                                    init_segment_path = os.path.join(
                                         chunk_dir, "init.mp4"
                                     )
-                                    init_cmd = [
+                                    init_cmd: list[str] = [
                                         "ffmpeg",
                                         "-i",
                                         embedded_chunk_name,
@@ -908,7 +811,7 @@ async def transcribe_chunk(
                                         "mp4",
                                         "-t",
                                         "0",
-                                        INIT_SEGMENT_PATH,
+                                        init_segment_path,
                                         "-y",
                                         "-loglevel",
                                         "quiet",
@@ -921,19 +824,18 @@ async def transcribe_chunk(
                                         *init_cmd
                                     )
                                     await init_proc.communicate()
-                                    if init_proc.returncode == 0 and os.path.exists(
-                                        INIT_SEGMENT_PATH
-                                    ):
-                                        INIT_SEGMENT_CREATED = True
-                                        logger.info(
-                                            "init.mp4 generated and ready to serve"
-                                        )
+                                    if init_proc.returncode == 0 and init_segment_path:
+                                        if os.path.exists(init_segment_path):
+                                            init_segment_created = True
+                                            logger.info(
+                                                "init.mp4 generated and ready to serve"
+                                            )
                                 except Exception as e:
                                     logger.error(f"Failed to generate init.mp4: {e}")
 
                     # Cleanup
                     try:
-                        os.unlink(srt_file.name)
+                        os.unlink(srt_file_name)
                     except OSError:
                         pass
 
@@ -958,6 +860,7 @@ async def transcribe_chunk(
 
             await srt_file.write(bytes(srt_content, "utf-8"))
             await srt_file.close()
+            srt_file_name = cast(str, srt_file.name)
             chunk_fp_name_split = os.path.splitext(chunk_name)
             translated_chunk_name = (
                 chunk_fp_name_split[0] + "_trans" + chunk_fp_name_split[1]
@@ -981,7 +884,7 @@ async def transcribe_chunk(
                 "-loglevel",
                 "quiet",
                 "-vf",
-                f"subtitles={os.path.basename(srt_file.name)}",
+                f"subtitles={os.path.basename(srt_file_name)}",
                 translated_chunk_name,
             )
             await ffmpeg_sub_proc.communicate()
@@ -1010,13 +913,6 @@ async def cleanup(
             except OSError as e:
                 logger.warning(f"Failed to remove temporary file {chunk_path}: {e}")
 
-        # Signal to stop the RTMP queue if it exists
-        global RTMP_QUEUE
-        if RTMP_QUEUE is not None:
-            try:
-                await RTMP_QUEUE.put(None)  # Signal to stop the publisher
-            except Exception as e:
-                logger.warning(f"Failed to stop RTMP queue: {e}")
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
     finally:
@@ -1156,51 +1052,6 @@ async def main():
         default=True,
     )
 
-    # RTMP arguments
-    parser.add_argument(
-        "-rtmp",
-        "--rtmp-url",
-        type=str,
-        help="RTMP URL to publish captions to (e.g., rtmp://server/app/stream)",
-    )
-    parser.add_argument(
-        "-rtmp-lang",
-        "--rtmp-language",
-        type=str,
-        help='Language code for RTMP subtitles (defaults to stream language or "eng")',
-    )
-    parser.add_argument(
-        "-rtmp-track",
-        "--rtmp-track-id",
-        type=int,
-        help="Track ID for RTMP subtitles",
-        default=99,
-    )
-    parser.add_argument(
-        "-rtmp-trans",
-        "--rtmp-use-translated",
-        action="store_true",
-        help="Use translated (English) text for RTMP instead of original language (only applies with --both-tracks)",
-    )
-    parser.add_argument(
-        "-rtmp-port",
-        "--rtmp-http-port",
-        type=int,
-        help="HTTP port for Wowza caption API (defaults to 8086)",
-        default=8086,
-    )
-    parser.add_argument(
-        "-rtmp-user",
-        "--rtmp-username",
-        type=str,
-        help="Username for Wowza API authentication",
-    )
-    parser.add_argument(
-        "-rtmp-pass",
-        "--rtmp-password",
-        type=str,
-        help="Password for Wowza API authentication",
-    )
     parser.add_argument(
         "-d", "--debug", action="store_true", help="Enable debug logging"
     )
@@ -1244,26 +1095,16 @@ async def main():
 
     # If custom vocabulary is disabled, clear the initial prompt
     if not args.custom_vocabulary:
-        global INITIAL_PROMPT
-        INITIAL_PROMPT = ""
+        global initial_prompt_text
+        initial_prompt_text = ""
         logger.info("Custom vocabulary disabled via command line argument")
     else:
         # Load language-specific custom vocabulary
         load_custom_vocabulary(args.language or "en", args.vocabulary_file)
 
-    # Initialize RTMP settings if enabled
-    global RTMP_ENABLED, RTMP_URL, RTMP_QUEUE
-    if args.rtmp_url:
-        RTMP_ENABLED = True
-        RTMP_URL = args.rtmp_url
-        RTMP_QUEUE = asyncio.Queue()
-        # Keep compatibility with old code by starting the queue consumer
-        asyncio.create_task(rtmp_publisher(RTMP_URL, RTMP_QUEUE))
-        logger.info(f"RTMP caption publishing enabled to {RTMP_URL}")
-
     # Determine container extension for segment files
-    global CONTAINER_EXT
-    CONTAINER_EXT = ".mp4" if args.mp4_container else ".ts"
+    global container_ext
+    container_ext = ".mp4" if args.mp4_container else ".ts"
 
     stop_event = threading.Event()
     session = aiohttp.ClientSession(headers={"User-Agent": args.user_agent})
@@ -1296,10 +1137,14 @@ async def main():
     if base_playlist.playlists:
         # Master playlist - select highest bitrate stream
         highest_bitrate_stream = sorted(
-            base_playlist.playlists, key=lambda x: x.stream_info.bandwidth, reverse=True
+            base_playlist.playlists,
+            key=lambda x: x.stream_info.bandwidth or 0,
+            reverse=True,
         )[0]
-        base_playlist.playlists = PlaylistList([highest_bitrate_stream])
-        stream_uri = highest_bitrate_stream.absolute_uri
+        base_playlist.playlists = PlaylistList([cast(Any, highest_bitrate_stream)])
+        stream_uri = (
+            cast(Optional[str], highest_bitrate_stream.absolute_uri) or args.url
+        )
     else:
         # Media playlist - use it directly
         logger.info("Direct media playlist detected, using stream directly")
@@ -1309,10 +1154,14 @@ async def main():
 
     # Ensure HLS version is high enough for fMP4 / EXT-X-MAP when mp4 container is used
     if args.mp4_container:
-        modified_base_playlist.version = max(7, modified_base_playlist.version or 0)
+        modified_base_playlist.version = str(
+            max(7, parse_m3u8_version(modified_base_playlist.version))
+        )
     else:
         # Keep at least version 5 for subtitle support in TS mode
-        modified_base_playlist.version = max(5, modified_base_playlist.version or 0)
+        modified_base_playlist.version = str(
+            max(5, parse_m3u8_version(modified_base_playlist.version))
+        )
 
     # Only modify playlist URI if it's a master playlist
     if modified_base_playlist.playlists:
@@ -1380,17 +1229,8 @@ async def main():
             modified_base_playlist.add_media(subtitle_list)
             modified_base_playlist.playlists[0].media += [subtitle_list]
 
-    global BASE_PLAYLIST_SER
-    BASE_PLAYLIST_SER = bytes(modified_base_playlist.dumps(), "ascii")
-
-    # Set up signal handlers
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(
-            sig,
-            lambda: asyncio.create_task(
-                cleanup(session, chunk_dir, prev_cwd, stop_event)
-            ),
-        )
+    global base_playlist_ser
+    base_playlist_ser = bytes(modified_base_playlist.dumps(), "ascii")
 
     http_thread = threading.Thread(
         target=http_listener,
@@ -1402,6 +1242,15 @@ async def main():
     async with aiofiles.tempfile.TemporaryDirectory() as chunk_dir:
         prev_cwd = os.getcwd()
         os.chdir(chunk_dir)
+
+        def schedule_cleanup() -> asyncio.Task[None]:
+            return asyncio.create_task(
+                cleanup(session, chunk_dir, prev_cwd, stop_event)
+            )
+
+        # Set up signal handlers
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, schedule_cleanup)
 
         try:
             while not stop_event.is_set():
@@ -1428,7 +1277,8 @@ async def main():
                             ].current_program_date_time
 
                 current_segments = [
-                    normalise_chunk_uri(segment.uri) for segment in chunk_list.segments
+                    normalise_chunk_uri(ensure_segment_uri(segment.uri))
+                    for segment in chunk_list.segments
                 ]
 
                 for translated_chunk_name, translated_chunk_path in dict(
@@ -1443,12 +1293,12 @@ async def main():
                         chunk_to_vtt
                     ).items():
                         if (
-                            os.path.splitext(translated_uri)[0] + CONTAINER_EXT
+                            os.path.splitext(translated_uri)[0] + container_ext
                             not in current_segments
                         ):
                             del chunk_to_vtt[translated_uri]
 
-                chunks_to_translate = {}
+                chunks_to_translate: dict[str, str] = {}
 
                 for i, chunk_name in enumerate(
                     await asyncio.gather(
@@ -1464,9 +1314,11 @@ async def main():
                     if isinstance(chunk_name, Exception):
                         continue
 
+                    chunk_name_str = cast(str, chunk_name)
+
                     normalised_segment_uri = current_segments[i]
                     if normalised_segment_uri not in translated_chunk_paths:
-                        chunks_to_translate[normalised_segment_uri] = chunk_name
+                        chunks_to_translate[normalised_segment_uri] = chunk_name_str
 
                 for segment_uri, chunk_name in await asyncio.gather(
                     *[
@@ -1479,23 +1331,28 @@ async def main():
                     chunks_to_translate[segment_uri] = chunk_name
 
                 for segment in chunk_list.segments:
-                    segment_name = normalise_chunk_uri(segment.uri)
+                    segment_uri = ensure_segment_uri(segment.uri)
+                    segment_name = normalise_chunk_uri(segment_uri)
                     segment.uri = segment_name.lstrip(
                         "/"
                     )  # Remove leading slash for relative path
 
-                global CHUNK_LIST_SER
+                global chunk_list_ser
 
                 # Ensure media playlist version supports EXT-X-MAP when using fMP4
                 if args.mp4_container:
-                    chunk_list.version = max(7, chunk_list.version or 0)
+                    chunk_list.version = str(
+                        max(7, parse_m3u8_version(chunk_list.version))
+                    )
                 else:
                     # HLS with WebVTT requires at least version 4
-                    chunk_list.version = max(4, chunk_list.version or 0)
+                    chunk_list.version = str(
+                        max(4, parse_m3u8_version(chunk_list.version))
+                    )
 
                 playlist_str = chunk_list.dumps()
                 # Inject EXT-X-MAP for mp4 container
-                if args.mp4_container and INIT_SEGMENT_CREATED:
+                if args.mp4_container and init_segment_created:
                     lines = playlist_str.split("\n")
                     # HLS spec requires EXT-X-MAP to appear before any media segments
                     insert_idx = -1
@@ -1516,7 +1373,7 @@ async def main():
                                 break
                         playlist_str = "\n".join(lines)
 
-                CHUNK_LIST_SER = bytes(playlist_str, "ascii")
+                chunk_list_ser = bytes(playlist_str, "ascii")
 
                 if not args.hard_subs and not args.embedded_subs:
                     # Only create WebVTT playlists when using sidecar subtitle mode
@@ -1526,28 +1383,31 @@ async def main():
                         orig_chunk_list = copy.deepcopy(chunk_list)
 
                         for segment in trans_chunk_list.segments:
+                            segment_uri = ensure_segment_uri(segment.uri)
                             subtitle_name = (
-                                os.path.splitext(segment.uri)[0] + ".trans.vtt"
+                                os.path.splitext(segment_uri)[0] + ".trans.vtt"
                             )
                             segment.uri = subtitle_name
 
                         for segment in orig_chunk_list.segments:
+                            segment_uri = ensure_segment_uri(segment.uri)
                             subtitle_name = (
-                                os.path.splitext(segment.uri)[0] + ".orig.vtt"
+                                os.path.splitext(segment_uri)[0] + ".orig.vtt"
                             )
                             segment.uri = subtitle_name
 
-                        global SUB_LIST_TRANS_SER, SUB_LIST_ORIG_SER
-                        SUB_LIST_TRANS_SER = bytes(trans_chunk_list.dumps(), "ascii")
-                        SUB_LIST_ORIG_SER = bytes(orig_chunk_list.dumps(), "ascii")
+                        global sub_list_trans_ser, sub_list_orig_ser
+                        sub_list_trans_ser = bytes(trans_chunk_list.dumps(), "ascii")
+                        sub_list_orig_ser = bytes(orig_chunk_list.dumps(), "ascii")
                     else:
                         # Original single subtitle playlist logic
                         for segment in chunk_list.segments:
-                            subtitle_name = os.path.splitext(segment.uri)[0] + ".vtt"
+                            segment_uri = ensure_segment_uri(segment.uri)
+                            subtitle_name = os.path.splitext(segment_uri)[0] + ".vtt"
                             segment.uri = subtitle_name
 
-                        global SUB_LIST_SER
-                        SUB_LIST_SER = bytes(chunk_list.dumps(), "ascii")
+                        global sub_list_ser
+                        sub_list_ser = bytes(chunk_list.dumps(), "ascii")
 
                 translated_chunk_paths.update(chunks_to_translate)
 
@@ -1559,9 +1419,9 @@ async def main():
             http_thread.join(timeout=5)  # Wait for HTTP server to stop
 
     # Update filter file path if provided
-    global FILTER_FILE, VOCABULARY_FILE
-    FILTER_FILE = args.filter_file
-    VOCABULARY_FILE = args.vocabulary_file
+    global filter_file_path, vocabulary_file_path
+    filter_file_path = args.filter_file
+    vocabulary_file_path = args.vocabulary_file
     load_filter_dict()
 
 
