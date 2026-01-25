@@ -45,6 +45,8 @@ from typing import (
     cast,
 )
 
+from typing_extensions import Required
+
 if TYPE_CHECKING:
     from .ttml_utils import SubtitleCue
 
@@ -140,19 +142,20 @@ class ManifestProtocol(Protocol):
 class ManifestRecord(TypedDict, total=False):
     """TypedDict for manifest records."""
 
-    video_path: str
+    video_path: Required[str]
     ru_vtt: str
     en_vtt: str
     ttml: Optional[str]
     smil: str
-    status: str
-    processed_at: str
+    status: Required[str]
+    processed_at: Required[str]
     duration: float
     processing_time_sec: float
     error: str
     error_type: str
     phase: str
     worker_info: str
+    processing_mode: str
 
 
 # Register signal handler for graceful shutdown
@@ -388,9 +391,8 @@ class Manifest:
         with self.lock:
             with self.path.open("a", encoding="utf-8") as manifest_file:
                 manifest_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-            video_path = record.get("video_path")
-            if video_path is not None:
-                self.records[str(video_path)] = record
+            video_path = record["video_path"]
+            self.records[str(video_path)] = record
 
 
 class WhisperModelHolder(threading.local):

@@ -43,7 +43,7 @@ def parse_vtt_file(path: str) -> List[SubtitleCue]:
 
 
 def align_bilingual_cues(
-    cues_lang1: List[SubtitleCue], cues_lang2: List[SubtitleCue], tolerance: float = 1.0
+    cues_lang1: List[SubtitleCue], cues_lang2: List[SubtitleCue], tolerance: float = 2.5
 ) -> List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]:
     func = cast(
         Callable[
@@ -51,7 +51,7 @@ def align_bilingual_cues(
             List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]],
         ],
         _ttml_utils.align_bilingual_cues,  # type: ignore
-    )  # type: ignore
+    )
     return func(cues_lang1, cues_lang2, tolerance)
 
 

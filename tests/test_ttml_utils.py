@@ -498,7 +498,7 @@ How are you?
             [(cue_lang1, [cue_lang2])],
         )
 
-        with mock.patch("ttml_utils.parse_vtt_file") as mock_parse:
+        with mock.patch("src.python.tools.ttml_utils.parse_vtt_file") as mock_parse:
             ttml_content = vtt_files_to_ttml(
                 "ignored.ru.vtt",
                 "ignored.en.vtt",

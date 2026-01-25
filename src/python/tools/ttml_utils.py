@@ -46,7 +46,7 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
         filter_json_path (Optional[Path]): Optional path to a filter.json file. If omitted, standard locations are searched.
 
     Returns:
-        List[str]: The list of filter words; an empty list if no valid file is found or loading fails.
+        List[str]: The list of filter words (all lowercased for case-insensitive matching); an empty list if no valid file is found or loading fails.
     """
     global _filter_cache
 
@@ -83,7 +83,7 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
             if isinstance(raw_filter_words, list):
                 raw_filter_words = cast(List[object], raw_filter_words)
                 filter_words = [
-                    word for word in raw_filter_words if isinstance(word, str)
+                    word.lower() for word in raw_filter_words if isinstance(word, str)
                 ]
             else:
                 filter_words = []
@@ -111,7 +111,7 @@ def should_filter_cue(text: str, filter_words: List[str]) -> bool:
     text_lower = text.lower()
     for word in filter_words:
         # Check if the word appears in the text (case-insensitive)
-        if word.lower() in text_lower:
+        if word in text_lower:
             return True
 
     return False

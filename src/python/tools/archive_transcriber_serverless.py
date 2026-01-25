@@ -41,9 +41,6 @@ except ImportError:
     tqdm = None
 
 
-ManifestRecord = Dict[str, Any]
-
-
 class VideoJobProtocol(Protocol):
     """Protocol for video job objects."""
 
@@ -76,12 +73,14 @@ if TYPE_CHECKING:
     from .archive_transcriber import (
         Manifest as ManifestType,
         ManifestProtocol as ManifestProtocolType,
+        ManifestRecord as ManifestRecordType,
         VideoJob as VideoJobType,
         VideoMetadata as VideoMetadataType,
     )
 else:  # pragma: no cover - runtime aliases for typing
     ManifestType = Any  # type: ignore[assignment]
     ManifestProtocolType = Any  # type: ignore[assignment]
+    ManifestRecordType = Any  # type: ignore[assignment]
     VideoJobType = Any  # type: ignore[assignment]
     VideoMetadataType = Any  # type: ignore[assignment]
 
@@ -95,6 +94,7 @@ ManifestProtocol = cast(
     type[ManifestProtocolType], _archive_transcriber.ManifestProtocol
 )
 Manifest = cast(type[ManifestType], _archive_transcriber.Manifest)
+ManifestRecord = cast(type[ManifestRecordType], _archive_transcriber.ManifestRecord)
 probe_video_metadata: Callable[[Path], VideoMetadataProtocol] = cast(
     Callable[[Path], VideoMetadataProtocol], _archive_transcriber.probe_video_metadata
 )
@@ -385,7 +385,7 @@ def process_job_serverless(
     job: VideoJobProtocol,
     args: argparse.Namespace,
     manifest: ManifestProtocolType,
-) -> ManifestRecord:
+) -> ManifestRecordType:
     """
     Process a single VideoJob using RunPod Serverless API.
 
@@ -530,7 +530,7 @@ def process_job_serverless(
             args,
         )
 
-        record: ManifestRecord = {
+        record: ManifestRecordType = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -542,12 +542,12 @@ def process_job_serverless(
             "processing_time_sec": round(time.time() - start_time, 2),
             "processing_mode": "serverless",
         }
-        manifest.append(record)  # type: ignore
+        manifest.append(record)
         return record
 
     except Exception as exc:
         LOGGER.error("Failed to process %s: %s", job.video_path, exc)
-        record_error: ManifestRecord = {
+        record_error: ManifestRecordType = {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "en_vtt": str(job.en_vtt),
@@ -558,7 +558,7 @@ def process_job_serverless(
             "processed_at": human_time(),
             "processing_mode": "serverless",
         }
-        manifest.append(record_error)  # type: ignore
+        manifest.append(record_error)
         return record_error
 
     finally:

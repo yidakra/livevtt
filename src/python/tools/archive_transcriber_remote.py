@@ -10,6 +10,8 @@ import requests
 import sys
 import argparse
 from pathlib import Path
+import urllib3.util.retry
+from requests.adapters import HTTPAdapter
 
 # Import everything from the original archive_transcriber
 from .archive_transcriber import (
@@ -87,24 +89,36 @@ def process_job_remote(
 
             # Step 2: Send to remote GPU server
             LOGGER.debug("Sending audio to remote GPU: %s", remote_url)
-            with open(audio_path, "rb") as audio_file:
-                files = {"audio": audio_file}
-                data: _RemoteRequestData = {
-                    "model_name": args.model,
-                    "translation_model": args.translation_model or args.model,
-                    "source_language": args.source_language,
-                    "beam_size": args.beam_size,
-                    "compute_type": args.compute_type,
-                    "vad_filter": str(args.vad_filter).lower(),
-                }
+            
+            # Create session with retry logic for transient failures
+            retry_strategy = urllib3.util.retry.Retry(
+                total=3,  # Total number of retries
+                backoff_factor=1,  # Exponential backoff: 1, 2, 4 seconds
+                status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes to retry on
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            with requests.Session() as session:
+                session.mount("http://", adapter)
+                session.mount("https://", adapter)
+                
+                with open(audio_path, "rb") as audio_file:
+                    files = {"audio": audio_file}
+                    data: _RemoteRequestData = {
+                        "model_name": args.model,
+                        "translation_model": args.translation_model or args.model,
+                        "source_language": args.source_language,
+                        "beam_size": args.beam_size,
+                        "compute_type": args.compute_type,
+                        "vad_filter": str(args.vad_filter).lower(),
+                    }
 
-                response = requests.post(
-                    f"{remote_url}/transcribe",
-                    files=files,
-                    data=data,
-                    timeout=600,  # 10 minute timeout
-                )
-                response.raise_for_status()
+                    response = session.post(
+                        f"{remote_url}/transcribe",
+                        files=files,
+                        data=data,
+                        timeout=600,  # 10 minute timeout
+                    )
+                    response.raise_for_status()
 
             # Step 3: Parse response
             result = cast(Dict[str, Any], response.json())
@@ -119,8 +133,11 @@ def process_job_remote(
                 or not isinstance(ru_vtt_data, str)
                 or not ru_vtt_data.strip()
             ):
+                safe_preview = result.get("ru_vtt") or result.get("en_vtt") or repr(result)
+                preview_text = str(safe_preview)[:500]
                 raise RuntimeError(
-                    f"Remote transcription response missing or invalid 'ru_vtt' field. Status: {result.get('status')}, Response: {result}"
+                    "Remote transcription response missing or invalid 'ru_vtt' field. "
+                    f"Status: {result.get('status')}, ResponsePreview: {preview_text}"
                 )
             ru_content = ru_vtt_data
 
@@ -130,8 +147,11 @@ def process_job_remote(
                 or not isinstance(en_vtt_data, str)
                 or not en_vtt_data.strip()
             ):
+                safe_preview = result.get("en_vtt") or result.get("ru_vtt") or repr(result)
+                preview_text = str(safe_preview)[:500]
                 raise RuntimeError(
-                    f"Remote transcription response missing or invalid 'en_vtt' field. Status: {result.get('status')}, Response: {result}"
+                    "Remote transcription response missing or invalid 'en_vtt' field. "
+                    f"Status: {result.get('status')}, ResponsePreview: {preview_text}"
                 )
             en_content = en_vtt_data
 
@@ -203,19 +223,19 @@ def process_job_remote(
             "processed_at": human_time(),
             "processing_time_sec": round(time.time() - start_time, 2),
         }
-        manifest.append(record)  # type: ignore
+        manifest.append(record)
         return record
 
     except Exception as exc:
         LOGGER.error("Failed to process %s: %s", job.video_path, exc)
-        record: ManifestRecord = {  # type: ignore
+        error_record: ManifestRecord = {  # type: ignore
             "video_path": str(job.video_path),
             "status": "error",
             "error": str(exc),
             "processed_at": human_time(),
         }
-        manifest.append(record)  # type: ignore
-        return record
+        manifest.append(error_record)
+        return error_record
 
     finally:
         if audio_path and Path(audio_path).exists():

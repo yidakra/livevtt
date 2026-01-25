@@ -343,7 +343,8 @@ class TestAtomicWrite:
     def test_atomic_write_creates_file(self):
         """Test that atomic_write creates the file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            target = Path(tmpdir) / "test.txt"
+            tmpdir_path = Path(tmpdir)
+            target = tmpdir_path / "test.txt"
             content = "Test content\nLine 2"
 
             atomic_write(target, content)
@@ -355,7 +356,8 @@ class TestAtomicWrite:
     def test_atomic_write_overwrites(self):
         """Test that atomic_write can overwrite existing files."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            target = Path(tmpdir) / "test.txt"
+            tmpdir_path = Path(tmpdir)
+            target = tmpdir_path / "test.txt"
             target.write_text("Old content")
 
             new_content = "New content"
@@ -367,7 +369,8 @@ class TestAtomicWrite:
     def test_atomic_write_utf8(self):
         """Test atomic_write with UTF-8 content."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            target = Path(tmpdir) / "test.txt"
+            tmpdir_path = Path(tmpdir)
+            target = tmpdir_path / "test.txt"
             content = "Привет, мир! 你好世界"
 
             atomic_write(target, content)

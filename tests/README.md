@@ -164,6 +164,10 @@ class TestNewFeature:
         assert result == "expected"
         print("✓ test_basic_case passed")
 
+### Alternative: Standalone Function Pattern
+
+For simple test cases without shared setup, use standalone functions like `test_new_feature_basic_case` instead of classes. Prefer classes when tests share fixtures or have complex setup; use functions for isolated, stateless tests.
+
 ```python
 def test_new_feature_basic_case():
     """Test basic functionality."""

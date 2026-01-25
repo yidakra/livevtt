@@ -19,14 +19,14 @@ app: Flask = Flask(__name__)  # type: ignore
 
 # Pre-load models to avoid loading on each request
 MODELS: dict[str, WhisperModel] = {}
-SUPPORTED_MODELS: dict[str, str] = {
-    "large-v3-turbo": "large-v3-turbo",
-    "large-v3": "large-v3",
-    "large": "large",
-    "medium": "medium",
-    "small": "small",
-    "base": "base",
-    "tiny": "tiny",
+SUPPORTED_MODELS: set[str] = {
+    "large-v3-turbo",
+    "large-v3",
+    "large",
+    "medium",
+    "small",
+    "base",
+    "tiny",
 }
 MIN_BEAM_SIZE = 1
 MAX_BEAM_SIZE = 10
@@ -84,7 +84,10 @@ def transcribe(_endpoint_id: str) -> Any:
 
         # Extract parameters
         audio_b64 = cast(Optional[str], input_data.get("audio_base_64"))
-        model_name_raw = cast(str, input_data.get("model", "large-v3-turbo"))
+        model_raw = input_data.get("model", "large-v3-turbo")
+        if not isinstance(model_raw, str):
+            return jsonify({"error": "Invalid model type, expected string"}), 400
+        model_name_raw = model_raw
         translate = bool(input_data.get("translate", False))
         language = cast(str, input_data.get("language", "auto"))
         try:
@@ -96,13 +99,13 @@ def transcribe(_endpoint_id: str) -> Any:
             return jsonify({"error": "No audio_base_64 provided"}), 400
 
         model_name_key = model_name_raw.strip().lower()
-        model_name = SUPPORTED_MODELS.get(model_name_key)
+        model_name = model_name_key if model_name_key in SUPPORTED_MODELS else None
         if model_name is None:
             return (
                 jsonify(
                     {
                         "error": "Unsupported model",
-                        "supported_models": sorted(SUPPORTED_MODELS.keys()),
+                        "supported_models": sorted(SUPPORTED_MODELS),
                     }
                 ),
                 400,
@@ -111,7 +114,7 @@ def transcribe(_endpoint_id: str) -> Any:
         # Decode audio from base64
         try:
             audio_data = base64.b64decode(audio_b64)
-        except binascii.Error:
+        except (binascii.Error, TypeError):
             return jsonify({"error": "invalid base64 audio payload"}), 400
 
         # Write to temporary file
