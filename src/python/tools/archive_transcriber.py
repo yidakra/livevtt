@@ -86,19 +86,27 @@ def should_filter_cue(text: str, filter_words: List[str]) -> bool:
     return func(text, filter_words)
 
 
-# Global flag for graceful shutdown
+# Global flags for graceful shutdown and pause
 shutdown_requested = False
+pause_requested = False
 
 
 def signal_handler(signum: int, frame: Optional[FrameType]) -> None:
-    """Handle SIGINT (Ctrl+C) gracefully."""
-    global shutdown_requested
-    if not shutdown_requested:
-        shutdown_requested = True
-        LOGGER.warning("Shutdown requested. Finishing current jobs...")
-    else:
-        LOGGER.warning("Force shutdown requested. Exiting immediately...")
-        sys.exit(130)
+    """Handle SIGINT (Ctrl+C) and SIGUSR1 (pause toggle) gracefully."""
+    global shutdown_requested, pause_requested
+    if signum == signal.SIGINT:
+        if not shutdown_requested:
+            shutdown_requested = True
+            LOGGER.warning("Shutdown requested. Finishing current jobs...")
+        else:
+            LOGGER.warning("Force shutdown requested. Exiting immediately...")
+            sys.exit(130)
+    elif signum == signal.SIGUSR1:
+        pause_requested = not pause_requested
+        if pause_requested:
+            LOGGER.info("Processing paused. Send SIGUSR1 again to resume.")
+        else:
+            LOGGER.info("Processing resumed.")
 
 
 try:  # Optional progress feedback
@@ -158,8 +166,9 @@ class ManifestRecord(TypedDict, total=False):
     processing_mode: str
 
 
-# Register signal handler for graceful shutdown
+# Register signal handlers for graceful shutdown and pause
 signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGUSR1, signal_handler)
 
 # ISO 639-1 (2-letter) to ISO 639-2 (3-letter) language code mapping for TTML
 LANG_CODE_2_TO_3 = {
@@ -1905,6 +1914,9 @@ def run(argv: Optional[List[str]] = None) -> int:
                 ]
                 try:
                     for future in as_completed(futures):
+                        if pause_requested:
+                            time.sleep(1)
+                            continue
                         record = future.result()
                         if record.get("status") == "success":
                             successes += 1
@@ -1933,6 +1945,10 @@ def run(argv: Optional[List[str]] = None) -> int:
                         "Shutdown requested during sequential processing. Stopping..."
                     )
                     break
+                if pause_requested:
+                    LOGGER.info("Paused. Waiting...")
+                    time.sleep(1)
+                    continue
                 record = process_job(job, args, manifest)
                 if record.get("status") == "success":
                     successes += 1
