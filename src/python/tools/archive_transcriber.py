@@ -518,7 +518,7 @@ def get_model(
 
     def instantiate(
         target_device: str, target_device_index: int, target_compute_type: str
-    ) -> WhisperModel:
+    ) -> Any:
         LOGGER.info(
             "Loading Whisper model %s (device=%s, device_index=%d, compute_type=%s)...",
             name,

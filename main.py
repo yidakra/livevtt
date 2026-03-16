@@ -960,7 +960,7 @@ async def main():
         "-l",
         "--bind-address",
         type=str,
-        help="The IP address to bind to " "(defaults to 127.0.0.1)",
+        help="The IP address to bind to (defaults to 127.0.0.1)",
         default="127.0.0.1",
     )
     parser.add_argument(
@@ -974,7 +974,7 @@ async def main():
         "-pl",
         "--public-address",
         type=str,
-        help="The public IP address to use in URLs " "(defaults to bind-address)",
+        help="The public IP address to use in URLs (defaults to bind-address)",
         default=None,
     )
     parser.add_argument(
@@ -1016,14 +1016,13 @@ async def main():
         "-la",
         "--language",
         type=str,
-        help="The original language of the stream, "
-        "if known/not multi-lingual. Can be left unset.",
+        help="The original language of the stream, if known/not multi-lingual. Can be left unset.",
     )
     parser.add_argument(
         "-ua",
         "--user-agent",
         type=str,
-        help="User agent to use to retrieve playlists / " "stream chunks.",
+        help="User agent to use to retrieve playlists / stream chunks.",
         default="VLC/3.0.18 LibVLC/3.0.18",
     )
     parser.add_argument(
