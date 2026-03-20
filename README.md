@@ -10,9 +10,7 @@ Subtitle generation tools for live and archived streams. LiveVTT focuses on prod
 
 ### Install dependencies
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### Transcribe archived media
