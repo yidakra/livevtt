@@ -82,9 +82,7 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
             raw_filter_words = data.get("filter_words", [])
             if isinstance(raw_filter_words, list):
                 raw_filter_words = cast(List[object], raw_filter_words)
-                filter_words = [
-                    word.lower() for word in raw_filter_words if isinstance(word, str)
-                ]
+                filter_words = [word.lower() for word in raw_filter_words if isinstance(word, str)]
             else:
                 filter_words = []
             _filter_cache = (resolved_path, filter_words)
@@ -413,9 +411,7 @@ def aligned_cues_to_ttml(
         str: A TTML XML document as a string, including an XML declaration.
     """
 
-    tt = create_ttml_document(
-        aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words
-    )
+    tt = create_ttml_document(aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words)
 
     if hasattr(ET, "indent"):
         ET.indent(tt, space="  ")
@@ -431,9 +427,7 @@ def cues_to_ttml(
     lang2: str = "eng",
     *,
     tolerance: float = 2.5,
-    aligned_cues: Optional[
-        List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]
-    ] = None,
+    aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
     filter_words: Optional[List[str]] = None,
 ) -> str:
     """
@@ -457,9 +451,7 @@ def cues_to_ttml(
     if aligned_cues is None:
         aligned_cues = align_bilingual_cues(cues_lang1, cues_lang2, tolerance=tolerance)
 
-    return aligned_cues_to_ttml(
-        aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words
-    )
+    return aligned_cues_to_ttml(aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words)
 
 
 def segments_to_ttml(
@@ -517,9 +509,7 @@ def vtt_files_to_ttml(
     tolerance: float = 2.5,
     cues_lang1: Optional[List[SubtitleCue]] = None,
     cues_lang2: Optional[List[SubtitleCue]] = None,
-    aligned_cues: Optional[
-        List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]
-    ] = None,
+    aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
     filter_words: Optional[List[str]] = None,
 ) -> str:
     """
@@ -541,9 +531,7 @@ def vtt_files_to_ttml(
     """
 
     if aligned_cues is not None:
-        return aligned_cues_to_ttml(
-            aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words
-        )
+        return aligned_cues_to_ttml(aligned_cues, lang1=lang1, lang2=lang2, filter_words=filter_words)
 
     if cues_lang1 is None:
         cues_lang1 = parse_vtt_file(str(vtt_path_lang1))

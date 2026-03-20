@@ -24,22 +24,14 @@ archive_transcriber = importlib.import_module("archive_transcriber")
 
 
 segments_to_webvtt: Callable[..., str] = archive_transcriber.segments_to_webvtt
-extract_resolution: Callable[[str], Optional[int]] = (
-    archive_transcriber.extract_resolution
+extract_resolution: Callable[[str], Optional[int]] = archive_transcriber.extract_resolution
+normalise_variant_name: Callable[[Path], str] = archive_transcriber.normalise_variant_name
+select_best_variant: Callable[[list[Path]], Optional[Path]] = archive_transcriber.select_best_variant
+build_output_artifacts: Callable[[Path, str, Path, Optional[Path]], tuple[Path, Path, Path, Path]] = (
+    archive_transcriber.build_output_artifacts
 )
-normalise_variant_name: Callable[[Path], str] = (
-    archive_transcriber.normalise_variant_name
-)
-select_best_variant: Callable[[list[Path]], Optional[Path]] = (
-    archive_transcriber.select_best_variant
-)
-build_output_artifacts: Callable[
-    [Path, str, Path, Optional[Path]], tuple[Path, Path, Path, Path]
-] = archive_transcriber.build_output_artifacts
 atomic_write: Callable[[Path, str], None] = archive_transcriber.atomic_write
-translation_output_suspect: Callable[..., bool] = (
-    archive_transcriber.translation_output_suspect
-)
+translation_output_suspect: Callable[..., bool] = archive_transcriber.translation_output_suspect
 
 Manifest = archive_transcriber.Manifest  # type: ignore[assignment]
 VideoJob = archive_transcriber.VideoJob  # type: ignore[assignment]
@@ -143,9 +135,7 @@ class TestTranslationOutputSuspect:
         ]
 
         # Act
-        result = translation_output_suspect(
-            source_segments, translated_segments, "english"
-        )
+        result = translation_output_suspect(source_segments, translated_segments, "english")
 
         # Assert
         assert result is True
@@ -160,9 +150,7 @@ class TestTranslationOutputSuspect:
         ]
 
         # Act
-        result = translation_output_suspect(
-            source_segments, translated_segments, "en-US"
-        )
+        result = translation_output_suspect(source_segments, translated_segments, "en-US")
 
         # Assert
         assert result is True
@@ -311,9 +299,7 @@ class TestBuildOutputArtifacts:
         video_path = Path("/archive/2024/01/video_1080p.ts")
         input_root = Path("/archive")
 
-        ru_vtt, en_vtt, ttml, smil = build_output_artifacts(
-            video_path, "video.ts", input_root, None
-        )
+        ru_vtt, en_vtt, ttml, smil = build_output_artifacts(video_path, "video.ts", input_root, None)
 
         assert ru_vtt.name == "video.ru.vtt"
         assert en_vtt.name == "video.en.vtt"
@@ -333,9 +319,7 @@ class TestBuildOutputArtifacts:
             video_path.parent.mkdir()
             video_path.write_text("test")
 
-            ru_vtt, _en_vtt, _ttml, _smil = build_output_artifacts(
-                video_path, "video.ts", input_root, output_root
-            )
+            ru_vtt, _en_vtt, _ttml, _smil = build_output_artifacts(video_path, "video.ts", input_root, output_root)
 
             # Should mirror directory structure
             assert output_root in ru_vtt.parents

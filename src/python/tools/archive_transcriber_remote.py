@@ -6,35 +6,34 @@ Extracts audio locally, sends to remote Whisper API on cloud GPU,
 receives VTT results, and manages SMIL/TTML generation locally.
 """
 
-import requests
-import sys
 import argparse
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any, Dict, Optional, TypedDict, cast
+
+import requests
 import urllib3.util.retry
 from requests.adapters import HTTPAdapter
 
 # Import everything from the original archive_transcriber
 from .archive_transcriber import (
-    configure_logging,
+    LANG_CODE_2_TO_3,
+    LOGGER,
     Manifest,
     ManifestProtocol,
     ManifestRecord,
+    VideoJob,
+    atomic_write,
+    configure_logging,
     discover_video_jobs,
     extract_audio,
-    atomic_write,
-    write_smil,
-    probe_video_metadata,
-    LANG_CODE_2_TO_3,
     human_time,
-    VideoJob,
-    LOGGER,
+    probe_video_metadata,
+    write_smil,
 )
-
-from .ttml_utils import cues_to_ttml, parse_vtt_content, load_filter_words
-
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, Optional, TypedDict, cast
+from .ttml_utils import cues_to_ttml, load_filter_words, parse_vtt_content
 
 try:
     from tqdm import tqdm
@@ -75,9 +74,7 @@ def process_job_remote(
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
 
-    need_transcription = not args.smil_only and (
-        args.force or not (job.ru_vtt.exists() and job.en_vtt.exists())
-    )
+    need_transcription = not args.smil_only and (args.force or not (job.ru_vtt.exists() and job.en_vtt.exists()))
 
     audio_path: Optional[Path] = None
 
@@ -130,19 +127,11 @@ def process_job_remote(
             # Step 3: Parse response
             result = cast(Dict[str, Any], response.json())
             if result.get("status") != "success":
-                raise RuntimeError(
-                    f"Remote transcription failed: {result.get('error')}"
-                )
+                raise RuntimeError(f"Remote transcription failed: {result.get('error')}")
 
             ru_vtt_data = result.get("ru_vtt")
-            if (
-                not ru_vtt_data
-                or not isinstance(ru_vtt_data, str)
-                or not ru_vtt_data.strip()
-            ):
-                safe_preview = (
-                    result.get("en_vtt") or result.get("ru_vtt") or repr(result)
-                )
+            if not ru_vtt_data or not isinstance(ru_vtt_data, str) or not ru_vtt_data.strip():
+                safe_preview = result.get("en_vtt") or result.get("ru_vtt") or repr(result)
                 preview_text = str(safe_preview)[:500]
                 raise RuntimeError(
                     "Remote transcription response missing or invalid 'ru_vtt' field. "
@@ -151,14 +140,8 @@ def process_job_remote(
             ru_content = ru_vtt_data
 
             en_vtt_data = result.get("en_vtt")
-            if (
-                not en_vtt_data
-                or not isinstance(en_vtt_data, str)
-                or not en_vtt_data.strip()
-            ):
-                safe_preview = (
-                    result.get("ru_vtt") or result.get("en_vtt") or repr(result)
-                )
+            if not en_vtt_data or not isinstance(en_vtt_data, str) or not en_vtt_data.strip():
+                safe_preview = result.get("ru_vtt") or result.get("en_vtt") or repr(result)
                 preview_text = str(safe_preview)[:500]
                 raise RuntimeError(
                     "Remote transcription response missing or invalid 'en_vtt' field. "
@@ -190,9 +173,7 @@ def process_job_remote(
                 )
                 ttml_lang2 = cast(
                     str,
-                    LANG_CODE_2_TO_3.get(
-                        args.translation_language, args.translation_language
-                    ),
+                    LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language),
                 )
                 ttml_content = cues_to_ttml(
                     ru_cues,
@@ -216,9 +197,7 @@ def process_job_remote(
                     "error": "Missing caption files for SMIL-only run",
                     "processed_at": human_time(),
                 }
-            LOGGER.info(
-                "VTT already present for %s; generating SMIL only.", job.video_path
-            )
+            LOGGER.info("VTT already present for %s; generating SMIL only.", job.video_path)
 
         # Step 6: Generate SMIL locally
         write_smil(job, metadata, args)
@@ -279,9 +258,7 @@ def main():
         type=Path,
     )
     parser.add_argument("--output-root", type=Path)
-    parser.add_argument(
-        "--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl")
-    )
+    parser.add_argument("--manifest", type=Path, default=Path("logs/archive_transcriber_manifest.jsonl"))
     parser.add_argument("--model", type=str, default="large-v3-turbo")
     parser.add_argument("--compute-type", type=str, default="float16")
     parser.add_argument("--source-language", type=str, default="ru")
@@ -294,9 +271,7 @@ def main():
         type=lambda x: str(x).lower() in {"1", "true", "yes"},
         default=False,
     )
-    parser.add_argument(
-        "--extensions", type=str, default=".ts,.mp4,.mkv,.mov,.m4v,.flv"
-    )
+    parser.add_argument("--extensions", type=str, default=".ts,.mp4,.mkv,.mov,.m4v,.flv")
     parser.add_argument(
         "--workers",
         type=int,
@@ -337,11 +312,7 @@ def main():
         return 2
 
     manifest: ManifestProtocol = ManifestCtor(args.manifest.resolve())  # type: ignore
-    extensions = [
-        ext if ext.startswith(".") else f".{ext}"
-        for ext in args.extensions.split(",")
-        if ext
-    ]
+    extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
 
     jobs = discover_video_jobs(
         input_root,
@@ -368,17 +339,12 @@ def main():
 
     progress_bar = None
     if args.progress and tqdm:
-        progress_bar = tqdm(
-            total=len(jobs), desc="Transcribing (remote GPU)", unit="video"
-        )
+        progress_bar = tqdm(total=len(jobs), desc="Transcribing (remote GPU)", unit="video")
 
     try:
         if args.workers > 1:
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
-                futures = [
-                    executor.submit(process_job_remote, job, args, manifest, remote_url)
-                    for job in jobs
-                ]
+                futures = [executor.submit(process_job_remote, job, args, manifest, remote_url) for job in jobs]
                 for future in as_completed(futures):
                     record = future.result()
                     if record.get("status") == "success":

@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, cast
 
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
 try:
@@ -44,9 +44,7 @@ def get_model(
     return models[key]
 
 
-def segments_to_vtt(
-    segments: Iterable[SegmentLike], prepend_header: bool = True
-) -> str:
+def segments_to_vtt(segments: Iterable[SegmentLike], prepend_header: bool = True) -> str:
     """Convert segments to WebVTT format."""
 
     def format_timestamp(seconds: float) -> str:
@@ -131,9 +129,7 @@ async def transcribe(
         # Cleanup
         Path(tmp_path).unlink()
 
-        duration = max(
-            ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0
-        )
+        duration = max(ru_info.duration if ru_info else 0.0, en_info.duration if en_info else 0.0)
 
         return JSONResponse(
             {

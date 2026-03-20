@@ -11,9 +11,8 @@ import os
 import tempfile
 from typing import Any, Iterable, Optional, Protocol, cast
 
-from flask import Flask, jsonify, request  # type: ignore
 from faster_whisper import WhisperModel  # type: ignore
-
+from flask import Flask, jsonify, request  # type: ignore
 
 app: Flask = Flask(__name__)  # type: ignore
 
@@ -46,9 +45,7 @@ def get_model(model_name: str = "large-v3-turbo") -> WhisperModel:
     """Get or load a Whisper model"""
     if model_name not in MODELS:
         print(f"Loading model: {model_name}", flush=True)
-        MODELS[model_name] = WhisperModel(
-            model_name, device="cuda", compute_type="float16"
-        )
+        MODELS[model_name] = WhisperModel(model_name, device="cuda", compute_type="float16")
         print(f"Model loaded: {model_name}", flush=True)
     return MODELS[model_name]
 
@@ -59,9 +56,7 @@ def parse_beam_size(value: Any) -> int:
     except (TypeError, ValueError) as exc:
         raise ValueError("beam_size must be an integer") from exc
     if beam_size < MIN_BEAM_SIZE or beam_size > MAX_BEAM_SIZE:
-        raise ValueError(
-            f"beam_size must be between {MIN_BEAM_SIZE} and {MAX_BEAM_SIZE}"
-        )
+        raise ValueError(f"beam_size must be between {MIN_BEAM_SIZE} and {MAX_BEAM_SIZE}")
     return beam_size
 
 

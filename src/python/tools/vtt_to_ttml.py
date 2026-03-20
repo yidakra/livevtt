@@ -62,9 +62,7 @@ def vtt_files_to_ttml(
     lang1: str = "ru",
     lang2: str = "en",
     tolerance: float = 1.0,
-    aligned_cues: Optional[
-        List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]
-    ] = None,
+    aligned_cues: Optional[List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]]] = None,
     filter_words: Optional[List[str]] = None,
 ) -> str:
     func = cast(Callable[..., str], _ttml_utils.vtt_files_to_ttml)  # type: ignore
@@ -166,8 +164,8 @@ def convert_vtt_to_ttml(
 
         # Align cues
         LOGGER.info("Aligning cues with tolerance of %.1f seconds", tolerance)
-        aligned: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = (
-            align_bilingual_cues(cues_lang1, cues_lang2, tolerance=tolerance)
+        aligned: List[Tuple[Optional[SubtitleCue], List[SubtitleCue]]] = align_bilingual_cues(
+            cues_lang1, cues_lang2, tolerance=tolerance
         )
 
         # Validate alignment
@@ -178,9 +176,7 @@ def convert_vtt_to_ttml(
                 unaligned_count,
                 len(aligned),
             )
-            LOGGER.warning(
-                "Consider adjusting --tolerance if too many cues are unaligned"
-            )
+            LOGGER.warning("Consider adjusting --tolerance if too many cues are unaligned")
 
         # Generate TTML without re-parsing or re-aligning the cues
         LOGGER.info("Generating TTML file")

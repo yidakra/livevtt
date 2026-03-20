@@ -18,9 +18,9 @@ SubtitleCue = ttml_utils.SubtitleCue
 format_ttml_timestamp: Callable[[float], str] = ttml_utils.format_ttml_timestamp
 parse_vtt_timestamp: Callable[[str], float] = ttml_utils.parse_vtt_timestamp
 parse_vtt_file: Callable[[str], List[Any]] = ttml_utils.parse_vtt_file
-align_bilingual_cues: Callable[
-    [List[Any], List[Any], float], List[Tuple[Optional[Any], List[Any]]]
-] = ttml_utils.align_bilingual_cues
+align_bilingual_cues: Callable[[List[Any], List[Any], float], List[Tuple[Optional[Any], List[Any]]]] = (
+    ttml_utils.align_bilingual_cues
+)
 vtt_files_to_ttml: Callable[..., str] = ttml_utils.vtt_files_to_ttml
 
 
@@ -53,9 +53,7 @@ Second subtitle
 """
     vtt_path: Optional[str] = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".vtt", delete=False, encoding="utf-8"
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vtt", delete=False, encoding="utf-8") as f:
             f.write(vtt_content)
             vtt_path = f.name
 
@@ -80,9 +78,7 @@ def test_align_cues():
         SubtitleCue(start=10.0, end=12.0, text="World"),
     ]
 
-    aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(
-        cues_lang1, cues_lang2, 1.0
-    )
+    aligned: List[Tuple[Optional[Any], List[Any]]] = align_bilingual_cues(cues_lang1, cues_lang2, 1.0)
     assert len(aligned) == 2
     assert aligned[0][0] is not None
     assert aligned[0][0].text == "Привет"
@@ -110,21 +106,15 @@ Hello, world!
     vtt_ru_path: Optional[str] = None
     vtt_en_path: Optional[str] = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8"
-        ) as f_ru:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8") as f_ru:
             f_ru.write(vtt_ru_content)
             vtt_ru_path = f_ru.name
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".en.vtt", delete=False, encoding="utf-8"
-        ) as f_en:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".en.vtt", delete=False, encoding="utf-8") as f_en:
             f_en.write(vtt_en_content)
             vtt_en_path = f_en.name
 
-        ttml_content = vtt_files_to_ttml(
-            vtt_ru_path, vtt_en_path, lang1="ru", lang2="en"
-        )
+        ttml_content = vtt_files_to_ttml(vtt_ru_path, vtt_en_path, lang1="ru", lang2="en")
 
         # Validate XML structure
         assert '<?xml version="1.0" encoding="UTF-8"?>' in ttml_content
