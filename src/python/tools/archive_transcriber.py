@@ -1771,8 +1771,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--trim-silence",
-        action="store_true",
-        help="Trim silence from beginning of VTT files (experimental)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Trim silence from beginning of VTT files (experimental, default: enabled)",
     )
     parser.add_argument(
         "--extensions",
