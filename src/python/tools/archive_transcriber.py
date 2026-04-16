@@ -624,7 +624,7 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
         audio_stream.get("codec_tag_string") or audio_stream.get("codec_name"),
     )
     bitrate = _get_int(video_stream.get("bit_rate"))
-    if bitrate is None:
+    if bitrate in (None, 0):
         bitrate = _get_int(format_data.get("bit_rate"))
 
     return VideoMetadata(
