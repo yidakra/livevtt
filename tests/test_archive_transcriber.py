@@ -12,8 +12,11 @@ from unittest import mock
 
 # Mock faster_whisper before importing archive_transcriber
 sys.modules["faster_whisper"] = mock.MagicMock()
-# typing_extensions.Required is in typing on Python 3.11+
-sys.modules.setdefault("typing_extensions", _typing)  # type: ignore[assignment]
+# On 3.11+, typing.Required exists; alias typing_extensions to typing to avoid
+# requiring the package in test-only environments. On 3.10, rely on the real
+# typing_extensions package that comes from transitive dependencies.
+if sys.version_info >= (3, 11):
+    sys.modules.setdefault("typing_extensions", _typing)  # type: ignore[assignment]
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
