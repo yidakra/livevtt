@@ -17,7 +17,7 @@
 - Poetry with `pyproject.toml` (`[tool.poetry]` sections), `poetry.lock`, `poetry.toml`
 - `requirements.txt` and `h100_requirements.txt` as pip fallbacks
 - Dockerfile uses `pip install -r requirements.txt`
-- No CI/CD workflows to update
+- CI/CD: GitHub Actions workflow (.github/workflows/ci.yml) runs linting, type-checking, and tests on push/PR
 - Dev tools: black (configured), isort (configured), flake8 (installed, no config), ruff (installed, no config), mypy (configured)
 
 ---
