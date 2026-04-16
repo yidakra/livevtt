@@ -784,11 +784,7 @@ async def transcribe_chunk(
         # Original hard subs logic with filtering
         async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix=".srt") as srt_file:
             segments_to_use = segments if not args.both_tracks else segments_trans
-            filtered_segments_to_use = [
-                segment for segment in segments_to_use if not should_filter_segment(segment.text)
-            ]
-
-            srt_content = segments_to_srt(filtered_segments_to_use, start_ts)
+            srt_content = segments_to_srt(segments_to_use, start_ts)
             if not srt_content:
                 return segment_uri, chunk_name
 
