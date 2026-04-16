@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Tests for subtitle_autogen.py background service."""
 
+import argparse
 import sys
 from pathlib import Path
 from unittest import mock
-import argparse
 
 # Mock archive_transcriber before import
 sys.modules["src.python.tools.archive_transcriber"] = mock.MagicMock()
@@ -150,9 +150,7 @@ class TestRunCycle:
         mock_transcriber = mock.MagicMock()
         mock_transcriber.run.return_value = 0
 
-        with mock.patch(
-            "src.python.services.subtitle_autogen.archive_transcriber", mock_transcriber
-        ):
+        with mock.patch("src.python.services.subtitle_autogen.archive_transcriber", mock_transcriber):
             result = subtitle_autogen.run_cycle(["--help"])
             assert result == 0
             mock_transcriber.run.assert_called_once()
@@ -163,9 +161,7 @@ class TestRunCycle:
         mock_transcriber = mock.MagicMock()
         mock_transcriber.run.return_value = 1
 
-        with mock.patch(
-            "src.python.services.subtitle_autogen.archive_transcriber", mock_transcriber
-        ):
+        with mock.patch("src.python.services.subtitle_autogen.archive_transcriber", mock_transcriber):
             result = subtitle_autogen.run_cycle(["--help"])
             assert result == 1
             mock_transcriber.run.assert_called_once()
@@ -194,7 +190,9 @@ def run_all_tests():
     """
     Execute the module's test suite across the predefined test classes and report results.
 
-    Discovers and runs test methods whose names start with "test_" on each test class, prints per-test progress and failure tracebacks, and prints a summary of passed/failed counts.
+    Discovers and runs test methods whose names start with "test_" on each
+    test class, prints per-test progress and failure tracebacks, and prints a
+    summary of passed/failed counts.
 
     Returns:
         bool: `True` if all tests passed, `False` otherwise.
@@ -213,9 +211,7 @@ def run_all_tests():
         print(f"\n{test_class.__name__}:")
         print("-" * 60)
 
-        test_methods = [
-            method for method in dir(test_class) if method.startswith("test_")
-        ]
+        test_methods = [method for method in dir(test_class) if method.startswith("test_")]
 
         for method_name in test_methods:
             try:

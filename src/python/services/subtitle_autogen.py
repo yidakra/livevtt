@@ -22,24 +22,16 @@ LOGGER = logging.getLogger("subtitle_service")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Automatic subtitle generation service"
-    )
-    parser.add_argument(
-        "root", type=Path, help="Root directory to monitor for video chunks"
-    )
-    parser.add_argument(
-        "--output-root", type=Path, help="Optional output root for generated assets"
-    )
+    parser = argparse.ArgumentParser(description="Automatic subtitle generation service")
+    parser.add_argument("root", type=Path, help="Root directory to monitor for video chunks")
+    parser.add_argument("--output-root", type=Path, help="Optional output root for generated assets")
     parser.add_argument(
         "--manifest",
         type=Path,
         default=Path("logs/archive_transcriber_manifest.jsonl"),
         help="Manifest path shared with archive_transcriber",
     )
-    parser.add_argument(
-        "--interval", type=int, default=300, help="Polling interval in seconds"
-    )
+    parser.add_argument("--interval", type=int, default=300, help="Polling interval in seconds")
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -51,15 +43,9 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Regenerate SMIL manifests without modifying VTT files",
     )
-    parser.add_argument(
-        "--force", action="store_true", help="Force regeneration of assets each cycle"
-    )
-    parser.add_argument(
-        "--one-shot", action="store_true", help="Run a single cycle and exit"
-    )
-    parser.add_argument(
-        "--log-file", type=Path, help="Optional log file for service output"
-    )
+    parser.add_argument("--force", action="store_true", help="Force regeneration of assets each cycle")
+    parser.add_argument("--one-shot", action="store_true", help="Run a single cycle and exit")
+    parser.add_argument("--log-file", type=Path, help="Optional log file for service output")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 

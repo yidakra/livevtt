@@ -66,10 +66,10 @@ Tests for the standalone VTT-to-TTML converter CLI:
 ### Run All Tests
 ```bash
 # With pytest
-poetry run pytest tests/ -v
+uv run pytest tests/ -v
 
 # With coverage report
-poetry run pytest tests/ -v --cov=src/python --cov-report=term-missing
+uv run pytest tests/ -v --cov=src/python --cov-report=term-missing
 ```
 
 ### Run Individual Test Files
@@ -178,7 +178,7 @@ def test_new_feature_basic_case():
 ## Continuous Testing
 
 Recommended workflow:
-1. Run tests before committing: `poetry run pytest`
+1. Run tests before committing: `uv run pytest`
 2. Add tests for new features
 3. Update tests when changing functionality
 4. Keep test coverage above 80%
@@ -194,14 +194,9 @@ Recommended workflow:
 - `pytest-cov` - For coverage reporting
 - `pytest-asyncio` - For async tests (future)
 
-Install with Poetry:
+Install with uv:
 ```bash
-poetry install --with dev
-```
-
-Or with pip:
-```bash
-pip install pytest pytest-cov
+uv sync
 ```
 
 ## Test Data

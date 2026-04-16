@@ -364,9 +364,7 @@ def run_all_tests():
         print("-" * 60)
 
         test_methods = [
-            method
-            for method in dir(test_class)
-            if method.startswith("test_") and callable(getattr(test_class, method))
+            method for method in dir(test_class) if method.startswith("test_") and callable(getattr(test_class, method))
         ]
 
         for method_name in test_methods:

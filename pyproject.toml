@@ -1,57 +1,53 @@
-[tool.poetry]
-name = "livevtt"
-version = "0.1.0"
-description = "Live and archived subtitle generation system with WebVTT and TTML support"
-authors = ["LiveVTT Team"]
-readme = "README.md"
-license = "MIT"
-packages = [
-    { include = "python", from = "src" }
-]
-
 [project]
 name = "livevtt"
 version = "0.1.0"
-requires-python = ">=3.10,<4.0"
+description = "Live and archived subtitle generation system with WebVTT and TTML support"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper",
+    "m3u8",
+    "aiohttp[speedups]",
+    "numpy>=1.26,<2.0",
+    "aiofiles",
+    "hf_xet",
+    "tqdm",
+    "fastapi",
+    "uvicorn[standard]",
+    "requests",
+    "websockets",
+    "torch>=2.11.0,<2.12.0",
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-faster-whisper = "*"
-m3u8 = "*"
-aiohttp = {extras = ["speedups"], version = "*"}
-numpy = ">=1.26,<2.0"
-aiofiles = "*"
-hf_xet = "*"
-tqdm = "*"
-fastapi = "*"
-uvicorn = {extras = ["standard"], version = "*"}
-requests = "*"
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "mypy>=1.4.0",
+    "ruff>=0.8.0",
+    "types-requests>=2.32.0.20241016",
+]
 
-websockets = "*"
-torch = "*"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.4.0"
-pytest-asyncio = "^0.21.0"
-pytest-cov = "^4.1.0"
-black = "^23.7.0"
-isort = "^5.12.0"
-mypy = "^1.4.0"
-flake8 = "^6.0.0"
-ruff = "^0.8.0"
-
-[tool.poetry.scripts]
+[project.scripts]
 archive_transcriber = "python.tools.archive_transcriber:main"
 vtt_to_ttml = "python.tools.vtt_to_ttml:main"
 caption_sender = "python.tools.caption_sender:main"
 
-[tool.black]
-line-length = 120
-target-version = ["py310"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.isort]
-profile = "black"
-line_length = 120
+[tool.hatch.build.targets.wheel]
+packages = ["src/python"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -68,7 +64,3 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
-
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"

@@ -6,13 +6,15 @@ Subtitle generation tools for live and archived streams. LiveVTT focuses on prod
 
 ### Requirements
 - Python 3.10+
+- `uv` CLI: used to sync and install dependencies.
+  - Install via `pip install uv` for Python environments.
+  - Or use `brew install uv` on macOS / Linux if available.
+  - See the official `uv` project page for more installation options: https://uv.run
 - FFmpeg + FFprobe: FFprobe is included with FFmpeg. Download from the [official FFmpeg site](https://ffmpeg.org/download.html). Install via `apt install ffmpeg` (Linux), `brew install ffmpeg` (macOS), or `choco install ffmpeg` (Windows).
 
 ### Install dependencies
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ### Transcribe archived media

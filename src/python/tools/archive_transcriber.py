@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .ttml_utils import SubtitleCue
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from faster_whisper import WhisperModel  # type: ignore
 
 _ttml_utils: Any
@@ -218,7 +219,8 @@ def segments_to_webvtt(
         Format a time value in seconds into a WebVTT-style timestamp "HH:MM:SS.mmm".
 
         Returns:
-            str: Timestamp in the form "HH:MM:SS.mmm" corresponding to the input seconds; sub-millisecond fractions are truncated.
+            str: Timestamp in the form "HH:MM:SS.mmm" corresponding to the input
+                seconds; sub-millisecond fractions are truncated.
         """
         total_ms = int(seconds * 1000)
         hours, remainder = divmod(total_ms, 3_600_000)
@@ -467,9 +469,7 @@ def init_gpu_assigner(args: argparse.Namespace) -> None:
                     args.workers,
                 )
         except ValueError as e:
-            LOGGER.warning(
-                "Invalid --gpus value '%s': %s. Using single GPU.", args.gpus, e
-            )
+            LOGGER.warning("Invalid --gpus value '%s': %s. Using single GPU.", args.gpus, e)
 
 
 def get_model(
@@ -509,16 +509,13 @@ def get_model(
                 # Warn if less than 2GB free
                 if free_memory < 2 * 1024**3:
                     LOGGER.warning(
-                        "Low GPU memory: %.1fGB free. "
-                        "Consider using --no-cuda or processing smaller files.",
+                        "Low GPU memory: %.1fGB free. Consider using --no-cuda or processing smaller files.",
                         free_memory / 1024**3,
                     )
         except Exception as e:
             LOGGER.debug("Could not check GPU memory: %s", e)
 
-    def instantiate(
-        target_device: str, target_device_index: int, target_compute_type: str
-    ) -> Any:
+    def instantiate(target_device: str, target_device_index: int, target_compute_type: str) -> Any:
         LOGGER.info(
             "Loading Whisper model %s (device=%s, device_index=%d, compute_type=%s)...",
             name,
@@ -536,9 +533,7 @@ def get_model(
         return model
 
     try:
-        MODEL_HOLDER.models[name] = instantiate(
-            device, device_index, selected_compute_type
-        )
+        MODEL_HOLDER.models[name] = instantiate(device, device_index, selected_compute_type)
     except RuntimeError as exc:
         if args.use_cuda:
             LOGGER.warning(
@@ -628,9 +623,9 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
         Optional[str],
         audio_stream.get("codec_tag_string") or audio_stream.get("codec_name"),
     )
-    bitrate = _get_int(video_stream.get("bit_rate")) or _get_int(
-        format_data.get("bit_rate")
-    )
+    bitrate = _get_int(video_stream.get("bit_rate"))
+    if bitrate in (None, 0):
+        bitrate = _get_int(format_data.get("bit_rate"))
 
     return VideoMetadata(
         duration=duration,
@@ -642,17 +637,26 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
     )
 
 
-def write_smil(
-    job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace
-) -> None:
+def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> None:
     """
     Write or update the SMIL manifest for a video job, ensuring a video element and appropriate textstream entries.
 
-    Creates the SMIL parent directory if needed, makes a one-time backup of an existing SMIL file, parses an existing SMIL (or creates a minimal one), ensures a single <video> element with available metadata attributes, removes previously managed caption <textstream> nodes, and adds new <textstream> entries for subtitles. By default adds a bilingual TTML textstream (if present); if args.vtt_in_smil is true, adds individual Russian and English VTT textstreams instead. When comparing or deduplicating textstream sources the comparison strips an optional "mp4:" prefix; textstream entries are not added if the referenced subtitle file is missing (a warning is emitted). The final SMIL XML is optionally indented and written with an XML declaration.
+    Creates the SMIL parent directory if needed, makes a one-time backup of an
+    existing SMIL file, parses an existing SMIL (or creates a minimal one),
+    ensures a single <video> element with available metadata attributes, removes
+    previously managed caption <textstream> nodes, and adds new <textstream>
+    entries for subtitles. By default adds a bilingual TTML textstream (if
+    present); if args.vtt_in_smil is true, adds individual Russian and English
+    VTT textstreams instead. When comparing or deduplicating textstream sources
+    the comparison strips an optional "mp4:" prefix; textstream entries are not
+    added if the referenced subtitle file is missing (a warning is emitted). The
+    final SMIL XML is optionally indented and written with an XML declaration.
 
     Parameters:
-        job (VideoJob): Job record containing source video path and target artifact paths (smil, ttml, ru_vtt, en_vtt).
-        metadata (VideoMetadata): Probed video metadata used to populate video attributes (bitrate, width, height, codec ids).
+        job (VideoJob): Job record containing source video path and target
+            artifact paths (smil, ttml, ru_vtt, en_vtt).
+        metadata (VideoMetadata): Probed video metadata used to populate video
+            attributes (bitrate, width, height, codec ids).
         args (argparse.Namespace): Parsed CLI arguments; used flags are at least `vtt_in_smil` and `smil_only`.
     """
     job.smil.parent.mkdir(parents=True, exist_ok=True)
@@ -728,14 +732,20 @@ def write_smil(
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
 
-        Removes any existing <textstream> entries that reference the same subtitle source (comparison ignores a leading "mp4:" prefix), then adds a new <textstream> child with the given language. If the referenced subtitle file is missing on disk, logs a warning and does not add an entry.
+        Removes any existing <textstream> entries that reference the same
+        subtitle source (comparison ignores a leading "mp4:" prefix), then adds
+        a new <textstream> child with the given language. If the referenced
+        subtitle file is missing on disk, logs a warning and does not add an
+        entry.
 
         Parameters:
                 src (str): Subtitle file path as used in the SMIL `src` attribute.
                 language (str): Language code to set on the `system-language` attribute.
 
         Notes:
-                This function mutates the surrounding SMIL `switch` element and reads the job's SMIL directory to check for file existence. It does not return a value.
+            This function mutates the surrounding SMIL `switch` element and
+            reads the job's SMIL directory to check for file existence. It
+            does not return a value.
         """
         target_src = src
 
@@ -743,13 +753,16 @@ def write_smil(
             """
             Normalize a subtitle/textstream source string for comparison.
 
-            Strips surrounding whitespace and, if present, removes a leading "mp4:" prefix (case-insensitive). Returns an empty string when the input is None or empty.
+            Strips surrounding whitespace and, if present, removes a leading
+            "mp4:" prefix (case-insensitive). Returns an empty string when the
+            input is None or empty.
 
             Parameters:
                 value (Optional[str]): The source string to normalize; may be None.
 
             Returns:
-                str: The normalized source string (trimmed and without a leading "mp4:"), or an empty string if the input was falsy.
+                str: The normalized source string (trimmed and without a leading
+                    "mp4:"), or an empty string if the input was falsy.
             """
             if not value:
                 return ""
@@ -765,13 +778,9 @@ def write_smil(
                 switch.remove(node)
 
         if not Path(job.smil.parent, src).exists():
-            LOGGER.warning(
-                "Expected subtitle file missing for %s when writing SMIL", src
-            )
+            LOGGER.warning("Expected subtitle file missing for %s when writing SMIL", src)
             return
-        ET.SubElement(
-            switch, "textstream", {"src": target_src, "system-language": language}
-        )
+        ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
 
     # By default, use TTML in SMIL (contains both languages)
     # Use --vtt-in-smil flag to include individual VTT files instead
@@ -780,16 +789,12 @@ def write_smil(
         if job.ru_vtt.exists():
             ensure_textstream(job.ru_vtt.name, "rus")
         elif not args.smil_only:
-            LOGGER.warning(
-                "Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt
-            )
+            LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
 
         if job.en_vtt.exists():
             ensure_textstream(job.en_vtt.name, "eng")
         elif not args.smil_only:
-            LOGGER.warning(
-                "Expected English VTT missing for %s when writing SMIL", job.en_vtt
-            )
+            LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
     else:
         # Use TTML by default (bilingual subtitle file)
         if job.ttml.exists():
@@ -797,9 +802,7 @@ def write_smil(
             ensure_textstream(job.ttml.name, "rus,eng")
             LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
         elif not args.smil_only:
-            LOGGER.warning(
-                "Expected TTML file missing for %s when writing SMIL", job.ttml
-            )
+            LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
 
     if hasattr(ET, "indent"):
         ET.indent(tree, space="  ")  # type: ignore[arg-type]
@@ -842,9 +845,7 @@ def discover_video_jobs(
             grouped = {}
 
     if not grouped:
-        LOGGER.info(
-            "Scanning archive at %s (using find for faster scanning)", input_root
-        )
+        LOGGER.info("Scanning archive at %s (using find for faster scanning)", input_root)
 
         # Build find command with -name patterns for each extension
         find_args = ["find", str(input_root), "-type", "f"]
@@ -900,9 +901,7 @@ def discover_video_jobs(
             return_code = process.wait()
             if return_code != 0:
                 stderr = process.stderr.read()
-                raise subprocess.CalledProcessError(
-                    return_code, find_args, stderr=stderr
-                )
+                raise subprocess.CalledProcessError(return_code, find_args, stderr=stderr)
 
         except KeyboardInterrupt:
             LOGGER.warning("Scan interrupted by user. Terminating find process...")
@@ -960,9 +959,7 @@ def discover_video_jobs(
                 LOGGER.warning("Failed to save scan cache: %s", e)
 
     jobs: List[VideoJob] = []
-    LOGGER.info(
-        "Building job list (selecting best variants and checking for already-processed files)..."
-    )
+    LOGGER.info("Building job list (selecting best variants and checking for already-processed files)...")
 
     processed_groups = 0
     skipped_count = 0
@@ -977,9 +974,7 @@ def discover_video_jobs(
             best_path, normalized_name, input_root, output_root
         )
 
-        if should_skip(
-            best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled
-        ):
+        if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
             LOGGER.debug("Skipping already processed %s", best_path)
             skipped_count += 1
         else:
@@ -1113,8 +1108,7 @@ def extract_audio(video_path: Path, sample_rate: int) -> Path:
     if result.returncode != 0:
         stderr_preview = (result.stderr or "").splitlines()[-5:]
         raise RuntimeError(
-            f"FFmpeg failed for {video_path}: return code {result.returncode}\n"
-            + "\n".join(stderr_preview)
+            f"FFmpeg failed for {video_path}: return code {result.returncode}\n" + "\n".join(stderr_preview)
         )
 
     return tmp_file_path
@@ -1175,9 +1169,7 @@ def detect_audio_start_time(
         # This helps with videos that have 1-2 seconds of silence before speech starts
         if silence_end_times:
             earliest_silence_end = min(silence_end_times)
-            if (
-                earliest_silence_end < 5.0
-            ):  # Only trim if silence ends within first 5 seconds
+            if earliest_silence_end < 5.0:  # Only trim if silence ends within first 5 seconds
                 return earliest_silence_end
     except (
         subprocess.TimeoutExpired,
@@ -1201,9 +1193,7 @@ def detect_audio_start_time(
             # Estimate where actual speech starts - use a larger offset for very long segments
             offset = min(8.0, first_duration * 0.2)  # 20% of segment or 8 seconds max
             estimated_start = max(0, first_segment.start + offset)
-            return min(
-                estimated_start, first_segment.end - 5.0
-            )  # Don't trim too close to end
+            return min(estimated_start, first_segment.end - 5.0)  # Don't trim too close to end
 
     return 0.0
 
@@ -1250,19 +1240,23 @@ def adjust_vtt_timestamps(vtt_content: str, offset_seconds: float) -> str:
     return "\n".join(adjusted_lines)
 
 
-def process_job(
-    job: VideoJob, args: argparse.Namespace, manifest: Manifest
-) -> ManifestRecord:
+def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> ManifestRecord:
     """
-    Process a single VideoJob: transcribe/translate audio if needed, write VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
+    Process a single VideoJob: transcribe/translate audio if needed, write
+    VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
 
     Parameters:
         job (VideoJob): Candidate video and target output paths.
-        args (argparse.Namespace): CLI options that control processing (sampling rate, models, transcription/translation flags, ttml/vtt behavior, force, etc.).
+        args (argparse.Namespace): CLI options that control processing (sampling
+            rate, models, transcription/translation flags, ttml/vtt behavior,
+            force, etc.).
         manifest (Manifest): Append-only manifest used to record processing results.
 
     Returns:
-        dict: A manifest-style record describing the processed video. On success the record has "status": "success" and contains output paths, duration, timestamps, and processing time; on failure the record has "status": "error" and includes an "error" message.
+        dict: A manifest-style record describing the processed video. On success
+            the record has "status": "success" and contains output paths,
+            duration, timestamps, and processing time; on failure the record has
+            "status": "error" and includes an "error" message.
     """
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
@@ -1272,9 +1266,8 @@ def process_job(
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
-    need_transcription = not args.smil_only and (
-        args.force or not (job.ru_vtt.exists() and job.en_vtt.exists())
-    )
+    has_both_vtts = job.ru_vtt.exists() and job.en_vtt.exists()
+    need_transcription = not args.smil_only and (args.force or not has_both_vtts)
 
     audio_path: Optional[Path] = None
 
@@ -1311,9 +1304,7 @@ def process_job(
             if (
                 fallback_name
                 and fallback_name != translation_model_name
-                and translation_output_suspect(
-                    ru_segments, en_segments, args.translation_language
-                )
+                and translation_output_suspect(ru_segments, en_segments, args.translation_language)
             ):
                 LOGGER.warning(
                     "Translation model %s produced unexpected output; retrying with %s",
@@ -1353,12 +1344,8 @@ def process_job(
                 ru_cues: List[Any] = parse_vtt_content(ru_content)
                 en_cues: List[Any] = parse_vtt_content(en_content)
                 # Convert 2-letter language codes to 3-letter for TTML
-                ttml_lang1 = LANG_CODE_2_TO_3.get(
-                    args.source_language, args.source_language
-                )
-                ttml_lang2 = LANG_CODE_2_TO_3.get(
-                    args.translation_language, args.translation_language
-                )
+                ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+                ttml_lang2 = LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
                 ttml_content = cues_to_ttml(
                     ru_cues,
                     en_cues,
@@ -1391,9 +1378,7 @@ def process_job(
                     "error": "Missing caption files for SMIL-only run",
                     "processed_at": human_time(),
                 }
-            LOGGER.info(
-                "VTT already present for %s; generating SMIL only.", job.video_path
-            )
+            LOGGER.info("VTT already present for %s; generating SMIL only.", job.video_path)
 
         write_smil(job, metadata, args)
 
@@ -1425,14 +1410,10 @@ def process_job(
             or "memory allocation" in lower_msg
         ):
             LOGGER.error("CUDA error processing %s: %s", job.video_path, exc)
-            LOGGER.info(
-                "Consider: --no-cuda flag, smaller batch size, or processing on CPU"
-            )
+            LOGGER.info("Consider: --no-cuda flag, smaller batch size, or processing on CPU")
             error_msg = f"CUDA memory error: {error_msg}"
         else:
-            LOGGER.error(
-                "Failed to process %s (%s): %s", job.video_path, error_type, exc
-            )
+            LOGGER.error("Failed to process %s (%s): %s", job.video_path, error_type, exc)
 
         error_record: ManifestRecord = {
             "video_path": str(job.video_path),
@@ -1457,9 +1438,7 @@ def process_job(
                 LOGGER.warning("Failed to delete temp audio file %s", audio_path)
 
 
-def process_transcription_only(
-    job: VideoJob, args: argparse.Namespace, quiet: bool = False
-) -> ManifestRecord:
+def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: bool = False) -> ManifestRecord:
     """Phase 1: Transcribe audio to Russian VTT only."""
     start_time = time.time()
     if not quiet or args.verbose:
@@ -1489,12 +1468,14 @@ def process_transcription_only(
             audio_start = detect_audio_start_time(audio_path, ru_segments)
             if audio_start > 0:
                 LOGGER.info(
-                    f"[Transcription] Detected audio start at {audio_start:.2f}s, adjusting timestamps"
+                    "[Transcription] Detected audio start at %.2fs, adjusting timestamps",
+                    audio_start,
                 )
                 ru_content = adjust_vtt_timestamps(ru_content, audio_start)
             else:
                 LOGGER.info(
-                    f"[Transcription] No silence trimming needed (audio_start={audio_start:.2f})"
+                    "[Transcription] No silence trimming needed (audio_start=%.2f)",
+                    audio_start,
                 )
 
         atomic_write(job.ru_vtt, ru_content)
@@ -1545,9 +1526,7 @@ def process_translation_only(
 
     try:
         # Read existing Russian VTT for segment count comparison
-        ru_content = (
-            job.ru_vtt.read_text(encoding="utf-8") if job.ru_vtt.exists() else ""
-        )
+        ru_content = job.ru_vtt.read_text(encoding="utf-8") if job.ru_vtt.exists() else ""
         ru_cues: List[Any] = parse_vtt_content(ru_content) if ru_content else []
 
         audio_path = extract_audio(job.video_path, args.sample_rate)
@@ -1582,9 +1561,7 @@ def process_translation_only(
         if (
             fallback_name
             and fallback_name != translation_model_name
-            and translation_output_suspect(
-                ru_seg_objs, en_segments, args.translation_language
-            )
+            and translation_output_suspect(ru_seg_objs, en_segments, args.translation_language)
         ):
             LOGGER.warning(
                 "[Translation] Model %s produced unexpected output; retrying with %s",
@@ -1619,12 +1596,8 @@ def process_translation_only(
         # Generate TTML
         if not args.no_ttml:
             en_cues: List[Any] = parse_vtt_content(en_content)
-            ttml_lang1 = LANG_CODE_2_TO_3.get(
-                args.source_language, args.source_language
-            )
-            ttml_lang2 = LANG_CODE_2_TO_3.get(
-                args.translation_language, args.translation_language
-            )
+            ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+            ttml_lang2 = LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
             ttml_content = cues_to_ttml(
                 ru_cues,
                 en_cues,
@@ -1693,9 +1666,7 @@ def configure_logging(args: argparse.Namespace) -> None:
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Batch archive transcription and translation"
-    )
+    parser = argparse.ArgumentParser(description="Batch archive transcription and translation")
     parser.add_argument(
         "input_root",
         nargs="?",
@@ -1703,9 +1674,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=Path,
         help="Root directory of archived video chunks (default: /mnt/vod/srv/storage/transcoded/)",
     )
-    parser.add_argument(
-        "--output-root", type=Path, help="Optional output root for VTT files"
-    )
+    parser.add_argument("--output-root", type=Path, help="Optional output root for VTT files")
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -1754,9 +1723,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default="large-v3",
         help="Fallback model for translation if the primary output appears incorrect (set to 'none' to disable)",
     )
-    parser.add_argument(
-        "--beam-size", type=int, default=5, help="Beam size for decoding"
-    )
+    parser.add_argument("--beam-size", type=int, default=5, help="Beam size for decoding")
     parser.add_argument(
         "--sample-rate",
         type=int,
@@ -1781,18 +1748,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=",".join(sorted(VIDEO_EXTENSIONS)),
         help="Comma-separated list of video extensions to include",
     )
-    parser.add_argument(
-        "--workers", type=int, default=1, help="Number of worker threads for processing"
-    )
+    parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument(
         "--gpus",
         type=str,
         default=None,
         help="Comma-separated GPU IDs to use (e.g., '0,1'). Workers are distributed round-robin across GPUs.",
     )
-    parser.add_argument(
-        "--max-files", type=int, help="Limit the number of videos processed in this run"
-    )
+    parser.add_argument("--max-files", type=int, help="Limit the number of videos processed in this run")
     parser.add_argument(
         "--smil-only",
         action="store_true",
@@ -1809,12 +1772,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Include individual VTT files in SMIL manifest instead of TTML",
     )
     parser.add_argument("--log-file", type=Path, help="Optional log file path")
-    parser.add_argument(
-        "--progress", action="store_true", help="Display progress bar (requires tqdm)"
-    )
-    parser.add_argument(
-        "--force", action="store_true", help="Reprocess files even if outputs exist"
-    )
+    parser.add_argument("--progress", action="store_true", help="Display progress bar (requires tqdm)")
+    parser.add_argument("--force", action="store_true", help="Reprocess files even if outputs exist")
     parser.add_argument(
         "--scan-cache",
         type=Path,
@@ -1851,20 +1810,14 @@ def run(argv: Optional[List[str]] = None) -> int:
     init_gpu_assigner(args)
 
     manifest = Manifest(args.manifest.resolve())
-    extensions = [
-        ext if ext.startswith(".") else f".{ext}"
-        for ext in args.extensions.split(",")
-        if ext
-    ]
+    extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
 
     # Prepare scan cache path
     scan_cache_path = args.scan_cache.resolve() if args.scan_cache else None
 
     # Two-phase mode: discover all jobs, then filter separately for each phase
     if args.two_phase:
-        return run_two_phase(
-            args, input_root, output_root, manifest, extensions, scan_cache_path
-        )
+        return run_two_phase(args, input_root, output_root, manifest, extensions, scan_cache_path)
 
     try:
         jobs = discover_video_jobs(
@@ -1883,9 +1836,7 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     if args.max_files is not None:
         if args.max_files <= 0:
-            LOGGER.warning(
-                "--max-files must be greater than zero; no work will be performed"
-            )
+            LOGGER.warning("--max-files must be greater than zero; no work will be performed")
             jobs = []
         else:
             jobs = jobs[: args.max_files]
@@ -1910,9 +1861,7 @@ def run(argv: Optional[List[str]] = None) -> int:
         if args.workers > 1:
             LOGGER.info("Using %d worker threads", args.workers)
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
-                futures = [
-                    executor.submit(process_job, job, args, manifest) for job in jobs
-                ]
+                futures = [executor.submit(process_job, job, args, manifest) for job in jobs]
                 try:
                     for future in as_completed(futures):
                         if pause_requested:
@@ -1926,9 +1875,7 @@ def run(argv: Optional[List[str]] = None) -> int:
                         if progress_bar is not None:
                             progress_bar.update(1)
                         if shutdown_requested:
-                            LOGGER.warning(
-                                "Shutdown requested during processing. Finishing current batch..."
-                            )
+                            LOGGER.warning("Shutdown requested during processing. Finishing current batch...")
                             # Cancel pending futures - completed ones will no-op
                             for f in futures:
                                 f.cancel()
@@ -1942,9 +1889,7 @@ def run(argv: Optional[List[str]] = None) -> int:
         else:
             for job in jobs:
                 if shutdown_requested:
-                    LOGGER.warning(
-                        "Shutdown requested during sequential processing. Stopping..."
-                    )
+                    LOGGER.warning("Shutdown requested during sequential processing. Stopping...")
                     break
                 if pause_requested:
                     LOGGER.info("Paused. Waiting...")
@@ -2005,9 +1950,7 @@ def run_two_phase(
 
     if args.max_files is not None:
         if args.max_files <= 0:
-            LOGGER.warning(
-                "--max-files must be greater than zero; no work will be performed"
-            )
+            LOGGER.warning("--max-files must be greater than zero; no work will be performed")
             all_jobs = []
         else:
             all_jobs = all_jobs[: args.max_files]
@@ -2059,9 +2002,7 @@ def run_two_phase(
 
         progress_bar = None
         if args.progress and tqdm is not None:
-            progress_bar = tqdm(
-                total=len(transcription_jobs), desc="Transcribing", unit="video"
-            )
+            progress_bar = tqdm(total=len(transcription_jobs), desc="Transcribing", unit="video")
         elif args.progress and tqdm is None:
             LOGGER.warning("tqdm is not installed; progress bar disabled")
 
@@ -2084,27 +2025,20 @@ def run_two_phase(
                     record.get("error", "unknown"),
                 )
             if progress_bar is not None:
-                cast(Any, progress_bar).set_postfix(
-                    ok=phase1_successes, fail=phase1_failures, refresh=False
-                )
+                cast(Any, progress_bar).set_postfix(ok=phase1_successes, fail=phase1_failures, refresh=False)
                 progress_bar.update(1)
 
         try:
             if args.workers > 1:
                 with ThreadPoolExecutor(max_workers=args.workers) as executor:
                     futures = [
-                        executor.submit(
-                            process_transcription_only, job, args, quiet_mode
-                        )
-                        for job in transcription_jobs
+                        executor.submit(process_transcription_only, job, args, quiet_mode) for job in transcription_jobs
                     ]
                     try:
                         for future in as_completed(futures):
                             update_progress(future.result())
                     except KeyboardInterrupt:
-                        LOGGER.warning(
-                            "Interrupted. Cancelling remaining transcription jobs..."
-                        )
+                        LOGGER.warning("Interrupted. Cancelling remaining transcription jobs...")
                         for future in futures:
                             future.cancel()
                         raise
@@ -2149,9 +2083,7 @@ def run_two_phase(
 
         progress_bar = None
         if args.progress and tqdm is not None:
-            progress_bar = tqdm(
-                total=len(translation_jobs), desc="Translating", unit="video"
-            )
+            progress_bar = tqdm(total=len(translation_jobs), desc="Translating", unit="video")
 
         def update_progress2(record: ManifestRecord) -> None:
             nonlocal phase2_successes, phase2_failures
@@ -2172,27 +2104,21 @@ def run_two_phase(
                     record.get("error", "unknown"),
                 )
             if progress_bar is not None:
-                cast(Any, progress_bar).set_postfix(
-                    ok=phase2_successes, fail=phase2_failures, refresh=False
-                )
+                cast(Any, progress_bar).set_postfix(ok=phase2_successes, fail=phase2_failures, refresh=False)
                 progress_bar.update(1)
 
         try:
             if args.workers > 1:
                 with ThreadPoolExecutor(max_workers=args.workers) as executor:
                     futures = [
-                        executor.submit(
-                            process_translation_only, job, args, manifest, quiet_mode
-                        )
+                        executor.submit(process_translation_only, job, args, manifest, quiet_mode)
                         for job in translation_jobs
                     ]
                     try:
                         for future in as_completed(futures):
                             update_progress2(future.result())
                     except KeyboardInterrupt:
-                        LOGGER.warning(
-                            "Interrupted. Cancelling remaining translation jobs..."
-                        )
+                        LOGGER.warning("Interrupted. Cancelling remaining translation jobs...")
                         for future in futures:
                             future.cancel()
                         raise

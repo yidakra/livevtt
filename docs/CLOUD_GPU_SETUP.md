@@ -77,7 +77,7 @@ On your current server with the video archive:
 
 ```bash
 # Install new dependencies
-poetry install
+uv sync --no-dev
 
 # Test connection to cloud GPU
 curl http://YOUR_CLOUD_GPU_IP:8000/health
@@ -87,7 +87,7 @@ curl http://YOUR_CLOUD_GPU_IP:8000/health
 ### Step 3: Run Archive Transcription
 
 ```bash
-poetry run python src/python/tools/archive_transcriber_remote.py \
+uv run python src/python/tools/archive_transcriber_remote.py \
   --remote-url http://YOUR_CLOUD_GPU_IP:8000 \
   --workers 4 \
   --progress \
