@@ -345,7 +345,7 @@ async def transcribe_chunk(
     loop = asyncio.get_running_loop()
 
     # Add custom vocabulary initial prompt if available
-    initial_prompt = initial_prompt_text if initial_prompt_text and not args.debug else None
+    initial_prompt = initial_prompt_text or None
     if initial_prompt:
         logger.debug(f"Using initial prompt for transcription: {initial_prompt}")
 
