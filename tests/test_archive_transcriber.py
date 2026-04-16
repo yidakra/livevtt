@@ -502,9 +502,7 @@ class TestExtractAudio:
             return result
 
         with mock.patch("archive_transcriber.subprocess.run", side_effect=fake_run):
-            with mock.patch(
-                "archive_transcriber.tempfile.NamedTemporaryFile"
-            ) as mock_tmp:
+            with mock.patch("archive_transcriber.tempfile.NamedTemporaryFile") as mock_tmp:
                 mock_tmp.return_value.__enter__ = mock.MagicMock()
                 mock_tmp.return_value.name = "/tmp/fake.wav"
                 archive_transcriber.extract_audio(video_path, sample_rate)
@@ -516,9 +514,7 @@ class TestExtractAudio:
         cmd = self._run_extract_audio(Path("/test/video.mp4"), 16000)
 
         assert "-ac" not in cmd, "Should not use -ac flag (mixes channels)"
-        assert "pan=mono|c0=c0" in " ".join(
-            cmd
-        ), "Should use pan filter to select channel 0"
+        assert "pan=mono|c0=c0" in " ".join(cmd), "Should use pan filter to select channel 0"
         print("✓ test_uses_pan_filter_not_ac_flag passed")
 
     def test_pan_filter_position_in_command(self):

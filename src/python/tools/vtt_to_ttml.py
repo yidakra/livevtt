@@ -230,7 +230,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     Parse and return command-line arguments for the VTT→TTML converter.
 
     Parameters:
-        argv (Optional[list[str]]): Optional list of argument strings to parse; when omitted, the process's command-line arguments are used.
+        argv (Optional[list[str]]): Optional list of argument strings to parse;
+            when omitted, the process's command-line arguments are used.
 
     Returns:
         argparse.Namespace: Namespace containing parsed options:
@@ -239,7 +240,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
             - output: Path for the output TTML file
             - lang1: language code for the first VTT (default "ru")
             - lang2: language code for the second VTT (default "en")
-            - tolerance: maximum time difference in seconds for aligning cues (default 1.0)
+                        - tolerance: maximum time difference in seconds for aligning cues
+                            (default 1.0)
             - filter: optional Path to filter.json for text filtering
             - verbose: boolean flag to enable verbose logging
     """

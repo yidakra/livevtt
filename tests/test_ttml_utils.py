@@ -347,7 +347,11 @@ class TestSegmentsToTTML:
 
     def test_segments_to_ttml_basic(self) -> None:
         """
-        Verify conversion of parallel speech segments into a bilingual TTML string containing an XML declaration, a TTML root with `xml:lang="en"`, a head section, two language-specific `div` elements (`eng` and `rus`), and `p` elements with correct `begin`/`end` timestamps and texts.
+        Verify conversion of parallel speech segments into a bilingual TTML
+        string containing an XML declaration, a TTML root with
+        `xml:lang="en"`, a head section, two language-specific `div` elements
+        (`eng` and `rus`), and `p` elements with correct `begin`/`end`
+        timestamps and texts.
         """
 
         # Mock Whisper segment objects

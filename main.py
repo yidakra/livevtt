@@ -71,19 +71,21 @@ class SegmentLike(Protocol):
 
 def segments_to_srt(segments: Iterable[SegmentLike], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
-    segment_chunks = [
-        f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S,%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S,%f')[:-3]}\n{segment.text}"
-        for i, segment in enumerate(segments)
-    ]
+    segment_chunks = []
+    for i, segment in enumerate(segments):
+        start_str = (base_ts + timedelta(seconds=segment.start)).strftime("%H:%M:%S,%f")[:-3]
+        end_str = (base_ts + timedelta(seconds=segment.end)).strftime("%H:%M:%S,%f")[:-3]
+        segment_chunks.append(f"{i + 1}\n{start_str} --> {end_str}\n{segment.text}")
     return "\n\n".join(segment_chunks)
 
 
 def segments_to_webvtt(segments: Iterable[SegmentLike], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
-    segment_chunks = [
-        f"{i + 1}\n{(base_ts + timedelta(seconds=segment.start)).strftime('%H:%M:%S.%f')[:-3]} --> {(base_ts + timedelta(seconds=segment.end)).strftime('%H:%M:%S.%f')[:-3]}\n{segment.text}"
-        for i, segment in enumerate(segments)
-    ]
+    segment_chunks = []
+    for i, segment in enumerate(segments):
+        start_str = (base_ts + timedelta(seconds=segment.start)).strftime("%H:%M:%S.%f")[:-3]
+        end_str = (base_ts + timedelta(seconds=segment.end)).strftime("%H:%M:%S.%f")[:-3]
+        segment_chunks.append(f"{i + 1}\n{start_str} --> {end_str}\n{segment.text}")
     return "WEBVTT\n\n" + "\n\n".join(segment_chunks)
 
 
@@ -200,7 +202,8 @@ def check_bindeps_present():
     for required_binary in required_binaries:
         if not shutil.which(required_binary):
             logger.error(
-                f"{required_binary} binary not found. Check your platform PATH and ensure that you've installed the required packages."
+                f"{required_binary} binary not found. Check your platform PATH "
+                "and ensure that you've installed the required packages."
             )
             sys.exit(1)
 
@@ -271,8 +274,12 @@ def load_custom_vocabulary(language: str, vocabulary_file: Optional[str] = None)
                         initial_prompt_text = (
                             "The following terms may appear in this audio: " + ", ".join(quoted_terms) + "."
                         )
+                        joined_terms = ", ".join(custom_vocabulary)
                         logger.info(
-                            f"Custom vocabulary loaded for language '{language}' with {len(custom_vocabulary)} terms: {', '.join(custom_vocabulary)}"
+                            "Custom vocabulary loaded for language '%s' with %d terms: %s",
+                            language,
+                            len(custom_vocabulary),
+                            joined_terms,
                         )
                         logger.debug(f"Initial prompt: {initial_prompt_text}")
                     else:
@@ -612,8 +619,13 @@ async def transcribe_chunk(
                                 subtitle_streams = [
                                     s for s in probe_data.get("streams", []) if s.get("codec_type") == "subtitle"
                                 ]
+                                subtitle_languages = [
+                                    s.get("tags", {}).get("language", "unknown") for s in subtitle_streams
+                                ]
                                 logger.debug(
-                                    f"Embedded file has {len(subtitle_streams)} subtitle streams: {[s.get('tags', {}).get('language', 'unknown') for s in subtitle_streams]}"
+                                    "Embedded file has %d subtitle streams: %s",
+                                    len(subtitle_streams),
+                                    subtitle_languages,
                                 )
                         except Exception as e:
                             logger.debug(f"Failed to verify embedded subtitles: {e}")
@@ -974,7 +986,10 @@ async def main():
     parser.add_argument(
         "--mp4-container",
         action="store_true",
-        help="(experimental, with --embedded-subs) Output each processed segment as fragmented MP4 containing mov_text subtitles instead of MPEG-TS.",
+        help=(
+            "(experimental, with --embedded-subs) Output each processed segment "
+            "as fragmented MP4 containing mov_text subtitles instead of MPEG-TS."
+        ),
     )
 
     args = parser.parse_args()
@@ -989,7 +1004,8 @@ async def main():
     subtitle_modes = sum([args.hard_subs, args.embedded_subs])
     if subtitle_modes > 1:
         logger.error(
-            "Cannot use multiple subtitle modes simultaneously. Choose only one of: --hard-subs, --embedded-subs, or default (WebVTT sidecar)"
+            "Cannot use multiple subtitle modes simultaneously. Choose only one of: "
+            "--hard-subs, --embedded-subs, or default (WebVTT sidecar)"
         )
         sys.exit(1)
 

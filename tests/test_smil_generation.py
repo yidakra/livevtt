@@ -123,9 +123,13 @@ class TestSMILGeneration:
 
     def test_smil_textstream_elements(self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs) -> None:
         """
-        Verify the SMIL contains two subtitle textstream elements (Russian and English) with correct src and language attributes.
+        Verify the SMIL contains two subtitle textstream elements
+        (Russian and English) with correct src and language attributes.
 
-        Asserts that exactly two textstream elements appear under body/switch, one with system-language "rus" and one with "eng", and that their src attributes are "video.ru.vtt" and "video.en.vtt" respectively (no "mp4:" prefix).
+        Asserts that exactly two textstream elements appear under body/switch,
+        one with system-language "rus" and one with "eng", and that their src
+        attributes are "video.ru.vtt" and "video.en.vtt" respectively (no
+        "mp4:" prefix).
         """
         write_smil(video_job, metadata, args)
 

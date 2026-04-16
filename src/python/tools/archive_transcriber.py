@@ -219,7 +219,8 @@ def segments_to_webvtt(
         Format a time value in seconds into a WebVTT-style timestamp "HH:MM:SS.mmm".
 
         Returns:
-            str: Timestamp in the form "HH:MM:SS.mmm" corresponding to the input seconds; sub-millisecond fractions are truncated.
+            str: Timestamp in the form "HH:MM:SS.mmm" corresponding to the input
+                seconds; sub-millisecond fractions are truncated.
         """
         total_ms = int(seconds * 1000)
         hours, remainder = divmod(total_ms, 3_600_000)
@@ -638,11 +639,22 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
     """
     Write or update the SMIL manifest for a video job, ensuring a video element and appropriate textstream entries.
 
-    Creates the SMIL parent directory if needed, makes a one-time backup of an existing SMIL file, parses an existing SMIL (or creates a minimal one), ensures a single <video> element with available metadata attributes, removes previously managed caption <textstream> nodes, and adds new <textstream> entries for subtitles. By default adds a bilingual TTML textstream (if present); if args.vtt_in_smil is true, adds individual Russian and English VTT textstreams instead. When comparing or deduplicating textstream sources the comparison strips an optional "mp4:" prefix; textstream entries are not added if the referenced subtitle file is missing (a warning is emitted). The final SMIL XML is optionally indented and written with an XML declaration.
+    Creates the SMIL parent directory if needed, makes a one-time backup of an
+    existing SMIL file, parses an existing SMIL (or creates a minimal one),
+    ensures a single <video> element with available metadata attributes, removes
+    previously managed caption <textstream> nodes, and adds new <textstream>
+    entries for subtitles. By default adds a bilingual TTML textstream (if
+    present); if args.vtt_in_smil is true, adds individual Russian and English
+    VTT textstreams instead. When comparing or deduplicating textstream sources
+    the comparison strips an optional "mp4:" prefix; textstream entries are not
+    added if the referenced subtitle file is missing (a warning is emitted). The
+    final SMIL XML is optionally indented and written with an XML declaration.
 
     Parameters:
-        job (VideoJob): Job record containing source video path and target artifact paths (smil, ttml, ru_vtt, en_vtt).
-        metadata (VideoMetadata): Probed video metadata used to populate video attributes (bitrate, width, height, codec ids).
+        job (VideoJob): Job record containing source video path and target
+            artifact paths (smil, ttml, ru_vtt, en_vtt).
+        metadata (VideoMetadata): Probed video metadata used to populate video
+            attributes (bitrate, width, height, codec ids).
         args (argparse.Namespace): Parsed CLI arguments; used flags are at least `vtt_in_smil` and `smil_only`.
     """
     job.smil.parent.mkdir(parents=True, exist_ok=True)
@@ -718,14 +730,20 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
 
-        Removes any existing <textstream> entries that reference the same subtitle source (comparison ignores a leading "mp4:" prefix), then adds a new <textstream> child with the given language. If the referenced subtitle file is missing on disk, logs a warning and does not add an entry.
+        Removes any existing <textstream> entries that reference the same
+        subtitle source (comparison ignores a leading "mp4:" prefix), then adds
+        a new <textstream> child with the given language. If the referenced
+        subtitle file is missing on disk, logs a warning and does not add an
+        entry.
 
         Parameters:
                 src (str): Subtitle file path as used in the SMIL `src` attribute.
                 language (str): Language code to set on the `system-language` attribute.
 
         Notes:
-                This function mutates the surrounding SMIL `switch` element and reads the job's SMIL directory to check for file existence. It does not return a value.
+            This function mutates the surrounding SMIL `switch` element and
+            reads the job's SMIL directory to check for file existence. It
+            does not return a value.
         """
         target_src = src
 
@@ -733,13 +751,16 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             """
             Normalize a subtitle/textstream source string for comparison.
 
-            Strips surrounding whitespace and, if present, removes a leading "mp4:" prefix (case-insensitive). Returns an empty string when the input is None or empty.
+            Strips surrounding whitespace and, if present, removes a leading
+            "mp4:" prefix (case-insensitive). Returns an empty string when the
+            input is None or empty.
 
             Parameters:
                 value (Optional[str]): The source string to normalize; may be None.
 
             Returns:
-                str: The normalized source string (trimmed and without a leading "mp4:"), or an empty string if the input was falsy.
+                str: The normalized source string (trimmed and without a leading
+                    "mp4:"), or an empty string if the input was falsy.
             """
             if not value:
                 return ""
@@ -1219,15 +1240,21 @@ def adjust_vtt_timestamps(vtt_content: str, offset_seconds: float) -> str:
 
 def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> ManifestRecord:
     """
-    Process a single VideoJob: transcribe/translate audio if needed, write VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
+    Process a single VideoJob: transcribe/translate audio if needed, write
+    VTT/TTML outputs, generate or update the SMIL, and append a manifest record.
 
     Parameters:
         job (VideoJob): Candidate video and target output paths.
-        args (argparse.Namespace): CLI options that control processing (sampling rate, models, transcription/translation flags, ttml/vtt behavior, force, etc.).
+        args (argparse.Namespace): CLI options that control processing (sampling
+            rate, models, transcription/translation flags, ttml/vtt behavior,
+            force, etc.).
         manifest (Manifest): Append-only manifest used to record processing results.
 
     Returns:
-        dict: A manifest-style record describing the processed video. On success the record has "status": "success" and contains output paths, duration, timestamps, and processing time; on failure the record has "status": "error" and includes an "error" message.
+        dict: A manifest-style record describing the processed video. On success
+            the record has "status": "success" and contains output paths,
+            duration, timestamps, and processing time; on failure the record has
+            "status": "error" and includes an "error" message.
     """
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
