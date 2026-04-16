@@ -5,12 +5,18 @@ import importlib
 import re
 import sys
 import tempfile
+import typing as _typing
 from pathlib import Path
 from typing import Callable, Optional
 from unittest import mock
 
 # Mock faster_whisper before importing archive_transcriber
 sys.modules["faster_whisper"] = mock.MagicMock()
+# On 3.11+, typing.Required exists; alias typing_extensions to typing to avoid
+# requiring the package in test-only environments. On 3.10, rely on the real
+# typing_extensions package that comes from transitive dependencies.
+if sys.version_info >= (3, 11):
+    sys.modules.setdefault("typing_extensions", _typing)  # type: ignore[assignment]
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src" / "python" / "tools"))
 
@@ -496,3 +502,55 @@ class TestVideoJob:
         assert job.normalized_name == "video.ts"
         assert job.ttml.name == "video.ttml"
         print("✓ test_video_job_creation passed")
+
+
+class TestExtractAudio:
+    """Tests for audio extraction ffmpeg command construction."""
+
+    def _run_extract_audio(self, video_path: Path, sample_rate: int) -> list:
+        """Run extract_audio with mocked subprocess and return the captured command."""
+        captured = []
+
+        def fake_run(cmd, **kwargs):
+            captured.append(cmd)
+            result = mock.MagicMock()
+            result.returncode = 0
+            return result
+
+        with mock.patch("archive_transcriber.subprocess.run", side_effect=fake_run):
+            with mock.patch(
+                "archive_transcriber.tempfile.NamedTemporaryFile"
+            ) as mock_tmp:
+                mock_tmp.return_value.__enter__ = mock.MagicMock()
+                mock_tmp.return_value.name = "/tmp/fake.wav"
+                archive_transcriber.extract_audio(video_path, sample_rate)
+
+        return captured[0] if captured else []
+
+    def test_uses_pan_filter_not_ac_flag(self):
+        """extract_audio must use pan=mono|c0=c0 to select channel 0, not -ac 1."""
+        cmd = self._run_extract_audio(Path("/test/video.mp4"), 16000)
+
+        assert "-ac" not in cmd, "Should not use -ac flag (mixes channels)"
+        assert "pan=mono|c0=c0" in " ".join(
+            cmd
+        ), "Should use pan filter to select channel 0"
+        print("✓ test_uses_pan_filter_not_ac_flag passed")
+
+    def test_pan_filter_position_in_command(self):
+        """The pan filter should be passed via -af flag."""
+        cmd = self._run_extract_audio(Path("/test/video.mp4"), 16000)
+
+        assert "-af" in cmd
+        af_index = cmd.index("-af")
+        assert cmd[af_index + 1] == "pan=mono|c0=c0"
+        print("✓ test_pan_filter_position_in_command passed")
+
+    def test_sample_rate_preserved(self):
+        """Sample rate argument should still be passed correctly."""
+        cmd = self._run_extract_audio(Path("/test/video.mp4"), 22050)
+
+        assert "-ar" in cmd
+        ar_index = cmd.index("-ar")
+        assert cmd[ar_index + 1] == "22050"
+        print("✓ test_sample_rate_preserved passed")

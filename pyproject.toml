@@ -9,6 +9,11 @@ packages = [
     { include = "python", from = "src" }
 ]
 
+[project]
+name = "livevtt"
+version = "0.1.0"
+requires-python = ">=3.10,<4.0"
+
 [tool.poetry.dependencies]
 python = "^3.10"
 faster-whisper = "*"
