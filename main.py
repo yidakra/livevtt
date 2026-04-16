@@ -71,7 +71,7 @@ class SegmentLike(Protocol):
 
 def segments_to_srt(segments: Iterable[SegmentLike], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
-    segment_chunks = []
+    segment_chunks: list[str] = []
     for i, segment in enumerate(segments):
         start_str = (base_ts + timedelta(seconds=segment.start)).strftime("%H:%M:%S,%f")[:-3]
         end_str = (base_ts + timedelta(seconds=segment.end)).strftime("%H:%M:%S,%f")[:-3]
@@ -81,7 +81,7 @@ def segments_to_srt(segments: Iterable[SegmentLike], ts_offset: timedelta) -> st
 
 def segments_to_webvtt(segments: Iterable[SegmentLike], ts_offset: timedelta) -> str:
     base_ts = datetime(1970, 1, 1, 0, 0, 0) + ts_offset
-    segment_chunks = []
+    segment_chunks: list[str] = []
     for i, segment in enumerate(segments):
         start_str = (base_ts + timedelta(seconds=segment.start)).strftime("%H:%M:%S.%f")[:-3]
         end_str = (base_ts + timedelta(seconds=segment.end)).strftime("%H:%M:%S.%f")[:-3]
@@ -784,7 +784,6 @@ async def transcribe_chunk(
         # Original hard subs logic with filtering
         async with aiofiles.tempfile.NamedTemporaryFile(dir=chunk_dir, delete=False, suffix=".srt") as srt_file:
             segments_to_use = segments if not args.both_tracks else segments_trans
-            segments_to_use = [seg for seg in segments_to_use if not should_filter_segment(seg.text)]
 
             srt_content = segments_to_srt(segments_to_use, start_ts)
             if not srt_content:

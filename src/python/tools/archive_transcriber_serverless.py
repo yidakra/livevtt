@@ -467,11 +467,8 @@ def process_job_serverless(
             if not args.no_ttml:
                 ru_cues = parse_vtt_content(ru_content)
                 en_cues = parse_vtt_content(en_content)
-                ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language) or args.source_language
-                ttml_lang2 = (
-                    LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
-                    or args.translation_language
-                )
+                ttml_lang1 = LANG_CODE_2_TO_3.get(args.source_language, args.source_language)
+                ttml_lang2 = LANG_CODE_2_TO_3.get(args.translation_language, args.translation_language)
                 ttml_content = cues_to_ttml(
                     ru_cues,
                     en_cues,

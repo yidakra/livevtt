@@ -623,7 +623,9 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
         Optional[str],
         audio_stream.get("codec_tag_string") or audio_stream.get("codec_name"),
     )
-    bitrate = _get_int(video_stream.get("bit_rate")) or _get_int(format_data.get("bit_rate"))
+    bitrate = _get_int(video_stream.get("bit_rate"))
+    if bitrate is None:
+        bitrate = _get_int(format_data.get("bit_rate"))
 
     return VideoMetadata(
         duration=duration,
@@ -1264,7 +1266,8 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
     metadata = probe_video_metadata(job.video_path)
     duration = metadata.duration or 0.0
-    need_transcription = not args.smil_only and (args.force or not (job.ru_vtt.exists() and job.en_vtt.exists()))
+    has_both_vtts = job.ru_vtt.exists() and job.en_vtt.exists()
+    need_transcription = not args.smil_only and (args.force or not has_both_vtts)
 
     audio_path: Optional[Path] = None
 
@@ -1464,10 +1467,16 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
         if args.trim_silence:
             audio_start = detect_audio_start_time(audio_path, ru_segments)
             if audio_start > 0:
-                LOGGER.info(f"[Transcription] Detected audio start at {audio_start:.2f}s, adjusting timestamps")
+                LOGGER.info(
+                    "[Transcription] Detected audio start at %.2fs, adjusting timestamps",
+                    audio_start,
+                )
                 ru_content = adjust_vtt_timestamps(ru_content, audio_start)
             else:
-                LOGGER.info(f"[Transcription] No silence trimming needed (audio_start={audio_start:.2f})")
+                LOGGER.info(
+                    "[Transcription] No silence trimming needed (audio_start=%.2f)",
+                    audio_start,
+                )
 
         atomic_write(job.ru_vtt, ru_content)
 

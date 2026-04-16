@@ -40,7 +40,7 @@ def load_filter_words(filter_json_path: Optional[Path] = None) -> List[str]:
     """
     Load and return the list of filter words from a filter.json file.
 
-    If filter_json_path is None the function searches standard locations
+    If filter_json_path is None, the function searches standard locations
     relative to the package for a filter.json file. The result is cached
     per-resolved path; if the file is missing or contains invalid JSON, an
     empty list is returned and cached.
