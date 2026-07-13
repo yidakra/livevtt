@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Unit tests for SMIL manifest generation."""
+"""Unit tests for SMIL manifest subtitle association.
+
+write_smil is strictly additive: it only adds <textstream> entries to an
+existing, valid, transcoder-generated SMIL. It must never create a SMIL from
+scratch and never touch <video> nodes (incident of 2026-07-13: transcriber-
+created single-variant SMILs broke adaptive playback in production).
+"""
 
 from __future__ import annotations
 
@@ -22,6 +28,22 @@ from src.python.tools.archive_transcriber import (  # noqa: E402
     write_smil,
 )
 
+# A realistic transcoder-generated multi-bitrate SMIL (5 renditions)
+TRANSCODER_SMIL = """<?xml version="1.0" encoding="UTF-8"?>
+<smil>
+ <head/>
+ <body>
+  <switch>
+   <video src="mp4:video_1080p.mp4" system-bitrate="4692000" width="1920" height="1080"/>
+   <video src="mp4:video_720p.mp4" system-bitrate="2692000" width="1280" height="720"/>
+   <video src="mp4:video_480p.mp4" system-bitrate="1378000" width="704" height="480"/>
+   <video src="mp4:video_360p.mp4" system-bitrate="584000" width="640" height="360"/>
+   <video src="mp4:video_180p.mp4" system-bitrate="264000" width="320" height="180"/>
+  </switch>
+ </body>
+</smil>
+"""
+
 
 class MockArgs(argparse.Namespace):
     """Mock command-line arguments."""
@@ -42,14 +64,15 @@ class MockArgs(argparse.Namespace):
 def tmpdir_with_vtts(tmp_path: Path) -> Path:
     (tmp_path / "video.ru.vtt").write_text("WEBVTT\n")
     (tmp_path / "video.en.vtt").write_text("WEBVTT\n")
+    (tmp_path / "video.smil").write_text(TRANSCODER_SMIL)
     return tmp_path
 
 
 @pytest.fixture
 def video_job(tmpdir_with_vtts: Path) -> VideoJob:
     return VideoJob(
-        video_path=tmpdir_with_vtts / "video.ts",
-        normalized_name="video.ts",
+        video_path=tmpdir_with_vtts / "video_1080p.mp4",
+        normalized_name="video.mp4",
         ru_vtt=tmpdir_with_vtts / "video.ru.vtt",
         en_vtt=tmpdir_with_vtts / "video.en.vtt",
         ttml=tmpdir_with_vtts / "video.ttml",
@@ -74,75 +97,84 @@ def args() -> MockArgs:
     return MockArgs(vtt_in_smil=True)
 
 
-@pytest.fixture
-def video_job_missing_vtts(tmp_path: Path) -> VideoJob:
-    return VideoJob(
-        video_path=tmp_path / "video.ts",
-        normalized_name="video.ts",
-        ru_vtt=tmp_path / "video.ru.vtt",
-        en_vtt=tmp_path / "video.en.vtt",
-        ttml=tmp_path / "video.ttml",
-        smil=tmp_path / "video.smil",
-    )
+class TestSMILSubtitleAssociation:
+    """Tests for adding subtitle textstreams to existing SMIL manifests."""
 
+    def test_smil_missing_is_never_created(
+        self, tmp_path: Path, metadata: VideoMetadata, args: MockArgs, caplog: LogCaptureFixture
+    ) -> None:
+        """write_smil must never create a SMIL when none exists."""
+        job = VideoJob(
+            video_path=tmp_path / "video_1080p.mp4",
+            normalized_name="video.mp4",
+            ru_vtt=tmp_path / "video.ru.vtt",
+            en_vtt=tmp_path / "video.en.vtt",
+            ttml=tmp_path / "video.ttml",
+            smil=tmp_path / "video.smil",
+        )
+        (tmp_path / "video.ru.vtt").write_text("WEBVTT\n")
+        (tmp_path / "video.en.vtt").write_text("WEBVTT\n")
 
-class TestSMILGeneration:
-    """Tests for SMIL manifest generation."""
+        with caplog.at_level(logging.WARNING):
+            result = write_smil(job, metadata, args)
 
-    def test_smil_basic_structure(self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs) -> None:
-        """Test basic SMIL structure generation."""
-        write_smil(video_job, metadata, args)
+        assert result is False
+        assert not job.smil.exists()
+        assert any("does not exist" in r.message for r in caplog.records)
 
-        # Verify SMIL was created
-        assert video_job.smil.exists()
+    def test_corrupt_smil_is_never_regenerated(
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs, caplog: LogCaptureFixture
+    ) -> None:
+        """A SMIL that fails XML parsing must be left untouched."""
+        video_job.smil.write_text("<smil><body><switch>")  # malformed
 
-        # Parse and validate structure
+        with caplog.at_level(logging.ERROR):
+            result = write_smil(video_job, metadata, args)
+
+        assert result is False
+        assert video_job.smil.read_text() == "<smil><body><switch>"
+
+    def test_smil_without_video_nodes_is_skipped(
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
+    ) -> None:
+        """A SMIL with no <video> entries must not be modified."""
+        video_job.smil.write_text("<?xml version='1.0'?><smil><head/><body><switch/></body></smil>")
+        before = video_job.smil.read_text()
+
+        result = write_smil(video_job, metadata, args)
+
+        assert result is False
+        assert video_job.smil.read_text() == before
+
+    def test_all_video_variants_preserved(self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs) -> None:
+        """All 5 transcoder renditions must survive the subtitle update, unmodified."""
+        result = write_smil(video_job, metadata, args)
+        assert result is True
+
         tree = ET.parse(video_job.smil)
-        root = tree.getroot()
-
-        assert root.tag == "smil"
-        assert root.find("head") is not None
-        assert root.find("body") is not None
-        assert root.find("body/switch") is not None
-
-    def test_smil_video_element(self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs) -> None:
-        """Test that SMIL includes video element with metadata."""
-        write_smil(video_job, metadata, args)
-
-        tree = ET.parse(video_job.smil)
-        root = tree.getroot()
-        switch = root.find("body/switch")
+        switch = tree.getroot().find("body/switch")
         assert switch is not None
-        video = switch.find("video")
+        videos = switch.findall("video")
 
-        assert video is not None
-        assert video.get("src") == "mp4:video.ts"
-        assert video.get("system-bitrate") == "5000000"
-        assert video.get("width") == "1920"
-        assert video.get("height") == "1080"
+        assert len(videos) == 5
+        srcs = [v.get("src") for v in videos]
+        assert "mp4:video_1080p.mp4" in srcs
+        assert "mp4:video_180p.mp4" in srcs
+        # video nodes must not gain codec params or any children
+        for v in videos:
+            assert len(list(v)) == 0
 
     def test_smil_textstream_elements(self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs) -> None:
-        """
-        Verify the SMIL contains two subtitle textstream elements
-        (Russian and English) with correct src and language attributes.
-
-        Asserts that exactly two textstream elements appear under body/switch,
-        one with system-language "rus" and one with "eng", and that their src
-        attributes are "video.ru.vtt" and "video.en.vtt" respectively (no
-        "mp4:" prefix).
-        """
+        """Russian and English VTT textstreams are added with correct attributes."""
         write_smil(video_job, metadata, args)
 
         tree = ET.parse(video_job.smil)
-        root = tree.getroot()
-        switch = root.find("body/switch")
+        switch = tree.getroot().find("body/switch")
         assert switch is not None
         textstreams = switch.findall("textstream")
 
-        # Should have two textstreams (Russian and English)
         assert len(textstreams) == 2
 
-        # Check for Russian textstream
         ru_stream = None
         en_stream = None
         for ts in textstreams:
@@ -157,109 +189,66 @@ class TestSMILGeneration:
         assert ru_stream.get("src") == "video.ru.vtt"
         assert en_stream.get("src") == "video.en.vtt"
 
-    def test_smil_update_preserves_structure(
-        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
-    ) -> None:
-        """Test that updating SMIL preserves existing structure."""
-        # Generate SMIL first time
+    def test_smil_update_is_idempotent(self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs) -> None:
+        """Running write_smil twice must not duplicate any nodes."""
         write_smil(video_job, metadata, args)
         first_content = video_job.smil.read_text()
 
-        # Generate SMIL second time (should update, not duplicate)
         write_smil(video_job, metadata, args)
         second_content = video_job.smil.read_text()
         assert first_content == second_content
 
-        # Parse and count elements
         tree = ET.parse(video_job.smil)
-        root = tree.getroot()
-        switch = root.find("body/switch")
+        switch = tree.getroot().find("body/switch")
         assert switch is not None
-        videos = switch.findall("video")
-        textstreams = switch.findall("textstream")
+        assert len(switch.findall("video")) == 5
+        assert len(switch.findall("textstream")) == 2
 
-        # Should have exactly one video element
-        assert len(videos) == 1
+    def test_backup_created_before_modification(
+        self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs
+    ) -> None:
+        """A .bak copy of the original SMIL must exist after an update."""
+        original = video_job.smil.read_text()
+        write_smil(video_job, metadata, args)
 
-        # Should have exactly two textstreams (not duplicated)
-        assert len(textstreams) == 2
+        backups = list(video_job.smil.parent.glob("video.smil.bak.*"))
+        assert len(backups) == 1
+        assert backups[0].read_text() == original
 
     def test_smil_missing_vtt_warning(
         self,
-        video_job_missing_vtts: VideoJob,
+        video_job: VideoJob,
         metadata: VideoMetadata,
         args: MockArgs,
         caplog: LogCaptureFixture,
     ) -> None:
-        """Test that SMIL generation handles missing VTT files."""
-        # Should not crash, just skip missing textstreams and emit warnings
-        with caplog.at_level(logging.WARNING):
-            write_smil(video_job_missing_vtts, metadata, args)
+        """Missing subtitle files are skipped with a warning, videos untouched."""
+        video_job.ru_vtt.unlink()
+        video_job.en_vtt.unlink()
 
-        # Should have emitted a warning about missing VTT
+        with caplog.at_level(logging.WARNING):
+            write_smil(video_job, metadata, args)
+
         assert any("vtt" in r.message.lower() for r in caplog.records)
 
-        # SMIL should still be created with video element
-        assert video_job_missing_vtts.smil.exists()
-
-        tree = ET.parse(video_job_missing_vtts.smil)
-        root = tree.getroot()
-        switch = root.find("body/switch")
-        assert switch is not None
-        video = switch.find("video")
-
-        # Video element should exist
-        assert video is not None
-
-        # Textstreams should not exist (files missing)
-        textstreams = switch.findall("textstream")
-
-        # No textstreams should be added for missing files
-        assert len(textstreams) == 0
-
-    def test_smil_codec_params(self, video_job: VideoJob, metadata: VideoMetadata, args: MockArgs) -> None:
-        """Test that video codec parameters are included."""
-        write_smil(video_job, metadata, args)
-
         tree = ET.parse(video_job.smil)
-        root = tree.getroot()
-        switch = root.find("body/switch")
+        switch = tree.getroot().find("body/switch")
         assert switch is not None
-        video = switch.find("video")
-        assert video is not None
-        params = video.findall("param")
-
-        video_codec_param = None
-        audio_codec_param = None
-
-        for param in params:
-            if param.get("name") == "videoCodecId":
-                video_codec_param = param
-            elif param.get("name") == "audioCodecId":
-                audio_codec_param = param
-
-        assert video_codec_param is not None
-        assert video_codec_param.get("value") == "h264"
-
-        assert audio_codec_param is not None
-        assert audio_codec_param.get("value") == "aac"
+        assert len(switch.findall("textstream")) == 0
+        assert len(switch.findall("video")) == 5
 
     def test_smil_ttml_bilingual_language(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
-        """Test that TTML textstream includes both languages in system-language."""
-        # Create TTML file
+        """TTML textstream carries both languages in system-language."""
         video_job.ttml.write_text("<?xml version='1.0' encoding='UTF-8'?><tt></tt>")
 
-        # Use default args (TTML in SMIL, not VTT)
         args = MockArgs(vtt_in_smil=False)
         write_smil(video_job, metadata, args)
 
         tree = ET.parse(video_job.smil)
-        root = tree.getroot()
-        switch = root.find("body/switch")
+        switch = tree.getroot().find("body/switch")
         assert switch is not None
         textstreams = switch.findall("textstream")
 
-        # Find TTML textstream
         ttml_stream = None
         for ts in textstreams:
             if "video.ttml" in ts.get("src", ""):

@@ -637,95 +637,72 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
     )
 
 
-def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> None:
+def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> bool:
     """
-    Write or update the SMIL manifest for a video job, ensuring a video element and appropriate textstream entries.
+    Update an existing SMIL manifest with subtitle textstream entries.
 
-    Creates the SMIL parent directory if needed, makes a one-time backup of an
-    existing SMIL file, parses an existing SMIL (or creates a minimal one),
-    ensures a single <video> element with available metadata attributes, removes
-    previously managed caption <textstream> nodes, and adds new <textstream>
-    entries for subtitles. By default adds a bilingual TTML textstream (if
-    present); if args.vtt_in_smil is true, adds individual Russian and English
-    VTT textstreams instead. When comparing or deduplicating textstream sources
-    the comparison strips an optional "mp4:" prefix; textstream entries are not
-    added if the referenced subtitle file is missing (a warning is emitted). The
-    final SMIL XML is optionally indented and written with an XML declaration.
+    This function is strictly additive: it NEVER creates a SMIL from scratch
+    and NEVER touches <video> nodes. The multi-bitrate SMIL manifests are
+    owned by the transcoding pipeline; a transcriber-created SMIL would only
+    reference the single variant we transcribed and would break adaptive
+    playback (see incident of 2026-07-13). If the SMIL is missing or does not
+    parse, the update is skipped and False is returned so the operator can
+    fix the source manifest first.
+
+    Makes a timestamped backup of the existing SMIL before modifying it,
+    removes previously managed caption <textstream> nodes, and adds new
+    <textstream> entries for subtitles. By default adds a bilingual TTML
+    textstream (if present); if args.vtt_in_smil is true, adds individual
+    Russian and English VTT textstreams instead. Textstream entries are not
+    added if the referenced subtitle file is missing (a warning is emitted).
 
     Parameters:
         job (VideoJob): Job record containing source video path and target
             artifact paths (smil, ttml, ru_vtt, en_vtt).
-        metadata (VideoMetadata): Probed video metadata used to populate video
-            attributes (bitrate, width, height, codec ids).
+        metadata (VideoMetadata): Probed video metadata (currently unused;
+            kept for call-site compatibility).
         args (argparse.Namespace): Parsed CLI arguments; used flags are at least `vtt_in_smil` and `smil_only`.
-    """
-    job.smil.parent.mkdir(parents=True, exist_ok=True)
 
-    tree: ET.ElementTree[ET.Element] = ET.ElementTree()
-    root: Optional[ET.Element] = None
+    Returns:
+        bool: True if the SMIL was updated, False if the update was skipped.
+    """
+    if not job.smil.exists():
+        LOGGER.warning(
+            "SMIL %s does not exist; skipping subtitle association (the transcoder pipeline owns SMIL creation)",
+            job.smil,
+        )
+        return False
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = job.smil.with_suffix(job.smil.suffix + f".bak.{timestamp}")
-    if job.smil.exists() and not backup_path.exists():
+    if not backup_path.exists():
         try:
             shutil.copy2(job.smil, backup_path)
             LOGGER.debug("Backed up SMIL %s to %s", job.smil, backup_path)
         except OSError as exc:
             LOGGER.warning("Failed to back up %s to %s: %s", job.smil, backup_path, exc)
+            return False
 
-    if job.smil.exists():
-        try:
-            tree = ET.parse(job.smil)
-            root = tree.getroot()
-        except ET.ParseError as exc:
-            LOGGER.warning("SMIL parse error for %s (%s); regenerating", job.smil, exc)
-
-    if root is None:
-        root = ET.Element("smil")
-        ET.SubElement(root, "head")
-        tree = ET.ElementTree(root)
+    try:
+        tree: ET.ElementTree[ET.Element] = ET.parse(job.smil)
+        root = tree.getroot()
+    except ET.ParseError as exc:
+        LOGGER.error("SMIL parse error for %s (%s); skipping subtitle association", job.smil, exc)
+        return False
 
     body = root.find("body")
     if body is None:
-        body = ET.SubElement(root, "body")
+        LOGGER.error("SMIL %s has no <body>; skipping subtitle association", job.smil)
+        return False
 
     switch = body.find("switch")
     if switch is None:
-        switch = ET.SubElement(body, "switch")
+        LOGGER.error("SMIL %s has no <switch>; skipping subtitle association", job.smil)
+        return False
 
-    def ensure_video_node() -> None:
-        if any(child.tag == "video" for child in switch):
-            return
-        video_attrs = {"src": f"mp4:{job.video_path.name}"}
-        if metadata.bitrate:
-            video_attrs["system-bitrate"] = str(metadata.bitrate)
-        if metadata.width:
-            video_attrs["width"] = str(metadata.width)
-        if metadata.height:
-            video_attrs["height"] = str(metadata.height)
-        video_elem = ET.SubElement(switch, "video", video_attrs)
-        if metadata.video_codec_id:
-            ET.SubElement(
-                video_elem,
-                "param",
-                {
-                    "name": "videoCodecId",
-                    "value": metadata.video_codec_id,
-                    "valuetype": "data",
-                },
-            )
-        if metadata.audio_codec_id:
-            ET.SubElement(
-                video_elem,
-                "param",
-                {
-                    "name": "audioCodecId",
-                    "value": metadata.audio_codec_id,
-                    "valuetype": "data",
-                },
-            )
-
-    ensure_video_node()
+    if not any(child.tag == "video" for child in switch):
+        LOGGER.error("SMIL %s has no <video> entries; skipping subtitle association", job.smil)
+        return False
 
     def ensure_textstream(src: str, language: str) -> None:
         # Textstream sources should NOT have mp4: prefix (unlike video sources)
@@ -807,7 +784,11 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
     if hasattr(ET, "indent"):
         ET.indent(tree, space="  ")  # type: ignore[arg-type]
 
-    tree.write(job.smil, encoding="utf-8", xml_declaration=True)
+    # Write atomically so a crash mid-write can never leave a truncated SMIL
+    tmp_path = job.smil.with_suffix(job.smil.suffix + ".tmp")
+    tree.write(tmp_path, encoding="utf-8", xml_declaration=True)
+    tmp_path.replace(job.smil)
+    return True
 
 
 def discover_video_jobs(
