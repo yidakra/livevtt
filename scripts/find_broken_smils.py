@@ -78,7 +78,10 @@ def classify(smil_path: Path) -> dict:
     """Classify a single SMIL file. Returns a report record."""
     record: dict = {"smil": str(smil_path), "verdict": None}
 
-    baks = sorted(smil_path.parent.glob(smil_path.name + ".bak.*"))
+    # Legacy runs (pre-timestamp) wrote a static "<name>.smil.bak"; it is the
+    # oldest backup where present, so list it first.
+    legacy_bak = smil_path.parent / (smil_path.name + ".bak")
+    baks = ([legacy_bak] if legacy_bak.exists() else []) + sorted(smil_path.parent.glob(smil_path.name + ".bak.*"))
     record["baks"] = [str(b) for b in baks]
 
     try:
@@ -121,8 +124,11 @@ def classify(smil_path: Path) -> dict:
 
 
 def oldest_valid_bak(baks: list[str]) -> Optional[Path]:
-    """Return the oldest backup that parses and contains >=1 video node without our fingerprint."""
-    for bak in sorted(baks):
+    """Return the oldest backup that parses and contains >=1 video node without our fingerprint.
+
+    `baks` is already ordered oldest-first (legacy static .bak, then timestamped).
+    """
+    for bak in baks:
         p = Path(bak)
         try:
             tree = ET.parse(p)
