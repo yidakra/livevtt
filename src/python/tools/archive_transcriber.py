@@ -637,6 +637,56 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
     )
 
 
+def smil_precheck(job: VideoJob) -> Optional[str]:
+    """
+    Validate that the transcoder-generated SMIL exists and is usable BEFORE
+    spending GPU time on a video.
+
+    Videos failing this check are skipped entirely and flagged in the manifest
+    so the missing/corrupt source manifest can be investigated while the trail
+    is fresh (the transcoder pipeline occasionally fails to write the main
+    SMIL; see incident of 2026-07-13).
+
+    Returns:
+        None if the SMIL is valid, otherwise a short reason string.
+    """
+    if not job.smil.exists():
+        return "smil_missing"
+    try:
+        tree = ET.parse(job.smil)
+    except ET.ParseError as exc:
+        return f"smil_unparseable: {exc}"
+    switch = tree.getroot().find("body/switch")
+    if switch is None:
+        return "smil_no_switch"
+    if not switch.findall("video"):
+        return "smil_no_video_nodes"
+    return None
+
+
+def skip_record_for_invalid_smil(job: VideoJob, reason: str, phase: Optional[str] = None) -> ManifestRecord:
+    """Build a manifest record for a video skipped due to a missing/invalid SMIL."""
+    LOGGER.error(
+        "SKIPPING %s: %s — video left untouched; investigate why the transcoder did not produce a valid SMIL",
+        job.video_path,
+        reason,
+    )
+    record: ManifestRecord = {
+        "video_path": str(job.video_path),
+        "ru_vtt": str(job.ru_vtt),
+        "en_vtt": str(job.en_vtt),
+        "ttml": str(job.ttml),
+        "smil": str(job.smil),
+        "status": "skipped",
+        "error": reason,
+        "error_type": "invalid_smil",
+        "processed_at": human_time(),
+    }
+    if phase:
+        record["phase"] = phase
+    return record
+
+
 def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> bool:
     """
     Update an existing SMIL manifest with subtitle textstream entries.
@@ -1242,6 +1292,12 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
 
+    precheck_reason = smil_precheck(job)
+    if precheck_reason:
+        record = skip_record_for_invalid_smil(job, precheck_reason)
+        manifest.append(record)
+        return record
+
     # Load filter words (cached after first call)
     filter_words: List[str] = load_filter_words()
 
@@ -1425,6 +1481,10 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
     if not quiet or args.verbose:
         LOGGER.info("[Transcription] Processing %s", job.video_path)
 
+    precheck_reason = smil_precheck(job)
+    if precheck_reason:
+        return skip_record_for_invalid_smil(job, precheck_reason, phase="transcription")
+
     filter_words: List[str] = load_filter_words()
     audio_path: Optional[Path] = None
 
@@ -1500,6 +1560,12 @@ def process_translation_only(
     start_time = time.time()
     if not quiet or args.verbose:
         LOGGER.info("[Translation] Processing %s", job.video_path)
+
+    precheck_reason = smil_precheck(job)
+    if precheck_reason:
+        record = skip_record_for_invalid_smil(job, precheck_reason, phase="translation")
+        manifest.append(record)
+        return record
 
     filter_words: List[str] = load_filter_words()
     metadata = probe_video_metadata(job.video_path)

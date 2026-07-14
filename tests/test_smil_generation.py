@@ -25,6 +25,8 @@ sys.modules["faster_whisper"] = mock.MagicMock()
 from src.python.tools.archive_transcriber import (  # noqa: E402
     VideoJob,
     VideoMetadata,
+    skip_record_for_invalid_smil,
+    smil_precheck,
     write_smil,
 )
 
@@ -236,6 +238,33 @@ class TestSMILSubtitleAssociation:
         assert switch is not None
         assert len(switch.findall("textstream")) == 0
         assert len(switch.findall("video")) == 5
+
+    def test_precheck_passes_on_valid_smil(self, video_job: VideoJob) -> None:
+        """A valid transcoder SMIL passes the pre-flight check."""
+        assert smil_precheck(video_job) is None
+
+    def test_precheck_rejects_missing_smil(self, video_job: VideoJob) -> None:
+        """A missing SMIL fails the pre-flight check so the video is never processed."""
+        video_job.smil.unlink()
+        assert smil_precheck(video_job) == "smil_missing"
+
+    def test_precheck_rejects_unparseable_smil(self, video_job: VideoJob) -> None:
+        video_job.smil.write_text("<smil><body>")
+        reason = smil_precheck(video_job)
+        assert reason is not None and reason.startswith("smil_unparseable")
+
+    def test_precheck_rejects_smil_without_videos(self, video_job: VideoJob) -> None:
+        video_job.smil.write_text("<?xml version='1.0'?><smil><head/><body><switch/></body></smil>")
+        assert smil_precheck(video_job) == "smil_no_video_nodes"
+
+    def test_skip_record_shape(self, video_job: VideoJob) -> None:
+        """The skip record is queryable by status and error_type in the manifest."""
+        record = skip_record_for_invalid_smil(video_job, "smil_missing", phase="transcription")
+        assert record["status"] == "skipped"
+        assert record["error_type"] == "invalid_smil"
+        assert record["error"] == "smil_missing"
+        assert record["phase"] == "transcription"
+        assert record["video_path"] == str(video_job.video_path)
 
     def test_smil_ttml_bilingual_language(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
         """TTML textstream carries both languages in system-language."""
