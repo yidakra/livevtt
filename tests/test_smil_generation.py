@@ -224,20 +224,19 @@ class TestSMILSubtitleAssociation:
         args: MockArgs,
         caplog: LogCaptureFixture,
     ) -> None:
-        """Missing subtitle files are skipped with a warning, videos untouched."""
+        """Missing subtitle files are skipped with a warning; the SMIL is not touched at all."""
         video_job.ru_vtt.unlink()
         video_job.en_vtt.unlink()
+        before = video_job.smil.read_text()
 
         with caplog.at_level(logging.WARNING):
-            write_smil(video_job, metadata, args)
+            result = write_smil(video_job, metadata, args)
 
+        assert result is False
         assert any("vtt" in r.message.lower() for r in caplog.records)
-
-        tree = ET.parse(video_job.smil)
-        switch = tree.getroot().find("body/switch")
-        assert switch is not None
-        assert len(switch.findall("textstream")) == 0
-        assert len(switch.findall("video")) == 5
+        # nothing to add -> no write, no backup
+        assert video_job.smil.read_text() == before
+        assert list(video_job.smil.parent.glob("video.smil.bak*")) == []
 
     def test_precheck_passes_on_valid_smil(self, video_job: VideoJob) -> None:
         """A valid transcoder SMIL passes the pre-flight check."""

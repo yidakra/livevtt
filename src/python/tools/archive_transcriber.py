@@ -654,7 +654,7 @@ def smil_precheck(job: VideoJob) -> Optional[str]:
         return "smil_missing"
     try:
         tree = ET.parse(job.smil)
-    except ET.ParseError as exc:
+    except (ET.ParseError, OSError) as exc:
         return f"smil_unparseable: {exc}"
     switch = tree.getroot().find("body/switch")
     if switch is None:
@@ -723,20 +723,10 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         )
         return False
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = job.smil.with_suffix(job.smil.suffix + f".bak.{timestamp}")
-    if not backup_path.exists():
-        try:
-            shutil.copy2(job.smil, backup_path)
-            LOGGER.debug("Backed up SMIL %s to %s", job.smil, backup_path)
-        except OSError as exc:
-            LOGGER.warning("Failed to back up %s to %s: %s", job.smil, backup_path, exc)
-            return False
-
     try:
         tree: ET.ElementTree[ET.Element] = ET.parse(job.smil)
         root = tree.getroot()
-    except ET.ParseError as exc:
+    except (ET.ParseError, OSError) as exc:
         LOGGER.error("SMIL parse error for %s (%s); skipping subtitle association", job.smil, exc)
         return False
 
@@ -754,7 +744,7 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         LOGGER.error("SMIL %s has no <video> entries; skipping subtitle association", job.smil)
         return False
 
-    def ensure_textstream(src: str, language: str) -> None:
+    def ensure_textstream(src: str, language: str) -> bool:
         # Textstream sources should NOT have mp4: prefix (unlike video sources)
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
@@ -769,10 +759,8 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
                 src (str): Subtitle file path as used in the SMIL `src` attribute.
                 language (str): Language code to set on the `system-language` attribute.
 
-        Notes:
-            This function mutates the surrounding SMIL `switch` element and
-            reads the job's SMIL directory to check for file existence. It
-            does not return a value.
+        Returns:
+            bool: True if a textstream entry was added, False otherwise.
         """
         target_src = src
 
@@ -806,37 +794,55 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
 
         if not Path(job.smil.parent, src).exists():
             LOGGER.warning("Expected subtitle file missing for %s when writing SMIL", src)
-            return
+            return False
         ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
+        return True
 
     # By default, use TTML in SMIL (contains both languages)
     # Use --vtt-in-smil flag to include individual VTT files instead
+    added = False
     if args.vtt_in_smil:
         # Include individual VTT files in SMIL
         if job.ru_vtt.exists():
-            ensure_textstream(job.ru_vtt.name, "rus")
+            added |= ensure_textstream(job.ru_vtt.name, "rus")
         elif not args.smil_only:
             LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
 
         if job.en_vtt.exists():
-            ensure_textstream(job.en_vtt.name, "eng")
+            added |= ensure_textstream(job.en_vtt.name, "eng")
         elif not args.smil_only:
             LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
     else:
         # Use TTML by default (bilingual subtitle file)
         if job.ttml.exists():
             # TTML is bilingual, so we include both languages in system-language
-            ensure_textstream(job.ttml.name, "rus,eng")
+            added |= ensure_textstream(job.ttml.name, "rus,eng")
             LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
         elif not args.smil_only:
             LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
 
+    if not added:
+        LOGGER.warning("No subtitle textstreams added for %s; leaving SMIL untouched", job.smil)
+        return False
+
     if hasattr(ET, "indent"):
         ET.indent(tree, space="  ")  # type: ignore[arg-type]
 
-    # Write atomically so a crash mid-write can never leave a truncated SMIL
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = job.smil.with_suffix(job.smil.suffix + f".bak.{timestamp}")
+    if not backup_path.exists():
+        try:
+            shutil.copy2(job.smil, backup_path)
+            LOGGER.debug("Backed up SMIL %s to %s", job.smil, backup_path)
+        except OSError as exc:
+            LOGGER.warning("Failed to back up %s to %s: %s", job.smil, backup_path, exc)
+            return False
+
+    # Write atomically so a crash mid-write can never leave a truncated SMIL,
+    # preserving the original file's permission bits
     tmp_path = job.smil.with_suffix(job.smil.suffix + ".tmp")
     tree.write(tmp_path, encoding="utf-8", xml_declaration=True)
+    shutil.copymode(job.smil, tmp_path)
     tmp_path.replace(job.smil)
     return True
 

@@ -74,6 +74,13 @@ def iter_targets(root: Path) -> Iterator[tuple[str, Path]]:
                 yield "missing", expected
 
 
+def has_transcriber_fingerprint(videos: list[ET.Element]) -> bool:
+    """True if any <video> node carries the codec <param> children only our transcriber wrote."""
+    return any(
+        param.get("name") in ("videoCodecId", "audioCodecId") for v in videos for param in v.findall("param")
+    )
+
+
 def classify(smil_path: Path) -> dict:
     """Classify a single SMIL file. Returns a report record."""
     record: dict = {"smil": str(smil_path), "verdict": None}
@@ -86,7 +93,7 @@ def classify(smil_path: Path) -> dict:
 
     try:
         tree = ET.parse(smil_path)
-    except ET.ParseError as exc:
+    except (ET.ParseError, OSError) as exc:
         record["verdict"] = "UNPARSEABLE"
         record["error"] = str(exc)
         return record
@@ -102,9 +109,7 @@ def classify(smil_path: Path) -> dict:
     record["n_textstreams"] = len(textstreams)
     record["textstream_srcs"] = [ts.get("src", "") for ts in textstreams]
 
-    has_codec_params = any(
-        param.get("name") in ("videoCodecId", "audioCodecId") for v in videos for param in v.findall("param")
-    )
+    has_codec_params = has_transcriber_fingerprint(videos)
     record["has_codec_params"] = has_codec_params
 
     missing_subs = [src for src in record["textstream_srcs"] if src and not (smil_path.parent / src).exists()]
@@ -138,10 +143,7 @@ def oldest_valid_bak(baks: list[str]) -> Optional[Path]:
         if switch is None:
             continue
         videos = switch.findall("video")
-        fingerprint = any(
-            param.get("name") in ("videoCodecId", "audioCodecId") for v in videos for param in v.findall("param")
-        )
-        if videos and not fingerprint:
+        if videos and not has_transcriber_fingerprint(videos):
             return p
     return None
 
@@ -167,6 +169,7 @@ def main() -> int:
 
     with open(args.report, "w", encoding="utf-8") as report:
         for kind, smil_path in iter_targets(args.root):
+            rec: dict
             if kind == "missing":
                 rec = {"smil": str(smil_path), "verdict": "MISSING_SMIL", "baks": []}
             else:
@@ -191,7 +194,7 @@ def main() -> int:
     print(f"Regeneration list ({len(regen_needed)} files, no usable backup): {args.regen_list}")
 
     if args.restore_bak:
-        restored = skipped = 0
+        restored = skipped = failed = 0
         for rec in broken_with_bak:
             bak = oldest_valid_bak(rec["baks"])
             if bak is None:
@@ -199,11 +202,19 @@ def main() -> int:
                 skipped += 1
                 continue
             if args.apply:
-                shutil.copy2(bak, rec["smil"])
+                try:
+                    shutil.copy2(bak, rec["smil"])
+                except OSError as exc:
+                    print(f"FAILED to restore {rec['smil']} <- {bak.name}: {exc}", file=sys.stderr)
+                    failed += 1
+                    continue
             print(f"{'RESTORED' if args.apply else 'WOULD RESTORE'} {rec['smil']} <- {bak.name}")
             restored += 1
         mode = "" if args.apply else " (dry-run, use --apply)"
-        print(f"\nRestore{mode}: {restored} restored, {skipped} had no valid backup (added to regen list)")
+        print(
+            f"\nRestore{mode}: {restored} restored, {failed} failed, "
+            f"{skipped} had no valid backup (added to regen list)"
+        )
         args.regen_list.write_text("\n".join(regen_needed) + ("\n" if regen_needed else ""))
 
     return 0
