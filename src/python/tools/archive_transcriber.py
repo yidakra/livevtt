@@ -1294,9 +1294,9 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
 
     precheck_reason = smil_precheck(job)
     if precheck_reason:
-        record = skip_record_for_invalid_smil(job, precheck_reason)
-        manifest.append(record)
-        return record
+        skipped = skip_record_for_invalid_smil(job, precheck_reason)
+        manifest.append(skipped)
+        return skipped
 
     # Load filter words (cached after first call)
     filter_words: List[str] = load_filter_words()
@@ -1563,9 +1563,9 @@ def process_translation_only(
 
     precheck_reason = smil_precheck(job)
     if precheck_reason:
-        record = skip_record_for_invalid_smil(job, precheck_reason, phase="translation")
-        manifest.append(record)
-        return record
+        skipped = skip_record_for_invalid_smil(job, precheck_reason, phase="translation")
+        manifest.append(skipped)
+        return skipped
 
     filter_words: List[str] = load_filter_words()
     metadata = probe_video_metadata(job.video_path)
