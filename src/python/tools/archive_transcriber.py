@@ -637,97 +637,114 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
     )
 
 
-def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> None:
+def smil_precheck(job: VideoJob) -> Optional[str]:
     """
-    Write or update the SMIL manifest for a video job, ensuring a video element and appropriate textstream entries.
+    Validate that the transcoder-generated SMIL exists and is usable BEFORE
+    spending GPU time on a video.
 
-    Creates the SMIL parent directory if needed, makes a one-time backup of an
-    existing SMIL file, parses an existing SMIL (or creates a minimal one),
-    ensures a single <video> element with available metadata attributes, removes
-    previously managed caption <textstream> nodes, and adds new <textstream>
-    entries for subtitles. By default adds a bilingual TTML textstream (if
-    present); if args.vtt_in_smil is true, adds individual Russian and English
-    VTT textstreams instead. When comparing or deduplicating textstream sources
-    the comparison strips an optional "mp4:" prefix; textstream entries are not
-    added if the referenced subtitle file is missing (a warning is emitted). The
-    final SMIL XML is optionally indented and written with an XML declaration.
+    Videos failing this check are skipped entirely and flagged in the manifest
+    so the missing/corrupt source manifest can be investigated while the trail
+    is fresh (the transcoder pipeline occasionally fails to write the main
+    SMIL; see incident of 2026-07-13).
+
+    Returns:
+        None if the SMIL is valid, otherwise a short reason string.
+    """
+    if not job.smil.exists():
+        return "smil_missing"
+    try:
+        tree = ET.parse(job.smil)
+    except (ET.ParseError, OSError) as exc:
+        return f"smil_unparseable: {exc}"
+    switch = tree.getroot().find("body/switch")
+    if switch is None:
+        return "smil_no_switch"
+    if not switch.findall("video"):
+        return "smil_no_video_nodes"
+    return None
+
+
+def skip_record_for_invalid_smil(job: VideoJob, reason: str, phase: Optional[str] = None) -> ManifestRecord:
+    """Build a manifest record for a video skipped due to a missing/invalid SMIL."""
+    LOGGER.error(
+        "SKIPPING %s: %s — video left untouched; investigate why the transcoder did not produce a valid SMIL",
+        job.video_path,
+        reason,
+    )
+    record: ManifestRecord = {
+        "video_path": str(job.video_path),
+        "ru_vtt": str(job.ru_vtt),
+        "en_vtt": str(job.en_vtt),
+        "ttml": str(job.ttml),
+        "smil": str(job.smil),
+        "status": "skipped",
+        "error": reason,
+        "error_type": "invalid_smil",
+        "processed_at": human_time(),
+    }
+    if phase:
+        record["phase"] = phase
+    return record
+
+
+def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace) -> bool:
+    """
+    Update an existing SMIL manifest with subtitle textstream entries.
+
+    This function is strictly additive: it NEVER creates a SMIL from scratch
+    and NEVER touches <video> nodes. The multi-bitrate SMIL manifests are
+    owned by the transcoding pipeline; a transcriber-created SMIL would only
+    reference the single variant we transcribed and would break adaptive
+    playback (see incident of 2026-07-13). If the SMIL is missing or does not
+    parse, the update is skipped and False is returned so the operator can
+    fix the source manifest first.
+
+    Makes a timestamped backup of the existing SMIL before modifying it,
+    removes previously managed caption <textstream> nodes, and adds new
+    <textstream> entries for subtitles. By default adds a bilingual TTML
+    textstream (if present); if args.vtt_in_smil is true, adds individual
+    Russian and English VTT textstreams instead. Textstream entries are not
+    added if the referenced subtitle file is missing (a warning is emitted).
 
     Parameters:
         job (VideoJob): Job record containing source video path and target
             artifact paths (smil, ttml, ru_vtt, en_vtt).
-        metadata (VideoMetadata): Probed video metadata used to populate video
-            attributes (bitrate, width, height, codec ids).
+        metadata (VideoMetadata): Probed video metadata (currently unused;
+            kept for call-site compatibility).
         args (argparse.Namespace): Parsed CLI arguments; used flags are at least `vtt_in_smil` and `smil_only`.
+
+    Returns:
+        bool: True if the SMIL was updated, False if the update was skipped.
     """
-    job.smil.parent.mkdir(parents=True, exist_ok=True)
+    if not job.smil.exists():
+        LOGGER.warning(
+            "SMIL %s does not exist; skipping subtitle association (the transcoder pipeline owns SMIL creation)",
+            job.smil,
+        )
+        return False
 
-    tree: ET.ElementTree[ET.Element] = ET.ElementTree()
-    root: Optional[ET.Element] = None
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = job.smil.with_suffix(job.smil.suffix + f".bak.{timestamp}")
-    if job.smil.exists() and not backup_path.exists():
-        try:
-            shutil.copy2(job.smil, backup_path)
-            LOGGER.debug("Backed up SMIL %s to %s", job.smil, backup_path)
-        except OSError as exc:
-            LOGGER.warning("Failed to back up %s to %s: %s", job.smil, backup_path, exc)
-
-    if job.smil.exists():
-        try:
-            tree = ET.parse(job.smil)
-            root = tree.getroot()
-        except ET.ParseError as exc:
-            LOGGER.warning("SMIL parse error for %s (%s); regenerating", job.smil, exc)
-
-    if root is None:
-        root = ET.Element("smil")
-        ET.SubElement(root, "head")
-        tree = ET.ElementTree(root)
+    try:
+        tree: ET.ElementTree[ET.Element] = ET.parse(job.smil)
+        root = tree.getroot()
+    except (ET.ParseError, OSError) as exc:
+        LOGGER.error("SMIL parse error for %s (%s); skipping subtitle association", job.smil, exc)
+        return False
 
     body = root.find("body")
     if body is None:
-        body = ET.SubElement(root, "body")
+        LOGGER.error("SMIL %s has no <body>; skipping subtitle association", job.smil)
+        return False
 
     switch = body.find("switch")
     if switch is None:
-        switch = ET.SubElement(body, "switch")
+        LOGGER.error("SMIL %s has no <switch>; skipping subtitle association", job.smil)
+        return False
 
-    def ensure_video_node() -> None:
-        if any(child.tag == "video" for child in switch):
-            return
-        video_attrs = {"src": f"mp4:{job.video_path.name}"}
-        if metadata.bitrate:
-            video_attrs["system-bitrate"] = str(metadata.bitrate)
-        if metadata.width:
-            video_attrs["width"] = str(metadata.width)
-        if metadata.height:
-            video_attrs["height"] = str(metadata.height)
-        video_elem = ET.SubElement(switch, "video", video_attrs)
-        if metadata.video_codec_id:
-            ET.SubElement(
-                video_elem,
-                "param",
-                {
-                    "name": "videoCodecId",
-                    "value": metadata.video_codec_id,
-                    "valuetype": "data",
-                },
-            )
-        if metadata.audio_codec_id:
-            ET.SubElement(
-                video_elem,
-                "param",
-                {
-                    "name": "audioCodecId",
-                    "value": metadata.audio_codec_id,
-                    "valuetype": "data",
-                },
-            )
+    if not any(child.tag == "video" for child in switch):
+        LOGGER.error("SMIL %s has no <video> entries; skipping subtitle association", job.smil)
+        return False
 
-    ensure_video_node()
-
-    def ensure_textstream(src: str, language: str) -> None:
+    def ensure_textstream(src: str, language: str) -> bool:
         # Textstream sources should NOT have mp4: prefix (unlike video sources)
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
@@ -742,10 +759,8 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
                 src (str): Subtitle file path as used in the SMIL `src` attribute.
                 language (str): Language code to set on the `system-language` attribute.
 
-        Notes:
-            This function mutates the surrounding SMIL `switch` element and
-            reads the job's SMIL directory to check for file existence. It
-            does not return a value.
+        Returns:
+            bool: True if a textstream entry was added, False otherwise.
         """
         target_src = src
 
@@ -779,35 +794,57 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
 
         if not Path(job.smil.parent, src).exists():
             LOGGER.warning("Expected subtitle file missing for %s when writing SMIL", src)
-            return
+            return False
         ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
+        return True
 
     # By default, use TTML in SMIL (contains both languages)
     # Use --vtt-in-smil flag to include individual VTT files instead
+    added = False
     if args.vtt_in_smil:
         # Include individual VTT files in SMIL
         if job.ru_vtt.exists():
-            ensure_textstream(job.ru_vtt.name, "rus")
+            added |= ensure_textstream(job.ru_vtt.name, "rus")
         elif not args.smil_only:
             LOGGER.warning("Expected Russian VTT missing for %s when writing SMIL", job.ru_vtt)
 
         if job.en_vtt.exists():
-            ensure_textstream(job.en_vtt.name, "eng")
+            added |= ensure_textstream(job.en_vtt.name, "eng")
         elif not args.smil_only:
             LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
     else:
         # Use TTML by default (bilingual subtitle file)
         if job.ttml.exists():
             # TTML is bilingual, so we include both languages in system-language
-            ensure_textstream(job.ttml.name, "rus,eng")
+            added |= ensure_textstream(job.ttml.name, "rus,eng")
             LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
         elif not args.smil_only:
             LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
 
+    if not added:
+        LOGGER.warning("No subtitle textstreams added for %s; leaving SMIL untouched", job.smil)
+        return False
+
     if hasattr(ET, "indent"):
         ET.indent(tree, space="  ")  # type: ignore[arg-type]
 
-    tree.write(job.smil, encoding="utf-8", xml_declaration=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = job.smil.with_suffix(job.smil.suffix + f".bak.{timestamp}")
+    if not backup_path.exists():
+        try:
+            shutil.copy2(job.smil, backup_path)
+            LOGGER.debug("Backed up SMIL %s to %s", job.smil, backup_path)
+        except OSError as exc:
+            LOGGER.warning("Failed to back up %s to %s: %s", job.smil, backup_path, exc)
+            return False
+
+    # Write atomically so a crash mid-write can never leave a truncated SMIL,
+    # preserving the original file's permission bits
+    tmp_path = job.smil.with_suffix(job.smil.suffix + ".tmp")
+    tree.write(tmp_path, encoding="utf-8", xml_declaration=True)
+    shutil.copymode(job.smil, tmp_path)
+    tmp_path.replace(job.smil)
+    return True
 
 
 def discover_video_jobs(
@@ -1261,6 +1298,12 @@ def process_job(job: VideoJob, args: argparse.Namespace, manifest: Manifest) -> 
     start_time = time.time()
     LOGGER.info("Processing %s", job.video_path)
 
+    precheck_reason = smil_precheck(job)
+    if precheck_reason:
+        skipped = skip_record_for_invalid_smil(job, precheck_reason)
+        manifest.append(skipped)
+        return skipped
+
     # Load filter words (cached after first call)
     filter_words: List[str] = load_filter_words()
 
@@ -1444,6 +1487,10 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
     if not quiet or args.verbose:
         LOGGER.info("[Transcription] Processing %s", job.video_path)
 
+    precheck_reason = smil_precheck(job)
+    if precheck_reason:
+        return skip_record_for_invalid_smil(job, precheck_reason, phase="transcription")
+
     filter_words: List[str] = load_filter_words()
     audio_path: Optional[Path] = None
 
@@ -1519,6 +1566,12 @@ def process_translation_only(
     start_time = time.time()
     if not quiet or args.verbose:
         LOGGER.info("[Translation] Processing %s", job.video_path)
+
+    precheck_reason = smil_precheck(job)
+    if precheck_reason:
+        skipped = skip_record_for_invalid_smil(job, precheck_reason, phase="translation")
+        manifest.append(skipped)
+        return skipped
 
     filter_words: List[str] = load_filter_words()
     metadata = probe_video_metadata(job.video_path)
