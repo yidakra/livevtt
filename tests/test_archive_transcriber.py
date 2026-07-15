@@ -534,3 +534,45 @@ class TestExtractAudio:
         ar_index = cmd.index("-ar")
         assert cmd[ar_index + 1] == "22050"
         print("✓ test_sample_rate_preserved passed")
+
+
+class TestPhaseNeeds:
+    """phase_needs must match needs_transcription/needs_translation exactly."""
+
+    def _job(self, tmp: Path):
+        return VideoJob(
+            video_path=tmp / "video_1080p.mp4",
+            normalized_name="video.mp4",
+            ru_vtt=tmp / "video.ru.vtt",
+            en_vtt=tmp / "video.en.vtt",
+            ttml=tmp / "video.ttml",
+            smil=tmp / "video.smil",
+        )
+
+    def test_matches_separate_checks_across_all_states(self):
+        import itertools
+        import os
+
+        phase_needs = archive_transcriber.phase_needs
+        needs_transcription = archive_transcriber.needs_transcription
+        needs_translation = archive_transcriber.needs_translation
+
+        # Every combination of artifact presence, with fresh and stale mtimes
+        names = ["video_1080p.mp4", "video.ru.vtt", "video.en.vtt", "video.ttml", "video.smil"]
+        for present in itertools.product([False, True], repeat=len(names)):
+            for stale_ru in (False, True):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp = Path(tmpdir)
+                    for name, exists in zip(names, present):
+                        if exists:
+                            (tmp / name).write_text("x")
+                            os.utime(tmp / name, (2000000, 2000000))
+                    ru = tmp / "video.ru.vtt"
+                    if stale_ru and ru.exists():
+                        os.utime(ru, (1000000, 1000000))  # older than everything
+                    job = self._job(tmp)
+                    for ttml_enabled in (False, True):
+                        expected = (needs_transcription(job), needs_translation(job, ttml_enabled))
+                        assert phase_needs(job, ttml_enabled) == expected, (
+                            f"mismatch for present={present} stale_ru={stale_ru} ttml={ttml_enabled}"
+                        )

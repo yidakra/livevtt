@@ -131,6 +131,10 @@ RESOLUTION_TOKEN_PATTERN = re.compile(r"([_.-])(\d{3,4})p(?=([_.-]|$))", re.IGNO
 
 LOGGER = logging.getLogger("archive_transcriber")
 
+# Startup job discovery is NFS-latency-bound (stat/exists round trips), not
+# CPU-bound; a wide thread pool turns hours of sequential stats into minutes.
+STARTUP_STAT_THREADS = 64
+
 
 class SegmentLike(Protocol):
     """Protocol for transcription segment objects."""
@@ -1002,41 +1006,47 @@ def discover_video_jobs(
     skipped_count = 0
     last_log_time = time.time()
 
-    for candidates in grouped.values():
+    def build_job(candidates: List[Path]) -> Optional[VideoJob]:
+        """Return the job for a variant group, or None if empty/already processed."""
         best_path = select_best_variant(candidates)
         if not best_path:
-            continue
+            return None
         normalized_name = normalise_variant_name(best_path)
         ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(
             best_path, normalized_name, input_root, output_root
         )
-
         if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
             LOGGER.debug("Skipping already processed %s", best_path)
-            skipped_count += 1
-        else:
-            jobs.append(
-                VideoJob(
-                    video_path=best_path,
-                    normalized_name=normalized_name,
-                    ru_vtt=ru_vtt,
-                    en_vtt=en_vtt,
-                    ttml=ttml_path,
-                    smil=smil_path,
-                )
-            )
+            return None
+        return VideoJob(
+            video_path=best_path,
+            normalized_name=normalized_name,
+            ru_vtt=ru_vtt,
+            en_vtt=en_vtt,
+            ttml=ttml_path,
+            smil=smil_path,
+        )
 
-        processed_groups += 1
-        current_time = time.time()
-        if current_time - last_log_time >= 5:
-            LOGGER.info(
-                "Building job list... processed %d/%d groups (%d to process, %d already done)",
-                processed_groups,
-                len(grouped),
-                len(jobs),
-                skipped_count,
-            )
-            last_log_time = current_time
+    # The per-group checks are NFS-latency-bound; run them in parallel threads
+    # (stat/exists release the GIL) instead of one round trip at a time.
+    with ThreadPoolExecutor(max_workers=STARTUP_STAT_THREADS) as executor:
+        for job in executor.map(build_job, grouped.values(), chunksize=16):
+            if job is not None:
+                jobs.append(job)
+            else:
+                skipped_count += 1
+
+            processed_groups += 1
+            current_time = time.time()
+            if current_time - last_log_time >= 5:
+                LOGGER.info(
+                    "Building job list... processed %d/%d groups (%d to process, %d already done)",
+                    processed_groups,
+                    len(grouped),
+                    len(jobs),
+                    skipped_count,
+                )
+                last_log_time = current_time
 
     LOGGER.info(
         "Job list complete! %d videos to process (%d already done)",
@@ -1048,19 +1058,34 @@ def discover_video_jobs(
 
 
 def select_best_variant(candidates: List[Path]) -> Optional[Path]:
-    best_path: Optional[Path] = None
-    best_score = (-1, -1)
+    """Pick the highest-resolution variant, falling back to file size on ties.
 
+    Stat calls are only made when the filename resolution is ambiguous — on a
+    143k-group archive over NFS this avoids ~700k round trips at startup.
+    """
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    by_priority: Dict[int, List[Path]] = {}
     for path in candidates:
-        resolution = extract_resolution(path.name)
-        priority = resolution or 0
+        priority = extract_resolution(path.name) or 0
+        by_priority.setdefault(priority, []).append(path)
+
+    contenders = by_priority[max(by_priority)]
+    if len(contenders) == 1:
+        return contenders[0]
+
+    best_path: Optional[Path] = None
+    best_size = -1
+    for path in contenders:
         try:
             size = path.stat().st_size
         except OSError:
             size = 0
-        score = (priority, size)
-        if score > best_score:
-            best_score = score
+        if size > best_size:
+            best_size = size
             best_path = path
 
     return best_path
@@ -1118,6 +1143,35 @@ def needs_translation(job: VideoJob, ttml_enabled: bool) -> bool:
         return any(p.stat().st_mtime < ru_mtime for p in required)
     except OSError:
         return True
+
+
+def phase_needs(job: VideoJob, ttml_enabled: bool) -> Tuple[bool, bool]:
+    """Combined needs_transcription/needs_translation check with one stat per file.
+
+    Semantically identical to calling the two functions separately, but stats
+    each artifact exactly once (5 round trips max instead of ~11) — this check
+    runs once per video across a 143k-video archive on NFS at every startup.
+    """
+
+    def _mtime(path: Path) -> Optional[float]:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return None
+
+    ru_mtime = _mtime(job.ru_vtt)
+    if ru_mtime is None:
+        return True, False  # needs transcription; can't translate without it
+
+    video_mtime = _mtime(job.video_path)
+    need_transcription = video_mtime is None or ru_mtime < video_mtime
+
+    required = [_mtime(job.en_vtt), _mtime(job.smil)]
+    if ttml_enabled:
+        required.append(_mtime(job.ttml))
+    need_translation = any(m is None or m < ru_mtime for m in required)
+
+    return need_transcription, need_translation
 
 
 def extract_audio(video_path: Path, sample_rate: int) -> Path:
@@ -2013,21 +2067,29 @@ def run_two_phase(
     transcription_jobs: List[VideoJob] = []
     translation_jobs: List[VideoJob] = []
     last_log_time = time.time()
+
+    def check_job(j: VideoJob) -> Tuple[bool, bool]:
+        return phase_needs(j, ttml_enabled)
+
     try:
-        for i, j in enumerate(all_jobs):
-            if needs_transcription(j):
-                transcription_jobs.append(j)
-            if needs_translation(j, ttml_enabled):
-                translation_jobs.append(j)
-            if time.time() - last_log_time >= 5:
-                LOGGER.info(
-                    "  Filtering: checked %d/%d (%d transcription, %d translation)",
-                    i + 1,
-                    len(all_jobs),
-                    len(transcription_jobs),
-                    len(translation_jobs),
-                )
-                last_log_time = time.time()
+        # NFS-latency-bound; parallel threads keep job order via executor.map
+        with ThreadPoolExecutor(max_workers=STARTUP_STAT_THREADS) as executor:
+            for i, (j, (need_ts, need_tl)) in enumerate(
+                zip(all_jobs, executor.map(check_job, all_jobs, chunksize=16))
+            ):
+                if need_ts:
+                    transcription_jobs.append(j)
+                if need_tl:
+                    translation_jobs.append(j)
+                if time.time() - last_log_time >= 5:
+                    LOGGER.info(
+                        "  Filtering: checked %d/%d (%d transcription, %d translation)",
+                        i + 1,
+                        len(all_jobs),
+                        len(transcription_jobs),
+                        len(translation_jobs),
+                    )
+                    last_log_time = time.time()
     except KeyboardInterrupt:
         LOGGER.warning("Interrupted during filtering")
         return 130
