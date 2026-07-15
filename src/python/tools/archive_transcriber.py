@@ -1008,15 +1008,19 @@ def discover_video_jobs(
 
     def build_job(candidates: List[Path]) -> Optional[VideoJob]:
         """Return the job for a variant group, or None if empty/already processed."""
-        best_path = select_best_variant(candidates)
-        if not best_path:
-            return None
-        normalized_name = normalise_variant_name(best_path)
-        ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(
-            best_path, normalized_name, input_root, output_root
-        )
-        if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
-            LOGGER.debug("Skipping already processed %s", best_path)
+        try:
+            best_path = select_best_variant(candidates)
+            if not best_path:
+                return None
+            normalized_name = normalise_variant_name(best_path)
+            ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(
+                best_path, normalized_name, input_root, output_root
+            )
+            if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
+                LOGGER.debug("Skipping already processed %s", best_path)
+                return None
+        except OSError as exc:
+            LOGGER.warning("Skipping group %s: stat failed during discovery: %s", candidates[0], exc)
             return None
         return VideoJob(
             video_path=best_path,
@@ -1030,23 +1034,30 @@ def discover_video_jobs(
     # The per-group checks are NFS-latency-bound; run them in parallel threads
     # (stat/exists release the GIL) instead of one round trip at a time.
     with ThreadPoolExecutor(max_workers=STARTUP_STAT_THREADS) as executor:
-        for job in executor.map(build_job, grouped.values(), chunksize=16):
-            if job is not None:
-                jobs.append(job)
-            else:
-                skipped_count += 1
+        try:
+            for job in executor.map(build_job, grouped.values(), chunksize=16):
+                if job is not None:
+                    jobs.append(job)
+                else:
+                    skipped_count += 1
 
-            processed_groups += 1
-            current_time = time.time()
-            if current_time - last_log_time >= 5:
-                LOGGER.info(
-                    "Building job list... processed %d/%d groups (%d to process, %d already done)",
-                    processed_groups,
-                    len(grouped),
-                    len(jobs),
-                    skipped_count,
-                )
-                last_log_time = current_time
+                processed_groups += 1
+                current_time = time.time()
+                if current_time - last_log_time >= 5:
+                    LOGGER.info(
+                        "Building job list... processed %d/%d groups (%d to process, %d already done)",
+                        processed_groups,
+                        len(grouped),
+                        len(jobs),
+                        skipped_count,
+                    )
+                    last_log_time = current_time
+        except BaseException:
+            # Ctrl+C (or a worker error) must not wait for the queued backlog:
+            # executor.map submits every group up front, and the context
+            # manager's shutdown would otherwise drain all of them first.
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
 
     LOGGER.info(
         "Job list complete! %d videos to process (%d already done)",
@@ -2074,22 +2085,27 @@ def run_two_phase(
     try:
         # NFS-latency-bound; parallel threads keep job order via executor.map
         with ThreadPoolExecutor(max_workers=STARTUP_STAT_THREADS) as executor:
-            for i, (j, (need_ts, need_tl)) in enumerate(
-                zip(all_jobs, executor.map(check_job, all_jobs, chunksize=16))
-            ):
-                if need_ts:
-                    transcription_jobs.append(j)
-                if need_tl:
-                    translation_jobs.append(j)
-                if time.time() - last_log_time >= 5:
-                    LOGGER.info(
-                        "  Filtering: checked %d/%d (%d transcription, %d translation)",
-                        i + 1,
-                        len(all_jobs),
-                        len(transcription_jobs),
-                        len(translation_jobs),
-                    )
-                    last_log_time = time.time()
+            try:
+                for i, (j, (need_ts, need_tl)) in enumerate(
+                    zip(all_jobs, executor.map(check_job, all_jobs, chunksize=16))
+                ):
+                    if need_ts:
+                        transcription_jobs.append(j)
+                    if need_tl:
+                        translation_jobs.append(j)
+                    if time.time() - last_log_time >= 5:
+                        LOGGER.info(
+                            "  Filtering: checked %d/%d (%d transcription, %d translation)",
+                            i + 1,
+                            len(all_jobs),
+                            len(transcription_jobs),
+                            len(translation_jobs),
+                        )
+                        last_log_time = time.time()
+            except BaseException:
+                # Don't drain the queued backlog on interrupt (see discover_video_jobs)
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
     except KeyboardInterrupt:
         LOGGER.warning("Interrupted during filtering")
         return 130
