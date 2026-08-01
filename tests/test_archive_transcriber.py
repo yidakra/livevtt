@@ -2,6 +2,7 @@
 """Unit tests for archive_transcriber.py core functionality."""
 
 import importlib
+import os
 import re
 import sys
 import tempfile
@@ -9,6 +10,8 @@ import typing as _typing
 from pathlib import Path
 from typing import Callable, Optional
 from unittest import mock
+
+import pytest
 
 # Mock faster_whisper before importing archive_transcriber
 sys.modules["faster_whisper"] = mock.MagicMock()
@@ -722,6 +725,101 @@ class TestAcquireLongVideoSlot:
             acquired = archive_transcriber.acquire_long_video_slot(duration, 45.0, Path("v.mp4"))
             self._release_if(acquired)
             assert acquired is False
+
+    def test_unbalanced_release_fails_loudly(self):
+        # BoundedSemaphore: an over-release must raise rather than silently
+        # widening the gate to allow two concurrent long videos.
+        with pytest.raises(ValueError):
+            archive_transcriber.LONG_VIDEO_GATE.release()
+
+
+class TestTwoPhaseQueueing:
+    """Phase 2 must pick up newly transcribed videos exactly once, without re-statting everything."""
+
+    def _args(self, tmp: Path):
+        import argparse
+
+        return argparse.Namespace(
+            max_files=None,
+            force_scan=True,
+            no_ttml=True,
+            workers=1,
+            progress=False,
+            verbose=False,
+            long_video_minutes=0,
+        )
+
+    def _make_video(self, tmp: Path, stem: str, *, ru=False, en=False, smil=False, stale_ru=False):
+        video = tmp / f"{stem}_1080p.mp4"
+        video.write_bytes(b"x" * 1000)
+        stamp = 2000000 if stale_ru else 1000000
+        os.utime(video, (stamp, stamp))
+        for flag, suffix in ((ru, "ru.vtt"), (en, "en.vtt"), (smil, "smil")):
+            if flag:
+                artifact = tmp / f"{stem}.{suffix}"
+                artifact.write_text("x")
+                # stale_ru: artifacts predate the video, so it needs both phases
+                os.utime(artifact, (1000000, 1000000))
+        return video
+
+    def test_newly_transcribed_video_translated_once(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            archive = tmp / "archive"
+            archive.mkdir()
+
+            # A: nothing yet -> transcribe, then translate
+            self._make_video(archive, "a")
+            # B: fully done -> neither phase
+            self._make_video(archive, "b", ru=True, en=True, smil=True)
+            # C: transcript only -> translate only
+            self._make_video(archive, "c", ru=True, smil=True)
+            # D: stale transcript, no en.vtt -> needs BOTH phases. It is already
+            # in the Phase 2 queue before Phase 1 runs, so the post-Phase-1
+            # re-filter must not queue it a second time.
+            self._make_video(archive, "d", ru=True, smil=True, stale_ru=True)
+
+            transcribed: list[str] = []
+            translated: list[str] = []
+
+            def fake_transcribe(job, args, quiet=False):
+                transcribed.append(job.normalized_name)
+                job.ru_vtt.write_text("WEBVTT\n")  # now eligible for translation
+                return {
+                    "video_path": str(job.video_path),
+                    "status": "success",
+                    "phase": "transcription",
+                    "processed_at": "2026-08-01 00:00:00",
+                }
+
+            def fake_translate(job, args, manifest, quiet=False):
+                translated.append(job.normalized_name)
+                return {
+                    "video_path": str(job.video_path),
+                    "status": "success",
+                    "phase": "translation",
+                    "processed_at": "2026-08-01 00:00:00",
+                }
+
+            monkeypatch.setattr(archive_transcriber, "process_transcription_only", fake_transcribe)
+            monkeypatch.setattr(archive_transcriber, "process_translation_only", fake_translate)
+
+            manifest = Manifest(tmp / "manifest.jsonl")
+            rc = archive_transcriber.run_two_phase(
+                self._args(tmp),
+                archive,
+                None,
+                manifest,
+                [".mp4"],
+                tmp / "scan_cache.json",
+            )
+
+            assert rc == 0
+            assert sorted(transcribed) == ["a.mp4", "d.mp4"]
+            # c and d were queued up front, a became eligible after Phase 1 —
+            # each exactly once, and d is not duplicated by the re-filter
+            assert sorted(translated) == ["a.mp4", "c.mp4", "d.mp4"]
+            assert len(translated) == 3
 
 
 class TestTranscriptionErrorRecord:

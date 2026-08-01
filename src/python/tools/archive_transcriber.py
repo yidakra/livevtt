@@ -140,7 +140,9 @@ STARTUP_STAT_THREADS = 64
 # exceeded the 31 GB of this box (no swap) and got the service OOM-killed
 # daily. Videos above the --long-video-minutes threshold therefore hold this
 # semaphore so only one of them transcribes at a time.
-LONG_VIDEO_GATE = threading.Semaphore(1)
+# Bounded so an unbalanced release() raises instead of silently widening the
+# gate and letting two long videos transcribe at once.
+LONG_VIDEO_GATE = threading.BoundedSemaphore(1)
 
 # Error types that will not succeed on retry while the input is unchanged
 # (e.g. FFmpeg cannot extract audio from a corrupt container). Jobs whose
@@ -2288,9 +2290,9 @@ def run_two_phase(
                     record.get("error", "unknown"),
                 )
                 # Persist failures so known_permanent_failure() can exclude
-                # unfixable inputs from the next cycle.
-                if record.get("status") == "error":
-                    manifest.append(record)
+                # unfixable inputs from the next cycle, and so invalid-SMIL
+                # skips survive restarts as the skip_record contract promises.
+                manifest.append(record)
             if progress_bar is not None:
                 cast(Any, progress_bar).set_postfix(ok=phase1_successes, fail=phase1_failures, refresh=False)
                 progress_bar.update(1)
