@@ -135,6 +135,21 @@ LOGGER = logging.getLogger("archive_transcriber")
 # CPU-bound; a wide thread pool turns hours of sequential stats into minutes.
 STARTUP_STAT_THREADS = 64
 
+# Peak RSS during model.transcribe() grows with audio duration (~3 GB for a
+# 27-minute video on faster-whisper 1.2.1); four workers on multi-hour videos
+# exceeded the 31 GB of this box (no swap) and got the service OOM-killed
+# daily. Videos above the --long-video-minutes threshold therefore hold this
+# semaphore so only one of them transcribes at a time.
+# Bounded so an unbalanced release() raises instead of silently widening the
+# gate and letting two long videos transcribe at once.
+LONG_VIDEO_GATE = threading.BoundedSemaphore(1)
+
+# Error types that will not succeed on retry while the input is unchanged
+# (e.g. FFmpeg cannot extract audio from a corrupt container). Jobs whose
+# last manifest record carries one of these and an unchanged video mtime are
+# excluded from Phase 1 instead of failing again every cycle.
+PERMANENT_ERROR_TYPES = {"audio_extraction"}
+
 
 class SegmentLike(Protocol):
     """Protocol for transcription segment objects."""
@@ -169,6 +184,7 @@ class ManifestRecord(TypedDict, total=False):
     phase: str
     worker_info: str
     processing_mode: str
+    video_mtime: Optional[float]
 
 
 # Register signal handlers for graceful shutdown and pause
@@ -575,7 +591,7 @@ def probe_video_metadata(video_path: Path) -> VideoMetadata:
     ]
 
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        result = subprocess.run(command, capture_output=True, text=True, errors="replace", check=True)
         data = cast(Dict[str, Any], json.loads(result.stdout or "{}"))
     except (subprocess.CalledProcessError, json.JSONDecodeError) as exc:
         LOGGER.warning("Failed to probe metadata for %s: %s", video_path, exc)
@@ -1185,6 +1201,70 @@ def phase_needs(job: VideoJob, ttml_enabled: bool) -> Tuple[bool, bool]:
     return need_transcription, need_translation
 
 
+def known_permanent_failure(job: VideoJob, manifest: ManifestProtocol) -> bool:
+    """True if the video's last manifest record is a permanent error and the video is unchanged.
+
+    Prevents unfixable inputs (corrupt containers FFmpeg cannot read) from
+    being retried every cycle. A changed video mtime (file replaced/repaired)
+    makes the job eligible again.
+    """
+    record = manifest.get(job.video_path)
+    if record is None or record.get("status") != "error":
+        return False
+    if record.get("error_type") not in PERMANENT_ERROR_TYPES:
+        return False
+    recorded_mtime = record.get("video_mtime")
+    if recorded_mtime is None:
+        return False
+    try:
+        return job.video_path.stat().st_mtime == float(recorded_mtime)
+    except OSError:
+        return False
+
+
+def sort_jobs_by_size(jobs: List[VideoJob]) -> List[VideoJob]:
+    """Order jobs smallest video first (size is a cheap NFS-side proxy for duration).
+
+    Concurrent workers then always hold similarly-sized jobs, which bounds
+    their combined transcribe peak RSS, and the multi-hour videos that need
+    the LONG_VIDEO_GATE run last — after the bulk of the queue has completed —
+    instead of monopolizing the head of every cycle.
+    """
+
+    def _size(job: VideoJob) -> int:
+        try:
+            return job.video_path.stat().st_size
+        except OSError:
+            return 0
+
+    with ThreadPoolExecutor(max_workers=STARTUP_STAT_THREADS) as executor:
+        try:
+            sizes = list(executor.map(_size, jobs, chunksize=16))
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+    order = sorted(range(len(jobs)), key=sizes.__getitem__)
+    return [jobs[i] for i in order]
+
+
+def acquire_long_video_slot(duration: Optional[float], threshold_minutes: float, video_path: Path) -> bool:
+    """Block until this video may transcribe; True if the exclusive long-video slot was taken.
+
+    The caller must release LONG_VIDEO_GATE when done iff this returns True.
+    Videos shorter than the threshold (or an unknown duration, or a disabled
+    threshold <= 0) never wait and never take the slot.
+    """
+    if threshold_minutes <= 0 or not duration or duration < threshold_minutes * 60:
+        return False
+    LOGGER.info(
+        "[LongVideo] %s is %.0f min long; waiting for exclusive long-video slot",
+        video_path,
+        duration / 60,
+    )
+    LONG_VIDEO_GATE.acquire()
+    return True
+
+
 def extract_audio(video_path: Path, sample_rate: int) -> Path:
     tmp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     tmp_file_path = Path(tmp_file.name)
@@ -1206,7 +1286,10 @@ def extract_audio(video_path: Path, sample_rate: int) -> Path:
     ]
 
     LOGGER.debug("Running FFmpeg: %s", " ".join(command))
-    result = subprocess.run(command, capture_output=True, text=True)
+    # errors="replace": corrupt containers make FFmpeg emit non-UTF-8 bytes on
+    # stderr; a strict decode would raise UnicodeDecodeError here and mask the
+    # actual extraction failure.
+    result = subprocess.run(command, capture_output=True, text=True, errors="replace")
     if result.returncode != 0:
         stderr_preview = (result.stderr or "").splitlines()[-5:]
         raise RuntimeError(
@@ -1253,7 +1336,7 @@ def detect_audio_start_time(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=30)
         # Parse FFmpeg output for silence end times
         silence_end_times: List[float] = []
         for line in result.stderr.split("\n"):
@@ -1558,8 +1641,17 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
 
     filter_words: List[str] = load_filter_words()
     audio_path: Optional[Path] = None
+    holds_long_slot = False
+    long_video_minutes = float(getattr(args, "long_video_minutes", 0) or 0)
 
     try:
+        if long_video_minutes > 0:
+            try:
+                duration_hint = probe_video_metadata(job.video_path).duration
+            except Exception:
+                duration_hint = None  # broken container: extract_audio below reports the real error
+            holds_long_slot = acquire_long_video_slot(duration_hint, long_video_minutes, job.video_path)
+
         audio_path = extract_audio(job.video_path, args.sample_rate)
         LOGGER.debug("[Transcription] Loading model %s...", args.model)
         model: Any = get_model(args)
@@ -1606,17 +1698,29 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
 
     except Exception as exc:
         LOGGER.error("[Transcription] Failed %s: %s", job.video_path, exc)
+        # Audio-extraction failures are input defects that retrying cannot fix;
+        # record the video mtime so the job is skipped until the file changes.
+        is_extract_failure = isinstance(exc, RuntimeError) and str(exc).startswith("FFmpeg failed")
+        video_mtime: Optional[float] = None
+        try:
+            video_mtime = job.video_path.stat().st_mtime
+        except OSError:
+            pass
         return {
             "video_path": str(job.video_path),
             "ru_vtt": str(job.ru_vtt),
             "status": "error",
             "phase": "transcription",
             "error": str(exc),
+            "error_type": "audio_extraction" if is_extract_failure else "processing",
+            "video_mtime": video_mtime,
             "processed_at": human_time(),
             "worker_info": get_worker_info(),
         }
 
     finally:
+        if holds_long_slot:
+            LONG_VIDEO_GATE.release()
         if audio_path and audio_path.exists():
             try:
                 audio_path.unlink()
@@ -1639,10 +1743,16 @@ def process_translation_only(
         return skipped
 
     filter_words: List[str] = load_filter_words()
-    metadata = probe_video_metadata(job.video_path)
     audio_path: Optional[Path] = None
+    holds_long_slot = False
+    long_video_minutes = float(getattr(args, "long_video_minutes", 0) or 0)
 
     try:
+        # Probe inside the try: a corrupt container must produce an error
+        # record, not an exception that escapes the worker thread.
+        metadata = probe_video_metadata(job.video_path)
+        holds_long_slot = acquire_long_video_slot(metadata.duration, long_video_minutes, job.video_path)
+
         # Read existing Russian VTT for segment count comparison
         ru_content = job.ru_vtt.read_text(encoding="utf-8") if job.ru_vtt.exists() else ""
         ru_cues: List[Any] = parse_vtt_content(ru_content) if ru_content else []
@@ -1764,6 +1874,8 @@ def process_translation_only(
         return error_record
 
     finally:
+        if holds_long_slot:
+            LONG_VIDEO_GATE.release()
         if audio_path and audio_path.exists():
             try:
                 audio_path.unlink()
@@ -1867,6 +1979,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Comma-separated list of video extensions to include",
     )
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
+    parser.add_argument(
+        "--long-video-minutes",
+        type=float,
+        default=45.0,
+        help=(
+            "Videos longer than this many minutes are transcribed one at a time "
+            "to bound peak RAM (transcribe RSS grows with duration); 0 disables the gate"
+        ),
+    )
     parser.add_argument(
         "--gpus",
         type=str,
@@ -2110,6 +2231,19 @@ def run_two_phase(
         LOGGER.warning("Interrupted during filtering")
         return 130
 
+    # Drop inputs already recorded as permanently broken (corrupt containers
+    # fail identically every cycle until the file itself is replaced).
+    retryable = [j for j in transcription_jobs if not known_permanent_failure(j, manifest)]
+    if len(retryable) != len(transcription_jobs):
+        LOGGER.info(
+            "Skipping %d videos with recorded permanent failures (unchanged since last attempt)",
+            len(transcription_jobs) - len(retryable),
+        )
+        transcription_jobs = retryable
+
+    # Smallest first: bulk progress up front, OOM-prone giants last (and gated).
+    transcription_jobs = sort_jobs_by_size(transcription_jobs)
+
     LOGGER.info(
         "Two-phase mode: %d transcriptions needed, %d translations needed (from %d total videos)",
         len(transcription_jobs),
@@ -2155,6 +2289,10 @@ def run_two_phase(
                     video_path,
                     record.get("error", "unknown"),
                 )
+                # Persist failures so known_permanent_failure() can exclude
+                # unfixable inputs from the next cycle, and so invalid-SMIL
+                # skips survive restarts as the skip_record contract promises.
+                manifest.append(record)
             if progress_bar is not None:
                 cast(Any, progress_bar).set_postfix(ok=phase1_successes, fail=phase1_failures, refresh=False)
                 progress_bar.update(1)
@@ -2194,12 +2332,43 @@ def run_two_phase(
         total_successes += phase1_successes
         total_failures += phase1_failures
 
-        # Re-evaluate translation jobs after transcription phase
-        # (newly transcribed files may now be ready for translation)
-        translation_jobs = [j for j in all_jobs if needs_translation(j, ttml_enabled)]
-        LOGGER.info("After Phase 1: %d translations now needed", len(translation_jobs))
+        # Re-evaluate translation needs after transcription, but only for the
+        # jobs Phase 1 actually touched: a translation becomes newly needed
+        # only when a fresh ru.vtt appeared. Re-statting all jobs here (and
+        # sequentially at that) used to add hours of dead time per cycle on
+        # a 143k-video NFS archive.
+        already_queued = {j.video_path for j in translation_jobs}
+        recheck = [j for j in transcription_jobs if j.video_path not in already_queued]
+        newly_ready: List[VideoJob] = []
+
+        def recheck_job(j: VideoJob) -> bool:
+            return needs_translation(j, ttml_enabled)
+
+        try:
+            with ThreadPoolExecutor(max_workers=STARTUP_STAT_THREADS) as executor:
+                try:
+                    for j, need_tl in zip(recheck, executor.map(recheck_job, recheck, chunksize=16)):
+                        if need_tl:
+                            newly_ready.append(j)
+                except BaseException:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise
+        except KeyboardInterrupt:
+            LOGGER.warning("Interrupted during post-transcription re-filter")
+            return 130
+
+        translation_jobs.extend(newly_ready)
+        LOGGER.info(
+            "After Phase 1: %d translations now needed (%d from new transcriptions)",
+            len(translation_jobs),
+            len(newly_ready),
+        )
     else:
         LOGGER.info("=== PHASE 1: No transcriptions needed ===")
+
+    # Smallest first (see sort_jobs_by_size): steady progress before the
+    # multi-hour videos, and concurrent workers hold similarly-sized jobs.
+    translation_jobs = sort_jobs_by_size(translation_jobs)
 
     # Phase 2: Translations
     if translation_jobs:

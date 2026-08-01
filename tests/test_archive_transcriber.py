@@ -2,6 +2,7 @@
 """Unit tests for archive_transcriber.py core functionality."""
 
 import importlib
+import os
 import re
 import sys
 import tempfile
@@ -9,6 +10,8 @@ import typing as _typing
 from pathlib import Path
 from typing import Callable, Optional
 from unittest import mock
+
+import pytest
 
 # Mock faster_whisper before importing archive_transcriber
 sys.modules["faster_whisper"] = mock.MagicMock()
@@ -576,3 +579,304 @@ class TestPhaseNeeds:
                         assert phase_needs(job, ttml_enabled) == expected, (
                             f"mismatch for present={present} stale_ru={stale_ru} ttml={ttml_enabled}"
                         )
+
+
+def _make_job(tmp: Path, stem: str = "video"):
+    return VideoJob(
+        video_path=tmp / f"{stem}_1080p.mp4",
+        normalized_name=f"{stem}.mp4",
+        ru_vtt=tmp / f"{stem}.ru.vtt",
+        en_vtt=tmp / f"{stem}.en.vtt",
+        ttml=tmp / f"{stem}.ttml",
+        smil=tmp / f"{stem}.smil",
+    )
+
+
+class TestKnownPermanentFailure:
+    """Videos with recorded permanent errors must not be retried while unchanged."""
+
+    def _manifest(self, tmp: Path):
+        return Manifest(tmp / "manifest.jsonl")
+
+    def _error_record(self, job, video_mtime, error_type="audio_extraction", status="error"):
+        return {
+            "video_path": str(job.video_path),
+            "status": status,
+            "phase": "transcription",
+            "error": "FFmpeg failed: return code 234",
+            "error_type": error_type,
+            "video_mtime": video_mtime,
+            "processed_at": "2026-08-01 00:00:00",
+        }
+
+    def test_skips_unchanged_video_with_extraction_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            job = _make_job(tmp)
+            job.video_path.write_bytes(b"corrupt")
+            manifest = self._manifest(tmp)
+            manifest.append(self._error_record(job, job.video_path.stat().st_mtime))
+
+            assert archive_transcriber.known_permanent_failure(job, manifest) is True
+
+    def test_retries_when_video_changed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            job = _make_job(tmp)
+            job.video_path.write_bytes(b"corrupt")
+            manifest = self._manifest(tmp)
+            manifest.append(self._error_record(job, job.video_path.stat().st_mtime - 100.0))
+
+            assert archive_transcriber.known_permanent_failure(job, manifest) is False
+
+    def test_retries_transient_error_types(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            job = _make_job(tmp)
+            job.video_path.write_bytes(b"ok")
+            manifest = self._manifest(tmp)
+            manifest.append(self._error_record(job, job.video_path.stat().st_mtime, error_type="processing"))
+
+            assert archive_transcriber.known_permanent_failure(job, manifest) is False
+
+    def test_retries_without_record_or_mtime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            job = _make_job(tmp)
+            job.video_path.write_bytes(b"ok")
+            manifest = self._manifest(tmp)
+            assert archive_transcriber.known_permanent_failure(job, manifest) is False
+
+            manifest.append(self._error_record(job, None))
+            assert archive_transcriber.known_permanent_failure(job, manifest) is False
+
+    def test_success_record_never_blocks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            job = _make_job(tmp)
+            job.video_path.write_bytes(b"ok")
+            manifest = self._manifest(tmp)
+            manifest.append(
+                self._error_record(job, job.video_path.stat().st_mtime, status="success"),
+            )
+            assert archive_transcriber.known_permanent_failure(job, manifest) is False
+
+
+class TestSortJobsBySize:
+    """Phase queues run smallest video first; unreadable paths sort first and fail fast."""
+
+    def test_orders_smallest_first(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            jobs = []
+            for stem, size in (("big", 3000), ("small", 10), ("mid", 500)):
+                job = _make_job(tmp, stem)
+                job.video_path.write_bytes(b"x" * size)
+                jobs.append(job)
+
+            ordered = archive_transcriber.sort_jobs_by_size(jobs)
+            assert [j.normalized_name for j in ordered] == ["small.mp4", "mid.mp4", "big.mp4"]
+
+    def test_missing_file_sorts_first(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            present = _make_job(tmp, "present")
+            present.video_path.write_bytes(b"x" * 100)
+            missing = _make_job(tmp, "missing")
+
+            ordered = archive_transcriber.sort_jobs_by_size([present, missing])
+            assert ordered[0] is missing
+
+    def test_empty_list(self):
+        assert archive_transcriber.sort_jobs_by_size([]) == []
+
+
+class TestAcquireLongVideoSlot:
+    """Only videos over the threshold take the exclusive slot; others never wait."""
+
+    def _release_if(self, acquired: bool) -> None:
+        if acquired:
+            archive_transcriber.LONG_VIDEO_GATE.release()
+
+    def test_short_video_does_not_take_slot(self):
+        acquired = archive_transcriber.acquire_long_video_slot(10 * 60, 45.0, Path("v.mp4"))
+        self._release_if(acquired)
+        assert acquired is False
+
+    def test_long_video_takes_and_holds_slot(self):
+        acquired = archive_transcriber.acquire_long_video_slot(120 * 60, 45.0, Path("v.mp4"))
+        try:
+            assert acquired is True
+            # Slot is exclusive while held
+            assert archive_transcriber.LONG_VIDEO_GATE.acquire(blocking=False) is False
+        finally:
+            self._release_if(acquired)
+        # And free again after release
+        assert archive_transcriber.LONG_VIDEO_GATE.acquire(blocking=False) is True
+        archive_transcriber.LONG_VIDEO_GATE.release()
+
+    def test_disabled_threshold_never_gates(self):
+        acquired = archive_transcriber.acquire_long_video_slot(999 * 60, 0, Path("v.mp4"))
+        self._release_if(acquired)
+        assert acquired is False
+
+    def test_unknown_duration_never_gates(self):
+        for duration in (None, 0.0):
+            acquired = archive_transcriber.acquire_long_video_slot(duration, 45.0, Path("v.mp4"))
+            self._release_if(acquired)
+            assert acquired is False
+
+    def test_unbalanced_release_fails_loudly(self):
+        # BoundedSemaphore: an over-release must raise rather than silently
+        # widening the gate to allow two concurrent long videos.
+        with pytest.raises(ValueError):
+            archive_transcriber.LONG_VIDEO_GATE.release()
+
+
+class TestTwoPhaseQueueing:
+    """Phase 2 must pick up newly transcribed videos exactly once, without re-statting everything."""
+
+    def _args(self, tmp: Path):
+        import argparse
+
+        return argparse.Namespace(
+            max_files=None,
+            force_scan=True,
+            no_ttml=True,
+            workers=1,
+            progress=False,
+            verbose=False,
+            long_video_minutes=0,
+        )
+
+    def _make_video(self, tmp: Path, stem: str, *, ru=False, en=False, smil=False, stale_ru=False):
+        video = tmp / f"{stem}_1080p.mp4"
+        video.write_bytes(b"x" * 1000)
+        stamp = 2000000 if stale_ru else 1000000
+        os.utime(video, (stamp, stamp))
+        for flag, suffix in ((ru, "ru.vtt"), (en, "en.vtt"), (smil, "smil")):
+            if flag:
+                artifact = tmp / f"{stem}.{suffix}"
+                artifact.write_text("x")
+                # stale_ru: artifacts predate the video, so it needs both phases
+                os.utime(artifact, (1000000, 1000000))
+        return video
+
+    def test_newly_transcribed_video_translated_once(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            archive = tmp / "archive"
+            archive.mkdir()
+
+            # A: nothing yet -> transcribe, then translate
+            self._make_video(archive, "a")
+            # B: fully done -> neither phase
+            self._make_video(archive, "b", ru=True, en=True, smil=True)
+            # C: transcript only -> translate only
+            self._make_video(archive, "c", ru=True, smil=True)
+            # D: stale transcript, no en.vtt -> needs BOTH phases. It is already
+            # in the Phase 2 queue before Phase 1 runs, so the post-Phase-1
+            # re-filter must not queue it a second time.
+            self._make_video(archive, "d", ru=True, smil=True, stale_ru=True)
+
+            transcribed: list[str] = []
+            translated: list[str] = []
+
+            def fake_transcribe(job, args, quiet=False):
+                transcribed.append(job.normalized_name)
+                job.ru_vtt.write_text("WEBVTT\n")  # now eligible for translation
+                return {
+                    "video_path": str(job.video_path),
+                    "status": "success",
+                    "phase": "transcription",
+                    "processed_at": "2026-08-01 00:00:00",
+                }
+
+            def fake_translate(job, args, manifest, quiet=False):
+                translated.append(job.normalized_name)
+                return {
+                    "video_path": str(job.video_path),
+                    "status": "success",
+                    "phase": "translation",
+                    "processed_at": "2026-08-01 00:00:00",
+                }
+
+            monkeypatch.setattr(archive_transcriber, "process_transcription_only", fake_transcribe)
+            monkeypatch.setattr(archive_transcriber, "process_translation_only", fake_translate)
+
+            manifest = Manifest(tmp / "manifest.jsonl")
+            rc = archive_transcriber.run_two_phase(
+                self._args(tmp),
+                archive,
+                None,
+                manifest,
+                [".mp4"],
+                tmp / "scan_cache.json",
+            )
+
+            assert rc == 0
+            assert sorted(transcribed) == ["a.mp4", "d.mp4"]
+            # c and d were queued up front, a became eligible after Phase 1 —
+            # each exactly once, and d is not duplicated by the re-filter
+            assert sorted(translated) == ["a.mp4", "c.mp4", "d.mp4"]
+            assert len(translated) == 3
+
+
+class TestTranscriptionErrorRecord:
+    """Extraction failures must be recorded as permanent with the video mtime."""
+
+    def _args(self):
+        import argparse
+
+        return argparse.Namespace(
+            sample_rate=16000,
+            model="large-v3",
+            beam_size=5,
+            source_language="ru",
+            vad_filter=True,
+            trim_silence=False,
+            verbose=False,
+            long_video_minutes=0,
+        )
+
+    def test_ffmpeg_failure_marked_permanent(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            job = _make_job(tmp)
+            job.video_path.write_bytes(b"corrupt")
+            # Valid transcoder SMIL so the precheck passes
+            job.smil.write_text(
+                "<?xml version='1.0'?><smil><head/><body><switch>"
+                "<video src='mp4:video_1080p.mp4'/><video src='mp4:video_720p.mp4'/>"
+                "</switch></body></smil>"
+            )
+
+            def boom(video_path, sample_rate):
+                raise RuntimeError(f"FFmpeg failed for {video_path}: return code 234")
+
+            monkeypatch.setattr(archive_transcriber, "extract_audio", boom)
+            record = archive_transcriber.process_transcription_only(job, self._args(), quiet=True)
+
+            assert record["status"] == "error"
+            assert record["error_type"] == "audio_extraction"
+            assert record["video_mtime"] == job.video_path.stat().st_mtime
+
+    def test_other_failure_not_marked_permanent(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            job = _make_job(tmp)
+            job.video_path.write_bytes(b"ok")
+            job.smil.write_text(
+                "<?xml version='1.0'?><smil><head/><body><switch>"
+                "<video src='mp4:video_1080p.mp4'/><video src='mp4:video_720p.mp4'/>"
+                "</switch></body></smil>"
+            )
+
+            def boom(video_path, sample_rate):
+                raise ValueError("CUDA hiccup")
+
+            monkeypatch.setattr(archive_transcriber, "extract_audio", boom)
+            record = archive_transcriber.process_transcription_only(job, self._args(), quiet=True)
+
+            assert record["status"] == "error"
+            assert record["error_type"] == "processing"
