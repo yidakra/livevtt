@@ -135,20 +135,108 @@ LOGGER = logging.getLogger("archive_transcriber")
 # CPU-bound; a wide thread pool turns hours of sequential stats into minutes.
 STARTUP_STAT_THREADS = 64
 
-# Peak RSS during model.transcribe() grows with audio duration (~3 GB for a
-# 27-minute video on faster-whisper 1.2.1); four workers on multi-hour videos
-# exceeded the 31 GB of this box (no swap) and got the service OOM-killed
-# daily. Videos above the --long-video-minutes threshold therefore hold this
-# semaphore so only one of them transcribes at a time.
-# Bounded so an unbalanced release() raises instead of silently widening the
-# gate and letting two long videos transcribe at once.
-LONG_VIDEO_GATE = threading.BoundedSemaphore(1)
+# Peak RSS of a transcribe is dominated by audio decoding, not by the model,
+# and grows linearly with duration. Measured on this box (faster-whisper 1.2.1,
+# large-v3, float16, 16 kHz mono) by transcribing the same source at five
+# lengths and reading ru_maxrss:
+#
+#     15 min  3.21 GB    103 min   6.06 GB
+#     30 min  3.21 GB    205 min  11.68 GB
+#     51 min  3.25 GB
+#
+# which fits peak = 0.44 GB + 0.0548 GB per audio-minute. Below ~50 minutes the
+# one-off model-load spike (~3.2 GB) sits above that line and masks it, which is
+# why short videos all cost the same.
+#
+# Admission is therefore budgeted in audio-minutes in flight rather than in
+# video count: several ordinary videos decode in parallel, while one multi-hour
+# video consumes the whole budget and runs alone. A count-based gate cannot
+# express that -- it either serialises videos that would comfortably fit
+# together, or lets a multi-hour video run alongside three others and blows the
+# 31 GB of this box (no swap), which is what OOM-killed the service daily.
+#
+# Sizing the default: the service floor is ~13.5 GB (steady RSS with all workers
+# warm, sampled 473 times), and each extra concurrent decode adds
+# 0.44 + 0.0548 * minutes. 220 minutes admits four ~51-minute videos at once --
+# what the current backlog looks like -- for a projected peak near 23 GB, which
+# leaves ~8 GB of headroom. Raise it only against a re-measured floor.
+TRANSCRIBE_MINUTES_BUDGET = 220.0
 
 # Error types that will not succeed on retry while the input is unchanged
 # (e.g. FFmpeg cannot extract audio from a corrupt container). Jobs whose
 # last manifest record carries one of these and an unchanged video mtime are
 # excluded from Phase 1 instead of failing again every cycle.
 PERMANENT_ERROR_TYPES = {"audio_extraction"}
+
+
+class AudioMinutesBudget:
+    """Admission control on the total audio-minutes being decoded at once.
+
+    Workers charge a job's duration against a fixed budget before transcribing
+    and refund it afterwards, so concurrency adapts to how expensive the jobs
+    actually are instead of being a fixed worker count.
+
+    Admission is strictly FIFO. A long video would otherwise starve
+    indefinitely: it needs most of the budget, while short videos behind it
+    keep fitting into the slack it is waiting to accumulate. Head-of-line
+    blocking is the point here, not a side effect.
+    """
+
+    def __init__(self, budget_minutes: float) -> None:
+        if budget_minutes <= 0:
+            raise ValueError("budget_minutes must be positive")
+        self._budget = budget_minutes
+        self._available = budget_minutes
+        self._cond = threading.Condition()
+        self._next_ticket = 0
+        self._now_serving = 0
+
+    @property
+    def budget_minutes(self) -> float:
+        return self._budget
+
+    def acquire(self, minutes: Optional[float]) -> float:
+        """Block until `minutes` of budget is free; return the amount charged.
+
+        A video longer than the entire budget is charged the whole budget
+        rather than being refused, so it runs alone instead of deadlocking.
+        An unknown duration is charged nothing -- the caller could not have
+        probed it, and refusing to run it would strand the job forever.
+        """
+        cost = min(max(minutes or 0.0, 0.0), self._budget)
+        with self._cond:
+            ticket = self._next_ticket
+            self._next_ticket += 1
+            while ticket != self._now_serving or cost > self._available:
+                self._cond.wait()
+            self._now_serving += 1
+            self._available -= cost
+            self._cond.notify_all()
+        return cost
+
+    def release(self, cost: float) -> None:
+        with self._cond:
+            self._available += cost
+            if self._available > self._budget:
+                # Mirrors BoundedSemaphore: an unbalanced release must fail
+                # loudly rather than silently widen the budget.
+                self._available -= cost
+                raise ValueError("released more budget than was acquired")
+            self._cond.notify_all()
+
+
+_BUDGET_LOCK = threading.Lock()
+_BUDGET: Optional[AudioMinutesBudget] = None
+
+
+def get_transcribe_budget(args: Any) -> AudioMinutesBudget:
+    """Return the process-wide admission budget, built once from args."""
+    global _BUDGET
+    with _BUDGET_LOCK:
+        if _BUDGET is None:
+            configured = float(getattr(args, "transcribe_minutes_budget", 0) or 0)
+            _BUDGET = AudioMinutesBudget(configured or TRANSCRIBE_MINUTES_BUDGET)
+        return _BUDGET
 
 
 class SegmentLike(Protocol):
@@ -1226,9 +1314,9 @@ def sort_jobs_by_size(jobs: List[VideoJob]) -> List[VideoJob]:
     """Order jobs smallest video first (size is a cheap NFS-side proxy for duration).
 
     Concurrent workers then always hold similarly-sized jobs, which bounds
-    their combined transcribe peak RSS, and the multi-hour videos that need
-    the LONG_VIDEO_GATE run last — after the bulk of the queue has completed —
-    instead of monopolizing the head of every cycle.
+    their combined transcribe peak RSS, and the multi-hour videos that consume
+    the whole admission budget run last — after the bulk of the queue has
+    completed — instead of monopolizing the head of every cycle.
     """
 
     def _size(job: VideoJob) -> int:
@@ -1247,22 +1335,22 @@ def sort_jobs_by_size(jobs: List[VideoJob]) -> List[VideoJob]:
     return [jobs[i] for i in order]
 
 
-def acquire_long_video_slot(duration: Optional[float], threshold_minutes: float, video_path: Path) -> bool:
-    """Block until this video may transcribe; True if the exclusive long-video slot was taken.
+def acquire_transcribe_budget(duration: Optional[float], budget: AudioMinutesBudget, video_path: Path) -> float:
+    """Block until this video may decode; return the audio-minutes charged.
 
-    The caller must release LONG_VIDEO_GATE when done iff this returns True.
-    Videos shorter than the threshold (or an unknown duration, or a disabled
-    threshold <= 0) never wait and never take the slot.
+    The caller must release the same amount when done. A duration of None
+    (unprobeable container) is charged nothing so the job still runs and
+    reports its real error.
     """
-    if threshold_minutes <= 0 or not duration or duration < threshold_minutes * 60:
-        return False
-    LOGGER.info(
-        "[LongVideo] %s is %.0f min long; waiting for exclusive long-video slot",
-        video_path,
-        duration / 60,
-    )
-    LONG_VIDEO_GATE.acquire()
-    return True
+    minutes = (duration or 0.0) / 60
+    if minutes >= budget.budget_minutes:
+        LOGGER.info(
+            "[Budget] %s is %.0f min long; it exceeds the %.0f min budget and will decode alone",
+            video_path,
+            minutes,
+            budget.budget_minutes,
+        )
+    return budget.acquire(minutes)
 
 
 def extract_audio(video_path: Path, sample_rate: int) -> Path:
@@ -1641,16 +1729,15 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
 
     filter_words: List[str] = load_filter_words()
     audio_path: Optional[Path] = None
-    holds_long_slot = False
-    long_video_minutes = float(getattr(args, "long_video_minutes", 0) or 0)
+    budget = get_transcribe_budget(args)
+    charged = 0.0
 
     try:
-        if long_video_minutes > 0:
-            try:
-                duration_hint = probe_video_metadata(job.video_path).duration
-            except Exception:
-                duration_hint = None  # broken container: extract_audio below reports the real error
-            holds_long_slot = acquire_long_video_slot(duration_hint, long_video_minutes, job.video_path)
+        try:
+            duration_hint = probe_video_metadata(job.video_path).duration
+        except Exception:
+            duration_hint = None  # broken container: extract_audio below reports the real error
+        charged = acquire_transcribe_budget(duration_hint, budget, job.video_path)
 
         audio_path = extract_audio(job.video_path, args.sample_rate)
         LOGGER.debug("[Transcription] Loading model %s...", args.model)
@@ -1719,8 +1806,8 @@ def process_transcription_only(job: VideoJob, args: argparse.Namespace, quiet: b
         }
 
     finally:
-        if holds_long_slot:
-            LONG_VIDEO_GATE.release()
+        if charged:
+            budget.release(charged)
         if audio_path and audio_path.exists():
             try:
                 audio_path.unlink()
@@ -1744,14 +1831,14 @@ def process_translation_only(
 
     filter_words: List[str] = load_filter_words()
     audio_path: Optional[Path] = None
-    holds_long_slot = False
-    long_video_minutes = float(getattr(args, "long_video_minutes", 0) or 0)
+    budget = get_transcribe_budget(args)
+    charged = 0.0
 
     try:
         # Probe inside the try: a corrupt container must produce an error
         # record, not an exception that escapes the worker thread.
         metadata = probe_video_metadata(job.video_path)
-        holds_long_slot = acquire_long_video_slot(metadata.duration, long_video_minutes, job.video_path)
+        charged = acquire_transcribe_budget(metadata.duration, budget, job.video_path)
 
         # Read existing Russian VTT for segment count comparison
         ru_content = job.ru_vtt.read_text(encoding="utf-8") if job.ru_vtt.exists() else ""
@@ -1874,8 +1961,8 @@ def process_translation_only(
         return error_record
 
     finally:
-        if holds_long_slot:
-            LONG_VIDEO_GATE.release()
+        if charged:
+            budget.release(charged)
         if audio_path and audio_path.exists():
             try:
                 audio_path.unlink()
@@ -1980,12 +2067,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=1, help="Number of worker threads for processing")
     parser.add_argument(
-        "--long-video-minutes",
+        "--transcribe-minutes-budget",
         type=float,
-        default=45.0,
+        default=TRANSCRIBE_MINUTES_BUDGET,
         help=(
-            "Videos longer than this many minutes are transcribed one at a time "
-            "to bound peak RAM (transcribe RSS grows with duration); 0 disables the gate"
+            "Total audio-minutes allowed to decode concurrently across all workers. "
+            "Peak RAM is roughly 0.44 GB + 0.055 GB per audio-minute in flight, so this "
+            "bounds peak RSS; a video longer than the budget decodes alone"
         ),
     )
     parser.add_argument(
