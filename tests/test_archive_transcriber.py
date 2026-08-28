@@ -6,6 +6,8 @@ import os
 import re
 import sys
 import tempfile
+import threading
+import time
 import typing as _typing
 from pathlib import Path
 from typing import Callable, Optional
@@ -691,46 +693,136 @@ class TestSortJobsBySize:
         assert archive_transcriber.sort_jobs_by_size([]) == []
 
 
-class TestAcquireLongVideoSlot:
-    """Only videos over the threshold take the exclusive slot; others never wait."""
+class TestAudioMinutesBudget:
+    """Admission is bounded by audio-minutes in flight, not by video count."""
 
-    def _release_if(self, acquired: bool) -> None:
-        if acquired:
-            archive_transcriber.LONG_VIDEO_GATE.release()
+    def test_videos_fitting_the_budget_run_concurrently(self):
+        budget = archive_transcriber.AudioMinutesBudget(200.0)
+        charged = [budget.acquire(50.0) for _ in range(4)]
+        # Four 50-minute videos fit; none of the acquires blocked.
+        assert charged == [50.0, 50.0, 50.0, 50.0]
 
-    def test_short_video_does_not_take_slot(self):
-        acquired = archive_transcriber.acquire_long_video_slot(10 * 60, 45.0, Path("v.mp4"))
-        self._release_if(acquired)
-        assert acquired is False
+    def test_acquire_blocks_once_the_budget_is_spent(self):
+        budget = archive_transcriber.AudioMinutesBudget(100.0)
+        budget.acquire(80.0)
+        admitted = threading.Event()
 
-    def test_long_video_takes_and_holds_slot(self):
-        acquired = archive_transcriber.acquire_long_video_slot(120 * 60, 45.0, Path("v.mp4"))
-        try:
-            assert acquired is True
-            # Slot is exclusive while held
-            assert archive_transcriber.LONG_VIDEO_GATE.acquire(blocking=False) is False
-        finally:
-            self._release_if(acquired)
-        # And free again after release
-        assert archive_transcriber.LONG_VIDEO_GATE.acquire(blocking=False) is True
-        archive_transcriber.LONG_VIDEO_GATE.release()
+        def _second() -> None:
+            budget.acquire(40.0)
+            admitted.set()
 
-    def test_disabled_threshold_never_gates(self):
-        acquired = archive_transcriber.acquire_long_video_slot(999 * 60, 0, Path("v.mp4"))
-        self._release_if(acquired)
-        assert acquired is False
+        t = threading.Thread(target=_second, daemon=True)
+        t.start()
+        # 80 + 40 > 100, so the second video waits rather than overcommitting.
+        assert admitted.wait(timeout=0.2) is False
+        budget.release(80.0)
+        assert admitted.wait(timeout=2.0) is True
+        t.join(timeout=2.0)
 
-    def test_unknown_duration_never_gates(self):
-        for duration in (None, 0.0):
-            acquired = archive_transcriber.acquire_long_video_slot(duration, 45.0, Path("v.mp4"))
-            self._release_if(acquired)
-            assert acquired is False
+    def test_video_longer_than_budget_is_capped_and_runs_alone(self):
+        budget = archive_transcriber.AudioMinutesBudget(200.0)
+        # A 6.5-hour video must not deadlock waiting for budget it can never get.
+        charged = budget.acquire(389.0)
+        assert charged == 200.0
+
+        admitted = threading.Event()
+
+        def _other() -> None:
+            budget.acquire(1.0)
+            admitted.set()
+
+        t = threading.Thread(target=_other, daemon=True)
+        t.start()
+        # ...but while it holds the whole budget, nothing else decodes.
+        assert admitted.wait(timeout=0.2) is False
+        budget.release(charged)
+        assert admitted.wait(timeout=2.0) is True
+        t.join(timeout=2.0)
+
+    def test_unknown_duration_is_charged_nothing(self):
+        budget = archive_transcriber.AudioMinutesBudget(200.0)
+        assert budget.acquire(None) == 0.0
+        assert budget.acquire(0.0) == 0.0
+
+    def test_admission_is_fifo_so_long_videos_cannot_starve(self):
+        budget = archive_transcriber.AudioMinutesBudget(100.0)
+        budget.acquire(60.0)
+
+        order: list[str] = []
+        big_waiting = threading.Event()
+        big_done = threading.Event()
+        small_done = threading.Event()
+
+        def _big() -> None:
+            big_waiting.set()
+            budget.acquire(100.0)
+            order.append("big")
+            big_done.set()
+
+        def _small() -> None:
+            budget.acquire(10.0)
+            order.append("small")
+            small_done.set()
+
+        big = threading.Thread(target=_big, daemon=True)
+        big.start()
+        big_waiting.wait(timeout=1.0)
+        time.sleep(0.05)  # let the big video take its ticket first
+
+        small = threading.Thread(target=_small, daemon=True)
+        small.start()
+        # 10 minutes would fit in the 40 still free, but the big video queued
+        # first; letting the small one skip ahead is how long videos starve.
+        assert small_done.wait(timeout=0.2) is False
+
+        budget.release(60.0)
+        assert big_done.wait(timeout=2.0) is True
+        budget.release(100.0)
+        assert small_done.wait(timeout=2.0) is True
+        big.join(timeout=2.0)
+        small.join(timeout=2.0)
+        assert order == ["big", "small"]
+
+    def test_out_of_order_refunds_do_not_raise_on_float_drift(self):
+        # Charges are duration/60, and workers finish in a different order than
+        # they started. Refunding out of order leaves _available a few ulps
+        # above the budget, which a strict > comparison rejects -- raising from
+        # the worker's finally block and failing the whole phase. These three
+        # charges reproduce it exactly: they refund to 220.00000000000003.
+        budget = archive_transcriber.AudioMinutesBudget(220.0)
+        charges = [66.40270988202536, 28.242821253198972, 4.331763230250052]
+        for charge in charges:
+            budget.acquire(charge)
+        for index in (1, 0, 2):
+            budget.release(charges[index])
+        # And the drift must not be left behind to accumulate.
+        assert budget.acquire(220.0) == 220.0
 
     def test_unbalanced_release_fails_loudly(self):
-        # BoundedSemaphore: an over-release must raise rather than silently
-        # widening the gate to allow two concurrent long videos.
+        # An over-release must raise rather than silently widening the budget.
+        budget = archive_transcriber.AudioMinutesBudget(200.0)
         with pytest.raises(ValueError):
-            archive_transcriber.LONG_VIDEO_GATE.release()
+            budget.release(1.0)
+
+    def test_double_release_of_a_real_charge_still_raises(self):
+        # The float tolerance must not be wide enough to hide a genuine
+        # double-refund, which is off by a whole video's worth of budget.
+        budget = archive_transcriber.AudioMinutesBudget(200.0)
+        charged = budget.acquire(51.0)
+        budget.release(charged)
+        with pytest.raises(ValueError):
+            budget.release(charged)
+
+    def test_failed_release_leaves_the_budget_intact(self):
+        budget = archive_transcriber.AudioMinutesBudget(200.0)
+        with pytest.raises(ValueError):
+            budget.release(1.0)
+        # The rejected refund must not have been applied.
+        assert budget.acquire(200.0) == 200.0
+
+    def test_rejects_non_positive_budget(self):
+        with pytest.raises(ValueError):
+            archive_transcriber.AudioMinutesBudget(0)
 
 
 class TestTwoPhaseQueueing:
@@ -746,7 +838,7 @@ class TestTwoPhaseQueueing:
             workers=1,
             progress=False,
             verbose=False,
-            long_video_minutes=0,
+            transcribe_minutes_budget=1000.0,
         )
 
     def _make_video(self, tmp: Path, stem: str, *, ru=False, en=False, smil=False, stale_ru=False):
@@ -836,7 +928,7 @@ class TestTranscriptionErrorRecord:
             vad_filter=True,
             trim_silence=False,
             verbose=False,
-            long_video_minutes=0,
+            transcribe_minutes_budget=1000.0,
         )
 
     def test_ffmpeg_failure_marked_permanent(self, monkeypatch):
