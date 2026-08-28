@@ -168,6 +168,10 @@ TRANSCRIBE_MINUTES_BUDGET = 220.0
 # excluded from Phase 1 instead of failing again every cycle.
 PERMANENT_ERROR_TYPES = {"audio_extraction"}
 
+# Slack allowed when refunding budget, to absorb float rounding without letting
+# a genuine double-release (which is off by a whole video's worth) slip through.
+_BUDGET_EPSILON = 1e-6
+
 
 class AudioMinutesBudget:
     """Admission control on the total audio-minutes being decoded at once.
@@ -216,12 +220,19 @@ class AudioMinutesBudget:
 
     def release(self, cost: float) -> None:
         with self._cond:
-            self._available += cost
-            if self._available > self._budget:
-                # Mirrors BoundedSemaphore: an unbalanced release must fail
-                # loudly rather than silently widen the budget.
-                self._available -= cost
+            # Mirrors BoundedSemaphore: an unbalanced release must fail loudly
+            # rather than silently widen the budget. The tolerance absorbs float
+            # rounding -- charges are duration/60, and refunding them in a
+            # different order than they were charged (workers finish out of
+            # order) lands a few ulps above the budget -- 220.00000000000003
+            # for three charges, in ~7% of orderings. Without it, release()
+            # raises from the worker's finally block, loses the manifest record
+            # and fails the whole phase through future.result().
+            if self._available + cost > self._budget + _BUDGET_EPSILON:
                 raise ValueError("released more budget than was acquired")
+            # Clamping on the last outstanding refund snaps the budget back to
+            # exact, so rounding cannot accumulate across a long run.
+            self._available = min(self._available + cost, self._budget)
             self._cond.notify_all()
 
 

@@ -783,11 +783,35 @@ class TestAudioMinutesBudget:
         small.join(timeout=2.0)
         assert order == ["big", "small"]
 
+    def test_out_of_order_refunds_do_not_raise_on_float_drift(self):
+        # Charges are duration/60, and workers finish in a different order than
+        # they started. Refunding out of order leaves _available a few ulps
+        # above the budget, which a strict > comparison rejects -- raising from
+        # the worker's finally block and failing the whole phase. These three
+        # charges reproduce it exactly: they refund to 220.00000000000003.
+        budget = archive_transcriber.AudioMinutesBudget(220.0)
+        charges = [66.40270988202536, 28.242821253198972, 4.331763230250052]
+        for charge in charges:
+            budget.acquire(charge)
+        for index in (1, 0, 2):
+            budget.release(charges[index])
+        # And the drift must not be left behind to accumulate.
+        assert budget.acquire(220.0) == 220.0
+
     def test_unbalanced_release_fails_loudly(self):
         # An over-release must raise rather than silently widening the budget.
         budget = archive_transcriber.AudioMinutesBudget(200.0)
         with pytest.raises(ValueError):
             budget.release(1.0)
+
+    def test_double_release_of_a_real_charge_still_raises(self):
+        # The float tolerance must not be wide enough to hide a genuine
+        # double-refund, which is off by a whole video's worth of budget.
+        budget = archive_transcriber.AudioMinutesBudget(200.0)
+        charged = budget.acquire(51.0)
+        budget.release(charged)
+        with pytest.raises(ValueError):
+            budget.release(charged)
 
     def test_failed_release_leaves_the_budget_intact(self):
         budget = archive_transcriber.AudioMinutesBudget(200.0)
