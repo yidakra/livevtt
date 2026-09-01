@@ -880,6 +880,20 @@ class TestScanCacheExpiry:
         assert self._discover(archive, cache, manifest, 0) == ["b_1080p.mp4"]
 
 
+class TestScanCacheMaxAgeFlagValidation:
+    @pytest.mark.parametrize("bad", ["-1", "nan", "inf"])
+    def test_rejects_non_finite_or_negative(self, bad):
+        # negative would treat every cache as expired; nan/inf would never
+        # expire one -- both silently, which is how the stale-cache bug hid.
+        with pytest.raises(SystemExit):
+            archive_transcriber.parse_args(["/tmp", "--scan-cache-max-age-hours", bad])
+
+    @pytest.mark.parametrize("good,expected", [("0", 0.0), ("12", 12.0)])
+    def test_accepts_zero_and_positive(self, good, expected):
+        args = archive_transcriber.parse_args(["/tmp", "--scan-cache-max-age-hours", good])
+        assert args.scan_cache_max_age_hours == expected
+
+
 class TestGetModelNoCpuFallback:
     def test_cuda_failure_raises_instead_of_falling_back(self, monkeypatch):
         # The old CPU fallback loaded ~6 GB of weights into host RAM per worker
@@ -920,6 +934,23 @@ class TestGpuIndexValidation:
         monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
         with pytest.raises(ValueError, match="None of the GPUs"):
             archive_transcriber.init_gpu_assigner(self._args("1,2"))
+
+    def test_reinit_without_gpus_clears_previous_assigner(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", object())
+        archive_transcriber.init_gpu_assigner(self._args(""))
+        assert archive_transcriber.gpu_assigner is None
+
+    def test_negative_index_is_dropped(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: None)
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        archive_transcriber.init_gpu_assigner(self._args("0,-1"))
+        assert archive_transcriber.gpu_assigner.gpu_ids == [0]
+
+    def test_only_negative_indices_raises(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: None)
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        with pytest.raises(ValueError, match="None of the GPUs"):
+            archive_transcriber.init_gpu_assigner(self._args("-1"))
 
     def test_unknown_device_count_fails_open(self, monkeypatch):
         # If enumeration is impossible, keep the configured IDs: a false

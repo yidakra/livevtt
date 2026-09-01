@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -602,6 +603,9 @@ def init_gpu_assigner(args: argparse.Namespace) -> None:
     this raises rather than letting every worker fail at model load.
     """
     global gpu_assigner
+    # Reset first so a previous assigner cannot survive a re-init that does
+    # not configure GPUs (matters if run() is ever invoked twice in-process).
+    gpu_assigner = None
     if args.gpus:
         try:
             gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
@@ -610,6 +614,12 @@ def init_gpu_assigner(args: argparse.Namespace) -> None:
             return
         if not gpu_ids:
             return
+        negative = [g for g in gpu_ids if g < 0]
+        if negative:
+            # A negative index would sail past the < device_count check below
+            # and only blow up at model load, one worker at a time.
+            LOGGER.warning("Dropping negative GPU index(es) %s from --gpus", negative)
+            gpu_ids = [g for g in gpu_ids if g >= 0]
         device_count = visible_cuda_device_count()
         if device_count is not None:
             missing = [g for g in gpu_ids if g >= device_count]
@@ -620,11 +630,11 @@ def init_gpu_assigner(args: argparse.Namespace) -> None:
                     device_count,
                 )
                 gpu_ids = [g for g in gpu_ids if g < device_count]
-            if not gpu_ids:
-                raise ValueError(
-                    f"None of the GPUs in --gpus {args.gpus!r} exist; "
-                    f"{device_count} CUDA device(s) visible"
-                )
+        if not gpu_ids:
+            raise ValueError(
+                f"None of the GPUs in --gpus {args.gpus!r} are usable"
+                + (f"; {device_count} CUDA device(s) visible" if device_count is not None else "")
+            )
         gpu_assigner = GPUAssigner(gpu_ids)
         LOGGER.info(
             "Multi-GPU mode enabled: using GPUs %s with %d workers",
@@ -2174,9 +2184,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=Path("logs/scan_cache.json"),
         help="Path to scan cache file (default: logs/scan_cache.json)",
     )
+    def non_negative_finite_hours(value: str) -> float:
+        hours = float(value)
+        if not math.isfinite(hours) or hours < 0:
+            raise argparse.ArgumentTypeError(
+                f"{value!r}: must be a non-negative finite number of hours (0 disables expiry)"
+            )
+        return hours
+
     parser.add_argument(
         "--scan-cache-max-age-hours",
-        type=float,
+        type=non_negative_finite_hours,
         default=SCAN_CACHE_MAX_AGE_HOURS,
         help=(
             "Ignore and rebuild the scan cache when it is older than this many hours "
