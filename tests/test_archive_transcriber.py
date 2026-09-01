@@ -894,6 +894,19 @@ class TestScanCacheMaxAgeFlagValidation:
         assert args.scan_cache_max_age_hours == expected
 
 
+class TestNoCudaFlag:
+    def test_no_cuda_disables_cuda(self):
+        # The CUDA-failure error message tells operators to pass --no-cuda;
+        # the flag has to actually exist.
+        assert archive_transcriber.parse_args(["/tmp", "--no-cuda"]).use_cuda is False
+
+    def test_cuda_defaults_on(self):
+        assert archive_transcriber.parse_args(["/tmp"]).use_cuda is True
+
+    def test_use_cuda_false_still_works(self):
+        assert archive_transcriber.parse_args(["/tmp", "--use-cuda", "false"]).use_cuda is False
+
+
 class TestGetModelNoCpuFallback:
     def test_cuda_failure_raises_instead_of_falling_back(self, monkeypatch):
         # The old CPU fallback loaded ~6 GB of weights into host RAM per worker
@@ -939,6 +952,20 @@ class TestGpuIndexValidation:
         monkeypatch.setattr(archive_transcriber, "gpu_assigner", object())
         archive_transcriber.init_gpu_assigner(self._args(""))
         assert archive_transcriber.gpu_assigner is None
+
+    def test_reinit_clears_calling_threads_model_cache(self, monkeypatch):
+        # A model built under the previous CUDA configuration must not be
+        # served after re-init (worker threads are fresh per run; only the
+        # calling thread's cache survives).
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        holder = archive_transcriber.MODEL_HOLDER
+        holder.models["stale"] = object()
+        holder.assigned_gpu = 1
+        holder.worker_id = 7
+        archive_transcriber.init_gpu_assigner(self._args(""))
+        assert holder.models == {}
+        assert holder.assigned_gpu is None
+        assert holder.worker_id is None
 
     def test_negative_index_is_dropped(self, monkeypatch):
         monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: None)

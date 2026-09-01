@@ -605,7 +605,13 @@ def init_gpu_assigner(args: argparse.Namespace) -> None:
     global gpu_assigner
     # Reset first so a previous assigner cannot survive a re-init that does
     # not configure GPUs (matters if run() is ever invoked twice in-process).
+    # Worker threads are created fresh per run, so their thread-local models
+    # die with the executor; the calling thread's cache is the one that can
+    # leak a model built under the previous CUDA configuration.
     gpu_assigner = None
+    MODEL_HOLDER.models.clear()
+    MODEL_HOLDER.assigned_gpu = None
+    MODEL_HOLDER.worker_id = None
     if args.gpus:
         try:
             gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
@@ -2092,6 +2098,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=lambda x: str(x).lower() in {"1", "true", "yes"},
         default=True,
         help="Use CUDA if available (default: true)",
+    )
+    parser.add_argument(
+        "--no-cuda",
+        dest="use_cuda",
+        action="store_false",
+        help="Run models on CPU (equivalent to --use-cuda false)",
     )
     parser.add_argument(
         "--source-language",
