@@ -7,6 +7,10 @@ LOG_FILE="${LOG_FILE:-logs/archive_transcriber_two_phase.log}"
 MANIFEST_FILE="${MANIFEST_FILE:-logs/archive_transcriber_manifest.jsonl}"
 WORKERS="${WORKERS:-4}"
 GPUS="${GPUS:-0,1}"
+# 150 audio-minutes, not the tool's 220 default: that default was sized against
+# the 31 GB this host had before the 2026-08-31 re-provision cut it to 28 GB.
+# Peak RSS is ~13.5 GB floor + 0.44 GB + 0.055 GB per audio-minute in flight.
+TRANSCRIBE_MINUTES_BUDGET="${TRANSCRIBE_MINUTES_BUDGET:-150}"
 UV_BIN="${UV_BIN:-/home/ubuntu/.local/bin/uv}"
 
 cd "$REPO_ROOT"
@@ -21,6 +25,7 @@ cmd=(
   --progress
   --log-file "$LOG_FILE"
   --manifest "$MANIFEST_FILE"
+  --transcribe-minutes-budget "$TRANSCRIBE_MINUTES_BUDGET"
 )
 
 if [[ -n "$GPUS" ]]; then
