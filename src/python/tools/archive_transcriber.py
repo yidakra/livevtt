@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -135,6 +136,13 @@ LOGGER = logging.getLogger("archive_transcriber")
 # CPU-bound; a wide thread pool turns hours of sequential stats into minutes.
 STARTUP_STAT_THREADS = 64
 
+# The scan cache is a point-in-time file listing, so trusting it forever means
+# newly added videos are never discovered. A cache written on 2026-01-23 was
+# loaded verbatim for seven months, hiding ~1,200 new videos behind a
+# reassuring "0 needed" every cycle. Caches older than this are ignored and
+# rebuilt by the normal scan path; 0 disables the check.
+SCAN_CACHE_MAX_AGE_HOURS = 24.0
+
 # Peak RSS of a transcribe is dominated by audio decoding, not by the model,
 # and grows linearly with duration. Measured on this box (faster-whisper 1.2.1,
 # large-v3, float16, 16 kHz mono) by transcribing the same source at five
@@ -157,9 +165,9 @@ STARTUP_STAT_THREADS = 64
 #
 # Sizing the default: the service floor is ~13.5 GB (steady RSS with all workers
 # warm, sampled 473 times), and each extra concurrent decode adds
-# 0.44 + 0.0548 * minutes. 220 minutes admits four ~51-minute videos at once --
-# what the current backlog looks like -- for a projected peak near 23 GB, which
-# leaves ~8 GB of headroom. Raise it only against a re-measured floor.
+# 0.44 + 0.0548 * minutes. 220 minutes was sized against a 31 GB host; when the
+# host shrinks (the 2026-08-31 re-provision left 28 GB), lower it via
+# --transcribe-minutes-budget rather than trusting this constant.
 TRANSCRIBE_MINUTES_BUDGET = 220.0
 
 # Error types that will not succeed on retry while the input is unchanged
@@ -574,21 +582,71 @@ def get_worker_info() -> str:
     return ""
 
 
+def visible_cuda_device_count() -> Optional[int]:
+    """Number of CUDA devices ctranslate2 can see, or None if undeterminable."""
+    try:
+        import ctranslate2
+
+        return int(ctranslate2.get_cuda_device_count())
+    except Exception as exc:
+        LOGGER.debug("Could not enumerate CUDA devices: %s", exc)
+        return None
+
+
 def init_gpu_assigner(args: argparse.Namespace) -> None:
-    """Initialize gpu_assigner if --gpus is specified."""
+    """Initialize gpu_assigner if --gpus is specified.
+
+    Configured indices are checked against the devices that actually exist:
+    a re-provision that removes a GPU (2026-08-31: two vGPUs became one)
+    otherwise leaves workers pointed at a missing device. Missing indices are
+    dropped with a warning so the run degrades to fewer GPUs; if none remain,
+    this raises rather than letting every worker fail at model load.
+    """
     global gpu_assigner
+    # Reset first so a previous assigner cannot survive a re-init that does
+    # not configure GPUs (matters if run() is ever invoked twice in-process).
+    # Worker threads are created fresh per run, so their thread-local models
+    # die with the executor; the calling thread's cache is the one that can
+    # leak a model built under the previous CUDA configuration.
+    gpu_assigner = None
+    MODEL_HOLDER.models.clear()
+    MODEL_HOLDER.assigned_gpu = None
+    MODEL_HOLDER.worker_id = None
     if args.gpus:
         try:
             gpu_ids = [int(g.strip()) for g in args.gpus.split(",") if g.strip()]
-            if gpu_ids:
-                gpu_assigner = GPUAssigner(gpu_ids)
-                LOGGER.info(
-                    "Multi-GPU mode enabled: using GPUs %s with %d workers",
-                    gpu_ids,
-                    args.workers,
-                )
         except ValueError as e:
             LOGGER.warning("Invalid --gpus value '%s': %s. Using single GPU.", args.gpus, e)
+            return
+        if not gpu_ids:
+            return
+        negative = [g for g in gpu_ids if g < 0]
+        if negative:
+            # A negative index would sail past the < device_count check below
+            # and only blow up at model load, one worker at a time.
+            LOGGER.warning("Dropping negative GPU index(es) %s from --gpus", negative)
+            gpu_ids = [g for g in gpu_ids if g >= 0]
+        device_count = visible_cuda_device_count()
+        if device_count is not None:
+            missing = [g for g in gpu_ids if g >= device_count]
+            if missing:
+                LOGGER.warning(
+                    "Dropping configured GPU(s) %s: only %d CUDA device(s) visible",
+                    missing,
+                    device_count,
+                )
+                gpu_ids = [g for g in gpu_ids if g < device_count]
+        if not gpu_ids:
+            raise ValueError(
+                f"None of the GPUs in --gpus {args.gpus!r} are usable"
+                + (f"; {device_count} CUDA device(s) visible" if device_count is not None else "")
+            )
+        gpu_assigner = GPUAssigner(gpu_ids)
+        LOGGER.info(
+            "Multi-GPU mode enabled: using GPUs %s with %d workers",
+            gpu_ids,
+            args.workers,
+        )
 
 
 def get_model(
@@ -655,14 +713,15 @@ def get_model(
         MODEL_HOLDER.models[name] = instantiate(device, device_index, selected_compute_type)
     except RuntimeError as exc:
         if args.use_cuda:
-            LOGGER.warning(
-                "CUDA initialisation failed for %s (%s). Falling back to CPU with float32 compute type.",
-                name,
-                exc,
-            )
-            MODEL_HOLDER.models[name] = instantiate("cpu", 0, "float32")
-        else:
-            raise
+            # No CPU fallback: large-v3 on CPU loads ~6 GB of weights into host
+            # RAM per worker and runs orders of magnitude slower. When a
+            # re-provision removed GPU 1 (2026-08-31), the old fallback turned
+            # a config mismatch into an OOM crash loop instead of a clear error.
+            raise RuntimeError(
+                f"CUDA initialisation failed for {name} on device_index={device_index}: {exc}. "
+                "Check --gpus against the devices that exist, or pass --no-cuda deliberately."
+            ) from exc
+        raise
 
     return MODEL_HOLDER.models[name]
 
@@ -975,12 +1034,25 @@ def discover_video_jobs(
     ttml_enabled: bool,
     scan_cache_path: Optional[Path] = None,
     force_scan: bool = False,
+    cache_max_age_seconds: Optional[float] = None,
 ) -> List[VideoJob]:
     extensions = {ext.lower() for ext in extensions}
     grouped: Dict[Tuple[str, str], List[Path]] = {}
 
-    # Try to load from cache if available
-    if scan_cache_path and scan_cache_path.exists() and not force_scan:
+    # Try to load from cache if available and not expired
+    use_cache = bool(scan_cache_path and scan_cache_path.exists() and not force_scan)
+    if use_cache and scan_cache_path is not None and cache_max_age_seconds:
+        cache_age = time.time() - scan_cache_path.stat().st_mtime
+        if cache_age > cache_max_age_seconds:
+            LOGGER.warning(
+                "Scan cache %s is %.1f hours old (limit %.1f); ignoring it and rescanning "
+                "so newly added videos are discovered",
+                scan_cache_path,
+                cache_age / 3600,
+                cache_max_age_seconds / 3600,
+            )
+            use_cache = False
+    if use_cache and scan_cache_path is not None:
         try:
             LOGGER.info("Loading scan results from cache: %s", scan_cache_path)
             with open(scan_cache_path, "r") as f:
@@ -2028,6 +2100,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Use CUDA if available (default: true)",
     )
     parser.add_argument(
+        "--no-cuda",
+        dest="use_cuda",
+        action="store_false",
+        help="Run models on CPU (equivalent to --use-cuda false)",
+    )
+    parser.add_argument(
         "--source-language",
         type=str,
         default="ru",
@@ -2118,6 +2196,23 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=Path("logs/scan_cache.json"),
         help="Path to scan cache file (default: logs/scan_cache.json)",
     )
+    def non_negative_finite_hours(value: str) -> float:
+        hours = float(value)
+        if not math.isfinite(hours) or hours < 0:
+            raise argparse.ArgumentTypeError(
+                f"{value!r}: must be a non-negative finite number of hours (0 disables expiry)"
+            )
+        return hours
+
+    parser.add_argument(
+        "--scan-cache-max-age-hours",
+        type=non_negative_finite_hours,
+        default=SCAN_CACHE_MAX_AGE_HOURS,
+        help=(
+            "Ignore and rebuild the scan cache when it is older than this many hours "
+            "(new videos are invisible while a cache is trusted); 0 trusts it forever"
+        ),
+    )
     parser.add_argument(
         "--force-scan",
         action="store_true",
@@ -2145,7 +2240,11 @@ def run(argv: Optional[List[str]] = None) -> int:
         return 2
 
     # Initialize multi-GPU support if requested
-    init_gpu_assigner(args)
+    try:
+        init_gpu_assigner(args)
+    except ValueError as exc:
+        LOGGER.error("%s", exc)
+        return 2
 
     manifest = Manifest(args.manifest.resolve())
     extensions = [ext if ext.startswith(".") else f".{ext}" for ext in args.extensions.split(",") if ext]
@@ -2167,6 +2266,7 @@ def run(argv: Optional[List[str]] = None) -> int:
             not args.no_ttml,
             scan_cache_path=scan_cache_path,
             force_scan=args.force_scan,
+            cache_max_age_seconds=args.scan_cache_max_age_hours * 3600,
         )
     except KeyboardInterrupt:
         LOGGER.warning("Aborted during scan via Ctrl+C")
@@ -2281,6 +2381,7 @@ def run_two_phase(
             ttml_enabled=ttml_enabled,
             scan_cache_path=scan_cache_path,
             force_scan=args.force_scan,
+            cache_max_age_seconds=args.scan_cache_max_age_hours * 3600,
         )
     except KeyboardInterrupt:
         LOGGER.warning("Aborted during scan via Ctrl+C")

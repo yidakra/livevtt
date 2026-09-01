@@ -2,6 +2,7 @@
 """Unit tests for archive_transcriber.py core functionality."""
 
 import importlib
+import json
 import os
 import re
 import sys
@@ -825,6 +826,168 @@ class TestAudioMinutesBudget:
             archive_transcriber.AudioMinutesBudget(0)
 
 
+class TestScanCacheExpiry:
+    """A stale scan cache must be rebuilt, not trusted forever.
+
+    A cache written on 2026-01-23 was loaded verbatim for seven months and hid
+    ~1,200 newly added videos behind "0 needed" every cycle.
+    """
+
+    def _setup(self, tmp: Path):
+        archive = tmp / "archive"
+        archive.mkdir()
+        for stem in ("a", "b"):
+            (archive / f"{stem}_1080p.mp4").write_bytes(b"x" * 100)
+        # Cache knows only about b, as if a arrived after the cache was written.
+        cache = tmp / "scan_cache.json"
+        cache.write_text(
+            json.dumps({f"{archive}|||b.mp4": [str(archive / "b_1080p.mp4")]})
+        )
+        manifest = archive_transcriber.Manifest(tmp / "manifest.jsonl")
+        return archive, cache, manifest
+
+    def _discover(self, archive, cache, manifest, max_age):
+        jobs = archive_transcriber.discover_video_jobs(
+            archive,
+            None,
+            manifest,
+            True,
+            [".mp4"],
+            False,
+            scan_cache_path=cache,
+            force_scan=False,
+            cache_max_age_seconds=max_age,
+        )
+        return sorted(j.video_path.name for j in jobs)
+
+    def test_fresh_cache_is_trusted(self, tmp_path):
+        archive, cache, manifest = self._setup(tmp_path)
+        assert self._discover(archive, cache, manifest, 24 * 3600) == ["b_1080p.mp4"]
+
+    def test_expired_cache_is_ignored_and_rebuilt(self, tmp_path):
+        archive, cache, manifest = self._setup(tmp_path)
+        os.utime(cache, (1000000, 1000000))  # written in 2001
+        assert self._discover(archive, cache, manifest, 24 * 3600) == [
+            "a_1080p.mp4",
+            "b_1080p.mp4",
+        ]
+        # The rescan must also refresh the cache so the next run is fast again.
+        assert "a_1080p.mp4" in cache.read_text()
+
+    def test_zero_max_age_disables_expiry(self, tmp_path):
+        archive, cache, manifest = self._setup(tmp_path)
+        os.utime(cache, (1000000, 1000000))
+        assert self._discover(archive, cache, manifest, 0) == ["b_1080p.mp4"]
+
+
+class TestScanCacheMaxAgeFlagValidation:
+    @pytest.mark.parametrize("bad", ["-1", "nan", "inf"])
+    def test_rejects_non_finite_or_negative(self, bad):
+        # negative would treat every cache as expired; nan/inf would never
+        # expire one -- both silently, which is how the stale-cache bug hid.
+        with pytest.raises(SystemExit):
+            archive_transcriber.parse_args(["/tmp", "--scan-cache-max-age-hours", bad])
+
+    @pytest.mark.parametrize("good,expected", [("0", 0.0), ("12", 12.0)])
+    def test_accepts_zero_and_positive(self, good, expected):
+        args = archive_transcriber.parse_args(["/tmp", "--scan-cache-max-age-hours", good])
+        assert args.scan_cache_max_age_hours == expected
+
+
+class TestNoCudaFlag:
+    def test_no_cuda_disables_cuda(self):
+        # The CUDA-failure error message tells operators to pass --no-cuda;
+        # the flag has to actually exist.
+        assert archive_transcriber.parse_args(["/tmp", "--no-cuda"]).use_cuda is False
+
+    def test_cuda_defaults_on(self):
+        assert archive_transcriber.parse_args(["/tmp"]).use_cuda is True
+
+    def test_use_cuda_false_still_works(self):
+        assert archive_transcriber.parse_args(["/tmp", "--use-cuda", "false"]).use_cuda is False
+
+
+class TestGetModelNoCpuFallback:
+    def test_cuda_failure_raises_instead_of_falling_back(self, monkeypatch):
+        # The old CPU fallback loaded ~6 GB of weights into host RAM per worker
+        # and OOM-killed the service when a re-provision removed a GPU.
+        import argparse
+
+        calls: list[dict] = []
+
+        def boom(*a, **k):
+            calls.append(k)
+            raise RuntimeError("CUDA failed with error invalid device ordinal")
+
+        monkeypatch.setattr(archive_transcriber, "WhisperModel", boom)
+        args = argparse.Namespace(
+            model="model-under-cuda-failure", use_cuda=True, compute_type="float16"
+        )
+        with pytest.raises(RuntimeError, match="CUDA initialisation failed"):
+            archive_transcriber.get_model(args)
+        # Exactly one attempt: no second instantiation on CPU.
+        assert [c.get("device") for c in calls] == ["cuda"]
+        assert "model-under-cuda-failure" not in archive_transcriber.MODEL_HOLDER.models
+
+
+class TestGpuIndexValidation:
+    def _args(self, gpus):
+        import argparse
+
+        return argparse.Namespace(gpus=gpus, workers=3)
+
+    def test_missing_gpu_is_dropped(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: 1)
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        archive_transcriber.init_gpu_assigner(self._args("0,1"))
+        assert archive_transcriber.gpu_assigner.gpu_ids == [0]
+
+    def test_all_gpus_missing_raises(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: 1)
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        with pytest.raises(ValueError, match="None of the GPUs"):
+            archive_transcriber.init_gpu_assigner(self._args("1,2"))
+
+    def test_reinit_without_gpus_clears_previous_assigner(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", object())
+        archive_transcriber.init_gpu_assigner(self._args(""))
+        assert archive_transcriber.gpu_assigner is None
+
+    def test_reinit_clears_calling_threads_model_cache(self, monkeypatch):
+        # A model built under the previous CUDA configuration must not be
+        # served after re-init (worker threads are fresh per run; only the
+        # calling thread's cache survives).
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        holder = archive_transcriber.MODEL_HOLDER
+        holder.models["stale"] = object()
+        holder.assigned_gpu = 1
+        holder.worker_id = 7
+        archive_transcriber.init_gpu_assigner(self._args(""))
+        assert holder.models == {}
+        assert holder.assigned_gpu is None
+        assert holder.worker_id is None
+
+    def test_negative_index_is_dropped(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: None)
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        archive_transcriber.init_gpu_assigner(self._args("0,-1"))
+        assert archive_transcriber.gpu_assigner.gpu_ids == [0]
+
+    def test_only_negative_indices_raises(self, monkeypatch):
+        monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: None)
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        with pytest.raises(ValueError, match="None of the GPUs"):
+            archive_transcriber.init_gpu_assigner(self._args("-1"))
+
+    def test_unknown_device_count_fails_open(self, monkeypatch):
+        # If enumeration is impossible, keep the configured IDs: a false
+        # negative here would disable GPUs that actually work.
+        monkeypatch.setattr(archive_transcriber, "visible_cuda_device_count", lambda: None)
+        monkeypatch.setattr(archive_transcriber, "gpu_assigner", None)
+        archive_transcriber.init_gpu_assigner(self._args("0,1"))
+        assert archive_transcriber.gpu_assigner.gpu_ids == [0, 1]
+
+
 class TestTwoPhaseQueueing:
     """Phase 2 must pick up newly transcribed videos exactly once, without re-statting everything."""
 
@@ -839,6 +1002,7 @@ class TestTwoPhaseQueueing:
             progress=False,
             verbose=False,
             transcribe_minutes_budget=1000.0,
+            scan_cache_max_age_hours=24.0,
         )
 
     def _make_video(self, tmp: Path, stem: str, *, ru=False, en=False, smil=False, stale_ru=False):
