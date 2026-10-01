@@ -1422,8 +1422,9 @@ def phase_needs(job: VideoJob, ttml_enabled: bool) -> Tuple[bool, bool]:
     """Combined needs_transcription/needs_translation check with one stat per file.
 
     Semantically identical to calling the two functions separately, but stats
-    each artifact exactly once (5 round trips max instead of ~11) — this check
-    runs once per video across a 143k-video archive on NFS at every startup.
+    each artifact exactly once (6 round trips max: video, ru/en VTT, SMIL, and
+    both TTML names, instead of ~12) — this check runs once per video across a
+    144k-video archive on NFS at every startup.
     """
 
     def _mtime(path: Path) -> Optional[float]:
