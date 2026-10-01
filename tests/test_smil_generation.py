@@ -347,7 +347,7 @@ class TestWowzaCaptionStream:
     def test_vtt_mode_also_drops_legacy_ttml_reference(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
         self._add_stream(video_job, "video.ttml")
         assert write_smil(video_job, metadata, MockArgs(vtt_in_smil=True)) is True
-        srcs = sorted(s.get("src") for s in self._streams(video_job))
+        srcs = sorted(s.get("src", "") for s in self._streams(video_job))
         assert srcs == ["video.en.vtt", "video.ru.vtt"]
 
     def test_changed_rendition_replaces_previous_ttml(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
@@ -370,7 +370,7 @@ class TestWowzaCaptionStream:
         self._add_stream(video_job, "video.de.vtt", "deu")
         video_job.ttml.write_text("<tt/>")
         assert write_smil(video_job, metadata, MockArgs(vtt_in_smil=False)) is True
-        srcs = sorted(s.get("src") for s in self._streams(video_job))
+        srcs = sorted(s.get("src", "") for s in self._streams(video_job))
         assert srcs == ["other_video.ttml", "video.de.vtt", "video_1080p.ttml"]
 
     def test_legacy_only_ttml_is_materialized_under_new_name(
