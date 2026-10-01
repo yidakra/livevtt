@@ -336,3 +336,49 @@ class TestWowzaCaptionStream:
         write_smil(video_job, metadata, args)
         (stream,) = self._streams(video_job)
         assert len(stream.findall("param")) == 1
+
+    def _add_stream(self, job: VideoJob, src: str, lang: str = "rus,eng") -> None:
+        tree = ET.parse(job.smil)
+        switch = tree.getroot().find("body/switch")
+        assert switch is not None
+        ET.SubElement(switch, "textstream", {"src": src, "system-language": lang})
+        tree.write(job.smil)
+
+    def test_vtt_mode_also_drops_legacy_ttml_reference(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
+        self._add_stream(video_job, "video.ttml")
+        assert write_smil(video_job, metadata, MockArgs(vtt_in_smil=True)) is True
+        srcs = sorted(s.get("src") for s in self._streams(video_job))
+        assert srcs == ["video.en.vtt", "video.ru.vtt"]
+
+    def test_changed_rendition_replaces_previous_ttml(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
+        # A 2160p rendition was added after the 1080p TTML was written.
+        self._add_stream(video_job, "video_1080p.ttml")
+        job = VideoJob(
+            video_path=video_job.video_path.with_name("video_2160p.mp4"),
+            normalized_name=video_job.normalized_name,
+            ru_vtt=video_job.ru_vtt,
+            en_vtt=video_job.en_vtt,
+            ttml=video_job.ttml.with_name("video_2160p.ttml"),
+            smil=video_job.smil,
+        )
+        job.ttml.write_text("<tt/>")
+        assert write_smil(job, metadata, MockArgs(vtt_in_smil=False)) is True
+        assert [s.get("src") for s in self._streams(job)] == ["video_2160p.ttml"]
+
+    def test_unrelated_caption_sources_are_preserved(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
+        self._add_stream(video_job, "other_video.ttml")
+        self._add_stream(video_job, "video.de.vtt", "deu")
+        video_job.ttml.write_text("<tt/>")
+        assert write_smil(video_job, metadata, MockArgs(vtt_in_smil=False)) is True
+        srcs = sorted(s.get("src") for s in self._streams(video_job))
+        assert srcs == ["other_video.ttml", "video.de.vtt", "video_1080p.ttml"]
+
+    def test_legacy_only_ttml_is_materialized_under_new_name(
+        self, video_job: VideoJob, metadata: VideoMetadata
+    ) -> None:
+        legacy = video_job.ttml.with_name("video.ttml")
+        legacy.write_text("<tt>legacy</tt>")
+        assert write_smil(video_job, metadata, MockArgs(vtt_in_smil=False)) is True
+        assert video_job.ttml.read_text() == "<tt>legacy</tt>"
+        assert legacy.exists(), "legacy file must never be deleted"
+        assert [s.get("src") for s in self._streams(video_job)] == ["video_1080p.ttml"]

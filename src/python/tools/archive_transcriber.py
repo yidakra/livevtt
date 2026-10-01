@@ -945,7 +945,22 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         LOGGER.error("SMIL %s has no <video> entries; skipping subtitle association", job.smil)
         return False
 
-    def ensure_textstream(src: str, language: str, supersedes: Optional[str] = None) -> bool:
+    group_stem = Path(job.normalized_name).stem
+    managed_ttml = re.compile(
+        re.escape(group_stem) + r"(?:[_.-]\d{3,4}p)?\.ttml",
+        re.IGNORECASE,
+    )
+
+    def is_managed_caption(src: str) -> bool:
+        """True for caption files this tool writes for this video group.
+
+        Covers both VTTs, the legacy [hash].ttml, and any rendition-named
+        [hash]_<N>p.ttml -- the selected rendition can change if a higher
+        resolution is added later. Unrelated caption sources are preserved.
+        """
+        return src in {job.ru_vtt.name, job.en_vtt.name} or managed_ttml.fullmatch(src) is not None
+
+    def ensure_textstream(src: str, language: str) -> bool:
         # Textstream sources should NOT have mp4: prefix (unlike video sources)
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
@@ -988,12 +1003,8 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
                 return value[4:]
             return value
 
-        # Remove existing textstream nodes with the same source, and any
-        # pointing at the file this one replaces (a renamed TTML would
-        # otherwise leave two caption tracks in the manifest).
-        stale = {src} | ({supersedes} if supersedes else set())
         for node in list(switch.findall("textstream")):
-            if _normalize(node.get("src")) in stale:
+            if _normalize(node.get("src")) == src:
                 switch.remove(node)
 
         if not Path(job.smil.parent, src).exists():
@@ -1004,6 +1015,18 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         # it the textstream is not treated as a caption track.
         ET.SubElement(stream, "param", {"name": "isWowzaCaptionStream", "value": "true", "valuetype": "data"})
         return True
+
+    # Drop every caption track we previously wrote for this group before adding
+    # the current ones, so a renamed TTML (legacy name, or a different selected
+    # rendition) or a switch between TTML and VTT mode never leaves duplicate
+    # or param-less caption tracks behind. Nothing is persisted unless a
+    # replacement is added below.
+    for node in list(switch.findall("textstream")):
+        src_attr = (node.get("src") or "").strip()
+        if src_attr.lower().startswith("mp4:"):
+            src_attr = src_attr[4:]
+        if is_managed_caption(src_attr):
+            switch.remove(node)
 
     # By default, use TTML in SMIL (contains both languages)
     # Use --vtt-in-smil flag to include individual VTT files instead
@@ -1021,10 +1044,17 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
     else:
         # Use TTML by default (bilingual subtitle file)
+        legacy = legacy_ttml_path(job.ttml, job.normalized_name)
+        if not job.ttml.exists() and legacy is not None and legacy.exists():
+            # Copy rather than rename: ops may be renaming the same files, and
+            # an identical copy makes either order of operations harmless.
+            tmp_copy = job.ttml.with_name(job.ttml.name + ".tmp")
+            shutil.copy2(legacy, tmp_copy)
+            os.replace(tmp_copy, job.ttml)
+            LOGGER.info("Copied legacy TTML %s -> %s for Wowza", legacy.name, job.ttml.name)
         if job.ttml.exists():
             # TTML is bilingual, so we include both languages in system-language
-            legacy = legacy_ttml_path(job.ttml, job.normalized_name)
-            added |= ensure_textstream(job.ttml.name, "rus,eng", supersedes=legacy.name if legacy else None)
+            added |= ensure_textstream(job.ttml.name, "rus,eng")
             LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
         elif not args.smil_only:
             LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
@@ -1233,15 +1263,7 @@ def discover_video_jobs(
             ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(
                 best_path, normalized_name, input_root, output_root
             )
-            if should_skip(
-                best_path,
-                ru_vtt,
-                en_vtt,
-                effective_ttml(ttml_path, normalized_name),
-                smil_path,
-                force,
-                ttml_enabled,
-            ):
+            if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
                 LOGGER.debug("Skipping already processed %s", best_path)
                 return None
         except OSError as exc:
@@ -1341,7 +1363,9 @@ def should_skip(
 
     required_outputs = [ru_vtt, en_vtt, smil_path]
     if ttml_enabled:
-        required_outputs.append(ttml_path)
+        # Resolved here rather than by callers so every entry point (discovery,
+        # serverless quick-start) honours the legacy [hash].ttml name.
+        required_outputs.append(effective_ttml(ttml_path, normalise_variant_name(video_path)))
 
     if not all(path.exists() for path in required_outputs):
         return False

@@ -630,6 +630,15 @@ class TestLegacyTtmlName:
         assert archive_transcriber.needs_translation(job, True) is True
         assert archive_transcriber.phase_needs(job, True) == (False, True)
 
+    def test_should_skip_accepts_legacy_name(self, tmp_path):
+        # Every caller of should_skip (incl. serverless quick-start) passes the
+        # rendition-named path; the legacy fallback must live inside it.
+        self._populate(tmp_path, "video.ttml")
+        job = self._job(tmp_path)
+        assert archive_transcriber.should_skip(
+            job.video_path, job.ru_vtt, job.en_vtt, job.ttml, job.smil, False, True
+        ) is True
+
     def test_legacy_path_is_none_when_names_match(self):
         assert archive_transcriber.legacy_ttml_path(Path("/a/video.ttml"), "video.ts") is None
 
