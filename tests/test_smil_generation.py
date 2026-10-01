@@ -382,3 +382,29 @@ class TestWowzaCaptionStream:
         assert video_job.ttml.read_text() == "<tt>legacy</tt>"
         assert legacy.exists(), "legacy file must never be deleted"
         assert [s.get("src") for s in self._streams(video_job)] == ["video_1080p.ttml"]
+
+    def test_newer_legacy_ttml_overwrites_stale_new_name(
+        self, video_job: VideoJob, metadata: VideoMetadata
+    ) -> None:
+        import os
+
+        legacy = video_job.ttml.with_name("video.ttml")
+        legacy.write_text("<tt>fresh</tt>")
+        os.utime(legacy, (2000000, 2000000))
+        video_job.ttml.write_text("<tt>stale</tt>")
+        os.utime(video_job.ttml, (1000000, 1000000))
+        assert write_smil(video_job, metadata, MockArgs(vtt_in_smil=False)) is True
+        assert video_job.ttml.read_text() == "<tt>fresh</tt>"
+        assert legacy.exists()
+        assert [s.get("src") for s in self._streams(video_job)] == ["video_1080p.ttml"]
+
+    def test_newer_new_name_is_not_overwritten(self, video_job: VideoJob, metadata: VideoMetadata) -> None:
+        import os
+
+        legacy = video_job.ttml.with_name("video.ttml")
+        legacy.write_text("<tt>old</tt>")
+        os.utime(legacy, (1000000, 1000000))
+        video_job.ttml.write_text("<tt>new</tt>")
+        os.utime(video_job.ttml, (2000000, 2000000))
+        assert write_smil(video_job, metadata, MockArgs(vtt_in_smil=False)) is True
+        assert video_job.ttml.read_text() == "<tt>new</tt>"
