@@ -309,10 +309,15 @@ class TestBuildOutputArtifacts:
 
         assert ru_vtt.name == "video.ru.vtt"
         assert en_vtt.name == "video.en.vtt"
-        assert ttml.name == "video.ttml"
+        # Wowza resolves captions against the rendition name, not the group.
+        assert ttml.name == "video_1080p.ttml"
         assert smil.name == "video.smil"
         assert ru_vtt.parent == video_path.parent
         print("✓ test_basic_output_paths passed")
+
+    def test_ttml_without_resolution_token_keeps_group_name(self):
+        _ru, _en, ttml, _smil = build_output_artifacts(Path("/a/video.ts"), "video.ts", Path("/a"), None)
+        assert ttml.name == "video.ts".replace(".ts", ".ttml")
 
     def test_with_output_root(self):
         """Test output paths with custom output root."""
@@ -582,6 +587,60 @@ class TestPhaseNeeds:
                         assert phase_needs(job, ttml_enabled) == expected, (
                             f"mismatch for present={present} stale_ru={stale_ru} ttml={ttml_enabled}"
                         )
+
+
+class TestLegacyTtmlName:
+    """Videos translated before the rename must not be re-queued."""
+
+    def _job(self, tmp: Path):
+        return VideoJob(
+            video_path=tmp / "video_1080p.mp4",
+            normalized_name="video.mp4",
+            ru_vtt=tmp / "video.ru.vtt",
+            en_vtt=tmp / "video.en.vtt",
+            ttml=tmp / "video_1080p.ttml",
+            smil=tmp / "video.smil",
+        )
+
+    def _populate(self, tmp: Path, ttml_name: str):
+        for name in ("video_1080p.mp4", "video.ru.vtt", "video.en.vtt", "video.smil", ttml_name):
+            (tmp / name).write_text("x")
+            os.utime(tmp / name, (2000000, 2000000))
+
+    def test_legacy_ttml_counts_as_done(self, tmp_path):
+        self._populate(tmp_path, "video.ttml")
+        job = self._job(tmp_path)
+        assert archive_transcriber.needs_translation(job, True) is False
+        assert archive_transcriber.phase_needs(job, True) == (False, False)
+
+    def test_new_ttml_counts_as_done(self, tmp_path):
+        self._populate(tmp_path, "video_1080p.ttml")
+        job = self._job(tmp_path)
+        assert archive_transcriber.phase_needs(job, True) == (False, False)
+
+    def test_no_ttml_needs_translation(self, tmp_path):
+        self._populate(tmp_path, "unrelated.txt")
+        job = self._job(tmp_path)
+        assert archive_transcriber.phase_needs(job, True) == (False, True)
+
+    def test_stale_legacy_ttml_needs_translation(self, tmp_path):
+        self._populate(tmp_path, "video.ttml")
+        os.utime(tmp_path / "video.ttml", (1000000, 1000000))  # older than ru.vtt
+        job = self._job(tmp_path)
+        assert archive_transcriber.needs_translation(job, True) is True
+        assert archive_transcriber.phase_needs(job, True) == (False, True)
+
+    def test_should_skip_accepts_legacy_name(self, tmp_path):
+        # Every caller of should_skip (incl. serverless quick-start) passes the
+        # rendition-named path; the legacy fallback must live inside it.
+        self._populate(tmp_path, "video.ttml")
+        job = self._job(tmp_path)
+        assert archive_transcriber.should_skip(
+            job.video_path, job.ru_vtt, job.en_vtt, job.ttml, job.smil, False, True
+        ) is True
+
+    def test_legacy_path_is_none_when_names_match(self):
+        assert archive_transcriber.legacy_ttml_path(Path("/a/video.ttml"), "video.ts") is None
 
 
 def _make_job(tmp: Path, stem: str = "video"):
