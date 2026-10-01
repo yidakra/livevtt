@@ -480,9 +480,32 @@ def build_output_artifacts(
     base_stem = Path(normalized_name).stem
     ru_vtt = target_dir / f"{base_stem}.ru.vtt"
     en_vtt = target_dir / f"{base_stem}.en.vtt"
-    ttml = target_dir / f"{base_stem}.ttml"
+    # Named after the highest-quality variant ([hash]_1080p.ttml), not the
+    # group ([hash].ttml): Wowza resolves the caption file against the
+    # rendition name and serves empty WebVTT chunks for the group name.
+    ttml = target_dir / f"{video_path.stem}.ttml"
     smil = target_dir / f"{base_stem}.smil"
     return ru_vtt, en_vtt, ttml, smil
+
+
+def legacy_ttml_path(ttml_path: Path, normalized_name: str) -> Optional[Path]:
+    """The pre-Wowza-update TTML name ([hash].ttml), or None if it equals the current one."""
+    legacy = ttml_path.with_name(f"{Path(normalized_name).stem}.ttml")
+    return None if legacy == ttml_path else legacy
+
+
+def effective_ttml(ttml_path: Path, normalized_name: str) -> Path:
+    """The TTML that counts as this video's output: current name, else a legacy one.
+
+    Accepting the legacy name keeps the ~140k already-translated videos from
+    being re-queued while their files are renamed in place.
+    """
+    if ttml_path.exists():
+        return ttml_path
+    legacy = legacy_ttml_path(ttml_path, normalized_name)
+    if legacy is not None and legacy.exists():
+        return legacy
+    return ttml_path
 
 
 @dataclass
@@ -922,7 +945,7 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         LOGGER.error("SMIL %s has no <video> entries; skipping subtitle association", job.smil)
         return False
 
-    def ensure_textstream(src: str, language: str) -> bool:
+    def ensure_textstream(src: str, language: str, supersedes: Optional[str] = None) -> bool:
         # Textstream sources should NOT have mp4: prefix (unlike video sources)
         """
         Ensure a textstream entry for a subtitle file exists in the SMIL switch element.
@@ -965,15 +988,21 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
                 return value[4:]
             return value
 
-        # Remove existing textstream nodes with the same source
+        # Remove existing textstream nodes with the same source, and any
+        # pointing at the file this one replaces (a renamed TTML would
+        # otherwise leave two caption tracks in the manifest).
+        stale = {src} | ({supersedes} if supersedes else set())
         for node in list(switch.findall("textstream")):
-            if _normalize(node.get("src")) == src:
+            if _normalize(node.get("src")) in stale:
                 switch.remove(node)
 
         if not Path(job.smil.parent, src).exists():
             LOGGER.warning("Expected subtitle file missing for %s when writing SMIL", src)
             return False
-        ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
+        stream = ET.SubElement(switch, "textstream", {"src": target_src, "system-language": language})
+        # Required by Wowza Streaming Engine since its 2026-09 update; without
+        # it the textstream is not treated as a caption track.
+        ET.SubElement(stream, "param", {"name": "isWowzaCaptionStream", "value": "true", "valuetype": "data"})
         return True
 
     # By default, use TTML in SMIL (contains both languages)
@@ -994,7 +1023,8 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
         # Use TTML by default (bilingual subtitle file)
         if job.ttml.exists():
             # TTML is bilingual, so we include both languages in system-language
-            added |= ensure_textstream(job.ttml.name, "rus,eng")
+            legacy = legacy_ttml_path(job.ttml, job.normalized_name)
+            added |= ensure_textstream(job.ttml.name, "rus,eng", supersedes=legacy.name if legacy else None)
             LOGGER.debug("Added TTML to SMIL: %s", job.ttml.name)
         elif not args.smil_only:
             LOGGER.warning("Expected TTML file missing for %s when writing SMIL", job.ttml)
@@ -1203,7 +1233,15 @@ def discover_video_jobs(
             ru_vtt, en_vtt, ttml_path, smil_path = build_output_artifacts(
                 best_path, normalized_name, input_root, output_root
             )
-            if should_skip(best_path, ru_vtt, en_vtt, ttml_path, smil_path, force, ttml_enabled):
+            if should_skip(
+                best_path,
+                ru_vtt,
+                en_vtt,
+                effective_ttml(ttml_path, normalized_name),
+                smil_path,
+                force,
+                ttml_enabled,
+            ):
                 LOGGER.debug("Skipping already processed %s", best_path)
                 return None
         except OSError as exc:
@@ -1331,7 +1369,7 @@ def needs_translation(job: VideoJob, ttml_enabled: bool) -> bool:
 
     required = [job.en_vtt, job.smil]
     if ttml_enabled:
-        required.append(job.ttml)
+        required.append(effective_ttml(job.ttml, job.normalized_name))
 
     if not all(p.exists() for p in required):
         return True
@@ -1366,7 +1404,11 @@ def phase_needs(job: VideoJob, ttml_enabled: bool) -> Tuple[bool, bool]:
 
     required = [_mtime(job.en_vtt), _mtime(job.smil)]
     if ttml_enabled:
-        required.append(_mtime(job.ttml))
+        ttml_mtime = _mtime(job.ttml)
+        if ttml_mtime is None:
+            legacy = legacy_ttml_path(job.ttml, job.normalized_name)
+            ttml_mtime = _mtime(legacy) if legacy is not None else None
+        required.append(ttml_mtime)
     need_translation = any(m is None or m < ru_mtime for m in required)
 
     return need_transcription, need_translation
