@@ -639,6 +639,26 @@ class TestLegacyTtmlName:
             job.video_path, job.ru_vtt, job.en_vtt, job.ttml, job.smil, False, True
         ) is True
 
+    def test_newer_legacy_wins_over_stale_new_name(self, tmp_path):
+        # Real case (c711452d...): a hand-made [hash]_1080p.ttml from Sep 24
+        # alongside a Sep 30 re-translation written as [hash].ttml.
+        self._populate(tmp_path, "video.ttml")
+        (tmp_path / "video_1080p.ttml").write_text("stale")
+        os.utime(tmp_path / "video_1080p.ttml", (1500000, 1500000))  # older than ru.vtt
+        job = self._job(tmp_path)
+        assert archive_transcriber.effective_ttml(job.ttml, job.normalized_name).name == "video.ttml"
+        # The fresh legacy file satisfies the check; the stale one must not
+        # make it look unfinished, and phase_needs must agree with needs_translation.
+        assert archive_transcriber.needs_translation(job, True) is False
+        assert archive_transcriber.phase_needs(job, True) == (False, False)
+
+    def test_newer_new_name_wins_over_legacy(self, tmp_path):
+        self._populate(tmp_path, "video_1080p.ttml")
+        (tmp_path / "video.ttml").write_text("old")
+        os.utime(tmp_path / "video.ttml", (1500000, 1500000))
+        job = self._job(tmp_path)
+        assert archive_transcriber.effective_ttml(job.ttml, job.normalized_name) == job.ttml
+
     def test_legacy_path_is_none_when_names_match(self):
         assert archive_transcriber.legacy_ttml_path(Path("/a/video.ttml"), "video.ts") is None
 

@@ -494,16 +494,28 @@ def legacy_ttml_path(ttml_path: Path, normalized_name: str) -> Optional[Path]:
     return None if legacy == ttml_path else legacy
 
 
+def _mtime_or_none(path: Optional[Path]) -> Optional[float]:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 def effective_ttml(ttml_path: Path, normalized_name: str) -> Path:
-    """The TTML that counts as this video's output: current name, else a legacy one.
+    """The TTML that counts as this video's output: the newer of current and legacy names.
 
     Accepting the legacy name keeps the ~140k already-translated videos from
-    being re-queued while their files are renamed in place.
+    being re-queued while their files are renamed in place. When both exist,
+    the newer one wins: a hand-made [hash]_1080p.ttml can predate a later
+    re-translation written under the legacy name, and preferring the current
+    name unconditionally would serve the stale subtitles.
     """
-    if ttml_path.exists():
-        return ttml_path
     legacy = legacy_ttml_path(ttml_path, normalized_name)
-    if legacy is not None and legacy.exists():
+    current_mtime = _mtime_or_none(ttml_path)
+    legacy_mtime = _mtime_or_none(legacy)
+    if legacy is not None and legacy_mtime is not None and (current_mtime is None or legacy_mtime > current_mtime):
         return legacy
     return ttml_path
 
@@ -1044,10 +1056,11 @@ def write_smil(job: VideoJob, metadata: VideoMetadata, args: argparse.Namespace)
             LOGGER.warning("Expected English VTT missing for %s when writing SMIL", job.en_vtt)
     else:
         # Use TTML by default (bilingual subtitle file)
-        legacy = legacy_ttml_path(job.ttml, job.normalized_name)
-        if not job.ttml.exists() and legacy is not None and legacy.exists():
-            # Copy rather than rename: ops may be renaming the same files, and
-            # an identical copy makes either order of operations harmless.
+        legacy = effective_ttml(job.ttml, job.normalized_name)
+        if legacy != job.ttml:
+            # The legacy-named file is missing under the new name or newer than
+            # it. Copy rather than rename: ops may be renaming the same files,
+            # and an identical copy makes either order of operations harmless.
             tmp_copy = job.ttml.with_name(job.ttml.name + ".tmp")
             shutil.copy2(legacy, tmp_copy)
             os.replace(tmp_copy, job.ttml)
@@ -1428,11 +1441,10 @@ def phase_needs(job: VideoJob, ttml_enabled: bool) -> Tuple[bool, bool]:
 
     required = [_mtime(job.en_vtt), _mtime(job.smil)]
     if ttml_enabled:
-        ttml_mtime = _mtime(job.ttml)
-        if ttml_mtime is None:
-            legacy = legacy_ttml_path(job.ttml, job.normalized_name)
-            ttml_mtime = _mtime(legacy) if legacy is not None else None
-        required.append(ttml_mtime)
+        # Newer of current and legacy names, matching effective_ttml().
+        legacy = legacy_ttml_path(job.ttml, job.normalized_name)
+        candidates = [m for m in (_mtime(job.ttml), _mtime(legacy) if legacy is not None else None) if m is not None]
+        required.append(max(candidates) if candidates else None)
     need_translation = any(m is None or m < ru_mtime for m in required)
 
     return need_transcription, need_translation
